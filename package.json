@@ -1,0 +1,17 @@
+{
+  "name": "waisha",
+  "private": true,
+  "packageManager": "pnpm@9.1.4",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "migrate": "pnpm --filter @waisha/api migrate",
+    "seed": "pnpm --filter @waisha/api seed"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.6",
+    "typescript": "^5.4.5"
+  }
+}
