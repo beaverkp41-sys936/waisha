@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+:root {
+  --ink: #0F2A38; --ink-soft: #5A6E7A;
+  --brand-deep: #14415A; --brand: #2E6F95;
+  --milk: #EDF4F9; --milk-deep: #DCE9F2;
+  --surface: #FFFFFF; --line: #D7E3EC;
+  --gold-green: #93A544; --gold-green-dark: #7A8B35; --gold: #C8A951;
+  --success: #2E7D52; --warning: #B8860B; --danger: #A33A3A;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #E7EEF3; --ink-soft: #9FB2BD;
+    --milk: #0D1F2A; --milk-deep: #142C3B;
+    --surface: #10242F; --line: #23404F;
+    --brand-deep: #0C2938;
+  }
+}
+body {
+  background: var(--milk);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.panel-enter { animation: panelIn 200ms var(--ease) both; }
+@keyframes panelIn {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.underline-slide { transition: transform 200ms var(--ease); }
+@media (prefers-reduced-motion: reduce) {
+  .panel-enter, .underline-slide { animation: none; transition: none; }
+}
