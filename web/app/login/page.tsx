@@ -28,7 +28,7 @@ function useToday() {
 
 function Chip({ text, color }: { text: string; color: string }) {
   return (
-    <span className="px-8 py-4 text-[10px] font-bold uppercase tracking-[0.12em]"
+    <span className="px-8 py-4 text-[10px] font-bold uppercase tracking-[0.14em]"
       style={{
         borderLeft: `4px solid ${color}`,
         background: `color-mix(in srgb, ${color} 10%, transparent)`,
@@ -41,11 +41,31 @@ function Chip({ text, color }: { text: string; color: string }) {
 
 function Kicker({ n, text }: { n: string; text: string }) {
   return (
-    <p className="mb-8 flex items-baseline gap-8 text-[11px] font-semibold uppercase tracking-[0.16em]"
+    <p className="mb-8 flex items-baseline gap-8 text-[11px] font-semibold uppercase tracking-[0.18em]"
       style={{ color: "var(--ink-soft)" }}>
-      <span style={{ color: "var(--gold-green)" }}>{n}</span>
+      <span style={{ color: "var(--brand)" }}>{n}</span>
       <span className="flex-1 border-b" style={{ borderColor: "var(--line)" }}>{text}</span>
     </p>
+  );
+}
+
+function Corridor({ from, to, km, note }: { from: string; to: string; km: string; note: string }) {
+  return (
+    <div>
+      <div className="flex items-center gap-12">
+        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white">{from}</span>
+        <span className="relative h-px flex-1" style={{ background: "rgba(255,255,255,0.35)" }}>
+          <span className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full" style={{ background: "var(--gold)", left: 0 }} />
+          <span className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full" style={{ background: "var(--gold)", left: "50%" }} />
+          <span className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full" style={{ background: "var(--gold)", right: 0 }} />
+        </span>
+        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white">{to}</span>
+      </div>
+      <p className="mt-4 text-center text-[10px] font-semibold uppercase tracking-[0.22em] tabular-nums"
+        style={{ color: "rgba(255,255,255,0.72)" }}>
+        {km} · {note}
+      </p>
+    </div>
   );
 }
 
@@ -61,11 +81,7 @@ function Segmented({ items, index, onChange }: { items: string[]; index: number;
         </button>
       ))}
       <span aria-hidden className="underline-slide absolute bottom-0 left-0 h-[2px]"
-        style={{
-          width: `calc(100% / ${items.length})`,
-          background: "var(--brand-deep)",
-          transform: `translateX(${index * 100}%)`
-        }} />
+        style={{ width: `calc(100% / ${items.length})`, background: "var(--brand-deep)", transform: `translateX(${index * 100}%)` }} />
     </div>
   );
 }
@@ -73,9 +89,8 @@ function Segmented({ items, index, onChange }: { items: string[]; index: number;
 function Field({ label, error, ...props }: any) {
   return (
     <label className="block">
-      <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>{label}</span>
-      <input {...props}
-        className="w-full rounded-input border px-12 py-12 text-sm"
+      <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>{label}</span>
+      <input {...props} className="waisha-input w-full rounded-input border px-12 py-12 text-sm"
         style={{ borderColor: error ? "var(--danger)" : "var(--line)", background: "var(--milk)" }} />
       {error && <span className="mt-4 block text-xs" style={{ color: "var(--danger)" }}>{error}</span>}
     </label>
@@ -85,13 +100,13 @@ function Field({ label, error, ...props }: any) {
 function PasswordField({ label, error, show, onToggle, ...props }: any) {
   return (
     <label className="block">
-      <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>{label}</span>
+      <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>{label}</span>
       <div className="relative">
         <input {...props} type={show ? "text" : "password"}
-          className="w-full rounded-input border px-12 py-12 pr-64 text-sm"
+          className="waisha-input w-full rounded-input border px-12 py-12 pr-64 text-sm"
           style={{ borderColor: error ? "var(--danger)" : "var(--line)", background: "var(--milk)" }} />
         <button type="button" onClick={onToggle}
-          className="absolute right-12 top-1/2 -translate-y-1/2 text-[10px] font-bold tracking-[0.14em]"
+          className="absolute right-12 top-1/2 -translate-y-1/2 text-[10px] font-bold tracking-[0.16em]"
           style={{ color: "var(--brand)" }}>
           {show ? "HIDE" : "SHOW"}
         </button>
@@ -117,7 +132,7 @@ function OtpInput({ onComplete }: { onComplete: (code: string) => void }) {
       {digits.map((d, i) => (
         <input key={i} ref={el => { refs.current[i] = el; }} value={d}
           inputMode="numeric" maxLength={1} aria-label={`Digit ${i + 1}`}
-          className="h-56 w-full rounded-input border text-center text-xl"
+          className="waisha-input h-56 w-full rounded-input border text-center text-xl"
           style={{ borderColor: "var(--line)", background: "var(--milk)" }}
           onChange={e => setAt(i, e.target.value.replace(/\D/g, "").slice(-1))}
           onKeyDown={e => { if (e.key === "Backspace" && !digits[i] && i > 0) refs.current[i - 1]?.focus(); }}
@@ -255,162 +270,186 @@ export default function LoginPage() {
   }, [panel, pending]);
 
   return (
-    <div className="flex min-h-screen flex-col px-16 py-24" style={{ background: "var(--milk)" }}>
-      <div className="mx-auto flex w-full max-w-[1040px] flex-1 flex-col">
-        <div className="flex flex-1 flex-col overflow-hidden rounded-card border bg-surface" style={{ borderColor: "var(--line)" }}>
+    <div className="flex min-h-screen flex-col" style={{ background: "var(--brand-deep)" }}>
+      <div className="flex flex-1 items-center justify-center px-16 py-32">
+        <div className="relative w-full max-w-[1000px]">
+          {/* stacked-paper hairline frame behind the sheet */}
+          <div aria-hidden className="absolute inset-0 rounded-card"
+            style={{ transform: "translate(12px, 12px)", border: "1px solid rgba(255,255,255,0.22)" }} />
 
-          <header className="flex items-center justify-between border-b px-24 py-12" style={{ borderColor: "var(--line)" }}>
-            <img src="/waisha-logo.png" alt="WAISHA logo" style={{ height: 56, width: "auto" }} />
-            <div className="flex items-center gap-16">
-              <span className="hidden text-[10px] font-semibold uppercase tracking-[0.16em] md:inline" style={{ color: "var(--ink-soft)" }}>
-                T ENGO AEGIS · Transport &amp; Logistics
-              </span>
-              <Chip text="Secure portal" color="var(--success)" />
-            </div>
-          </header>
+          <div className="sheet-in relative overflow-hidden rounded-card border bg-surface"
+            style={{ borderColor: "var(--line)", boxShadow: "0 24px 64px rgba(5, 18, 26, 0.45)" }}>
 
-          <div className="grid flex-1 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-            <aside className="hidden flex-col justify-between border-r p-32 md:flex" style={{ borderColor: "var(--line)" }}>
-              <div>
-                <h2 className="text-4xl font-extrabold leading-tight tracking-tight" style={{ color: "var(--ink)" }}>
-                  {greeting}.
-                </h2>
-                <p className="mt-4 text-xs font-bold uppercase tracking-[0.2em]" style={{ color: "var(--gold-green)" }}>
-                  Your logistics connected
-                </p>
-                <div className="mt-24">
-                  {MANIFEST.map(([n, t]) => (
-                    <div key={n} className="flex items-baseline gap-12 border-t py-12" style={{ borderColor: "var(--line)" }}>
-                      <span className="text-xs font-bold tabular-nums" style={{ color: "var(--gold-green)" }}>{n}</span>
-                      <span className="text-sm" style={{ color: "var(--ink-soft)" }}>{t}</span>
-                    </div>
-                  ))}
-                </div>
+            <header className="flex items-center justify-between border-b px-24 py-12" style={{ borderColor: "var(--line)" }}>
+              <img src="/waisha-logo.png" alt="WAISHA logo" style={{ height: 56, width: "auto" }} />
+              <div className="hidden items-center gap-16 md:flex">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "var(--ink-soft)" }}>
+                  T ENGO AEGIS · Transport &amp; Logistics
+                </span>
+                <Chip text="Secure portal" color="var(--success)" />
               </div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] tabular-nums" style={{ color: "var(--ink-soft)" }}>
-                WSH · Dar es Salaam · {today}
-              </p>
-            </aside>
+            </header>
 
-            <section className="flex flex-col justify-center p-24 md:p-32">
-              <p className="mb-8 text-sm font-semibold md:hidden" style={{ color: "var(--brand-deep)" }}>{greeting}</p>
-              <ErrorChip msg={error} />
-
-              {panel === "login" && (
-                <div key="login" className="panel-enter">
-                  <Kicker n="01" text="Sign in" />
-                  <h1 className="mb-16 text-2xl font-bold" style={{ color: "var(--ink)" }}>Access your account</h1>
-                  <Segmented items={loginTabs} index={loginTab} onChange={setLoginTab} />
-                  <form onSubmit={submitLogin} className="mt-16 space-y-12">
-                    {loginTab === 0 && (<>
-                      <Field label="TIN" name="tin" required placeholder="123-456-789" />
-                      <Field label="Email" name="email" type="email" required />
-                    </>)}
-                    {loginTab === 1 && (<Field label="Email or phone" name="identifier" required />)}
-                    {loginTab === 2 && (<>
-                      <Field label="Company name" name="company" required />
-                      <Field label="TIN" name="tin" required placeholder="123-456-789" />
-                      <Field label="Username" name="username" required />
-                    </>)}
-                    <PasswordField label="Password" name="password" required show={showPw} onToggle={() => setShowPw(v => !v)} />
-                    <div className="flex justify-end">
-                      <button type="button" className="text-xs underline" style={{ color: "var(--brand)" }}
-                        onClick={() => { setShowReset(true); setResetDone(false); }}>
-                        Forgot password?
-                      </button>
-                    </div>
-                    <button type="submit" disabled={busy}
-                      className="w-full rounded-input py-12 text-sm font-semibold text-white disabled:opacity-60"
-                      style={{ background: "var(--gold-green)" }}>
-                      {busy ? "Signing in" : "Sign in"}
-                    </button>
-                  </form>
-                </div>
-              )}
-
-              {panel === "signup" && (
-                <div key="signup" className="panel-enter">
-                  <Kicker n="02" text="Create account" />
-                  <h1 className="mb-16 text-2xl font-bold" style={{ color: "var(--ink)" }}>Register with WAISHA</h1>
-                  <Segmented items={["Transporter", "Shipper"]} index={signupTab} onChange={setSignupTab} />
-                  <form onSubmit={submitSignup} className="mt-16 space-y-12">
-                    {signupTab === 0 && (<>
-                      <Field label="Registered company name" name="companyName" required minLength={3} maxLength={120} />
-                      <Field label="TIN" name="tin" required placeholder="123-456-789" />
-                    </>)}
-                    {signupTab === 1 && (<>
-                      <Field label="First name" name="firstName" required />
-                      <Field label="Last name" name="lastName" required />
-                      <Field label="NIDA number (20 digits)" name="nida" required inputMode="numeric" maxLength={20} />
-                    </>)}
-                    <Field label="Active phone (international format)" name="phone" required placeholder="+255712345678" />
-                    <Field label="Email" name="email" type="email" required />
-                    <PasswordField label="Password" name="password" required minLength={10} show={showPw} onToggle={() => setShowPw(v => !v)} />
-                    <PasswordField label="Confirm password" name="confirm" required show={showPw} onToggle={() => setShowPw(v => !v)} />
-                    <label className="flex items-start gap-8 text-xs" style={{ color: "var(--ink-soft)" }}>
-                      <input type="checkbox" name="terms" required className="mt-2" />
-                      <span>I accept the Terms of Service and Privacy Policy</span>
-                    </label>
-                    <button type="submit" disabled={busy}
-                      className="w-full rounded-input py-12 text-sm font-semibold text-white disabled:opacity-60"
-                      style={{ background: "var(--gold-green)" }}>
-                      {busy ? "Creating account" : "Create account"}
-                    </button>
-                  </form>
-                  <button type="button" className="mt-16 text-sm underline" style={{ color: "var(--brand)" }}
-                    onClick={() => { setError(null); setPanel("login"); }}>Back to sign in</button>
-                </div>
-              )}
-
-              {panel === "otp" && pending && (
-                <div key="otp" className="panel-enter">
-                  <Kicker n="03" text="Verify phone" />
-                  <h1 className="mb-8 text-2xl font-bold" style={{ color: "var(--ink)" }}>Six-digit code</h1>
-                  <p className="mb-16 text-sm" style={{ color: "var(--ink-soft)" }}>
-                    Sent by SMS to {pending.phoneMasked}. Expires in 5 minutes.
+            <div className="grid md:grid-cols-2">
+              <aside className="hidden flex-col justify-between p-32 md:flex"
+                style={{ background: "linear-gradient(165deg, var(--brand-deep) 0%, var(--brand) 165%)" }}>
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.24em] tabular-nums" style={{ color: "var(--gold)" }}>
+                    Docket WSH-0001 · Secure access
                   </p>
-                  <OtpInput onComplete={verifyOtp} />
-                  <div className="mt-16 flex items-center justify-between text-sm">
-                    <button type="button" disabled={cooldown > 0} className="underline disabled:opacity-50"
-                      style={{ color: "var(--brand)" }} onClick={resendCode}>
-                      {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
-                    </button>
-                    <button type="button" className="underline" style={{ color: "var(--brand)" }}
-                      onClick={() => { setError(null); setPanel("signup"); }}>Change phone number</button>
+                  <h2 className="mt-12 text-[44px] font-extrabold leading-[1.05] tracking-tight text-white">
+                    {greeting}.
+                  </h2>
+                  <p className="mt-8 text-[11px] font-bold uppercase tracking-[0.24em]" style={{ color: "var(--gold)" }}>
+                    Your logistics connected
+                  </p>
+
+                  <div className="mt-32 space-y-16">
+                    <Corridor from="Dar es Salaam" to="Kigali" km="1,500 KM" note="Central Corridor" />
+                    <Corridor from="Dar es Salaam" to="Tunduma" km="970 KM" note="Tanzam Highway" />
+                  </div>
+
+                  <div className="mt-32">
+                    {MANIFEST.map(([n, t]) => (
+                      <div key={n} className="flex items-baseline gap-12 border-t py-10" style={{ borderColor: "rgba(255,255,255,0.25)" }}>
+                        <span className="text-xs font-bold tabular-nums" style={{ color: "var(--gold)" }}>{n}</span>
+                        <span className="text-sm" style={{ color: "rgba(255,255,255,0.85)" }}>{t}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              )}
+                <p className="mt-32 text-[11px] font-semibold uppercase tracking-[0.18em] tabular-nums"
+                  style={{ color: "rgba(255,255,255,0.7)" }}>
+                  WSH · Dar es Salaam · {today}
+                </p>
+              </aside>
 
-              {panel === "success" && (
-                <div key="success" className="panel-enter py-24 text-center">
-                  <div className="mx-auto mb-16 h-[2px] w-48" style={{ background: "var(--success)" }} aria-hidden />
-                  <h2 className="text-lg font-semibold" style={{ color: "var(--success)" }}>Account successfully created</h2>
-                  <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
-                    Your account is ready. Redirecting you to the sign-in screen.
-                  </p>
-                  <button type="button" className="mt-16 text-sm underline" style={{ color: "var(--brand)" }}
-                    onClick={() => setPanel("login")}>Go to login now</button>
+              <section className="flex flex-col p-24 md:p-32">
+                <p className="mb-8 text-sm font-semibold md:hidden" style={{ color: "var(--brand-deep)" }}>{greeting}</p>
+                <ErrorChip msg={error} />
+
+                <div className="flex flex-1 flex-col justify-center">
+                  {panel === "login" && (
+                    <div key="login" className="panel-enter">
+                      <Kicker n="01" text="Sign in" />
+                      <h1 className="mb-16 text-[28px] font-bold tracking-tight" style={{ color: "var(--ink)" }}>Access your account</h1>
+                      <Segmented items={loginTabs} index={loginTab} onChange={setLoginTab} />
+                      <form onSubmit={submitLogin} className="mt-16 space-y-12">
+                        {loginTab === 0 && (<>
+                          <Field label="TIN" name="tin" required placeholder="123-456-789" />
+                          <Field label="Email" name="email" type="email" required />
+                        </>)}
+                        {loginTab === 1 && (<Field label="Email or phone" name="identifier" required />)}
+                        {loginTab === 2 && (<>
+                          <Field label="Company name" name="company" required />
+                          <Field label="TIN" name="tin" required placeholder="123-456-789" />
+                          <Field label="Username" name="username" required />
+                        </>)}
+                        <PasswordField label="Password" name="password" required show={showPw} onToggle={() => setShowPw(v => !v)} />
+                        <div className="flex justify-end">
+                          <button type="button" className="text-xs underline" style={{ color: "var(--brand)" }}
+                            onClick={() => { setShowReset(true); setResetDone(false); }}>
+                            Forgot password?
+                          </button>
+                        </div>
+                        <button type="submit" disabled={busy}
+                          className="w-full rounded-input py-12 text-sm font-semibold transition-colors duration-200 disabled:opacity-60"
+                          style={{ background: "var(--gold-green)", color: "var(--ink)" }}>
+                          {busy ? "Signing in" : "Sign in"}
+                        </button>
+                      </form>
+                    </div>
+                  )}
+
+                  {panel === "signup" && (
+                    <div key="signup" className="panel-enter">
+                      <Kicker n="02" text="Create account" />
+                      <h1 className="mb-16 text-[28px] font-bold tracking-tight" style={{ color: "var(--ink)" }}>Register with WAISHA</h1>
+                      <Segmented items={["Transporter", "Shipper"]} index={signupTab} onChange={setSignupTab} />
+                      <form onSubmit={submitSignup} className="mt-16 space-y-12">
+                        {signupTab === 0 && (<>
+                          <Field label="Registered company name" name="companyName" required minLength={3} maxLength={120} />
+                          <Field label="TIN" name="tin" required placeholder="123-456-789" />
+                        </>)}
+                        {signupTab === 1 && (<>
+                          <Field label="First name" name="firstName" required />
+                          <Field label="Last name" name="lastName" required />
+                          <Field label="NIDA number (20 digits)" name="nida" required inputMode="numeric" maxLength={20} />
+                        </>)}
+                        <Field label="Active phone (international format)" name="phone" required placeholder="+255712345678" />
+                        <Field label="Email" name="email" type="email" required />
+                        <PasswordField label="Password" name="password" required minLength={10} show={showPw} onToggle={() => setShowPw(v => !v)} />
+                        <PasswordField label="Confirm password" name="confirm" required show={showPw} onToggle={() => setShowPw(v => !v)} />
+                        <label className="flex items-start gap-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+                          <input type="checkbox" name="terms" required className="mt-2" />
+                          <span>I accept the Terms of Service and Privacy Policy</span>
+                        </label>
+                        <button type="submit" disabled={busy}
+                          className="w-full rounded-input py-12 text-sm font-semibold transition-colors duration-200 disabled:opacity-60"
+                          style={{ background: "var(--gold-green)", color: "var(--ink)" }}>
+                          {busy ? "Creating account" : "Create account"}
+                        </button>
+                      </form>
+                    </div>
+                  )}
+
+                  {panel === "otp" && pending && (
+                    <div key="otp" className="panel-enter">
+                      <Kicker n="03" text="Verify phone" />
+                      <h1 className="mb-8 text-[28px] font-bold tracking-tight" style={{ color: "var(--ink)" }}>Six-digit code</h1>
+                      <p className="mb-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+                        Sent by SMS to {pending.phoneMasked}. Expires in 5 minutes.
+                      </p>
+                      <OtpInput onComplete={verifyOtp} />
+                      <div className="mt-16 flex items-center justify-between text-sm">
+                        <button type="button" disabled={cooldown > 0} className="underline disabled:opacity-50"
+                          style={{ color: "var(--brand)" }} onClick={resendCode}>
+                          {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
+                        </button>
+                        <button type="button" className="underline" style={{ color: "var(--brand)" }}
+                          onClick={() => { setError(null); setPanel("signup"); }}>Change phone number</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {panel === "success" && (
+                    <div key="success" className="panel-enter py-24 text-center">
+                      <div className="mx-auto mb-16 h-[2px] w-48" style={{ background: "var(--success)" }} aria-hidden />
+                      <h2 className="text-lg font-semibold" style={{ color: "var(--success)" }}>Account successfully created</h2>
+                      <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+                        Your account is ready. Redirecting you to the sign-in screen.
+                      </p>
+                      <button type="button" className="mt-16 text-sm underline" style={{ color: "var(--brand)" }}
+                        onClick={() => setPanel("login")}>Go to login now</button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </section>
+
+                {/* Sign Up now lives INSIDE the card */}
+                {panel === "login" && (
+                  <div className="mt-24 border-t pt-12 text-center text-sm" style={{ borderColor: "var(--line)" }}>
+                    <span style={{ color: "var(--ink-soft)" }}>New to WAISHA? </span>
+                    <button type="button" className="font-semibold underline" style={{ color: "var(--brand)" }}
+                      onClick={() => { setError(null); setPanel("signup"); }}>Create an account</button>
+                  </div>
+                )}
+                {panel === "signup" && (
+                  <div className="mt-24 border-t pt-12 text-center text-sm" style={{ borderColor: "var(--line)" }}>
+                    <span style={{ color: "var(--ink-soft)" }}>Already registered? </span>
+                    <button type="button" className="font-semibold underline" style={{ color: "var(--brand)" }}
+                      onClick={() => { setError(null); setPanel("login"); }}>Sign in</button>
+                  </div>
+                )}
+              </section>
+            </div>
           </div>
         </div>
-
-        {panel === "login" && (
-          <p className="mt-16 text-center text-sm" style={{ color: "var(--ink-soft)" }}>
-            Don&apos;t have an account?{" "}
-            <button type="button" className="font-semibold underline" style={{ color: "var(--brand)" }}
-              onClick={() => { setError(null); setPanel("signup"); }}>
-              Sign Up
-            </button>
-          </p>
-        )}
       </div>
 
       {showReset && (
         <div role="dialog" aria-modal="true" aria-label="Reset your password"
           className="fixed inset-0 z-50 flex items-center justify-center p-16"
-          style={{ background: "rgba(15,42,56,0.5)" }}
+          style={{ background: "rgba(5, 18, 26, 0.6)" }}
           onClick={e => { if (e.target === e.currentTarget) setShowReset(false); }}>
           <div className="w-full max-w-[380px] rounded-modal bg-surface p-24" style={{ border: "1px solid var(--line)" }}>
             <h2 className="mb-16 text-base font-semibold">Reset your password</h2>
@@ -427,8 +466,8 @@ export default function LoginPage() {
                 setResetDone(true);
               }} className="space-y-12">
                 <Field label="Email" name="email" type="email" required />
-                <button type="submit" className="w-full rounded-input py-12 text-sm font-semibold text-white"
-                  style={{ background: "var(--gold-green)" }}>Send reset link</button>
+                <button type="submit" className="w-full rounded-input py-12 text-sm font-semibold"
+                  style={{ background: "var(--gold-green)", color: "var(--ink)" }}>Send reset link</button>
               </form>
             )}
             <button type="button" className="mt-16 text-sm underline" style={{ color: "var(--brand)" }}
