@@ -283,7 +283,7 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   app.post("/auth/login", async (req: any, reply) => {
-    await enforceRateLimit(`login:ip:${req.ip}`, 20, 300);
+    await enforceRateLimit(`login:ip:${req.ip}`, 10, 300); // tightened from 20 (hardening)
     const data = loginSchema.parse(req.body);
 
     let found: any;
@@ -323,11 +323,30 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
 
     const ok = found.password_hash && await verifyPassword(found.password_hash, data.password);
     if (!ok) {
-      await withTenant(found.tenant_id, (c) => c.query(
-        `update users set failed_login_count = failed_login_count + 1,
-           locked_until = case when failed_login_count + 1 >= 5
-             then now() + interval '15 minutes' else locked_until end
-         where id = $1`, [found.user_id]));
+      await withTenant(found.tenant_id, async (c) => {
+        // Exponential lockout (Session 3d): every 5 consecutive failures doubles
+        // the lockout duration, capped at 24h. Reset only by a successful login.
+        const r = await c.query(
+          `update users set
+             failed_login_count = failed_login_count + 1,
+             lockout_count = case when failed_login_count + 1 >= 5
+               then lockout_count + 1 else lockout_count end,
+             locked_until = case when failed_login_count + 1 >= 5
+               then now() + least(make_interval(mins => (15 * power(2, least(lockout_count, 9)))::int), interval '24 hours')
+               else locked_until end
+           where id = $1
+           returning failed_login_count, lockout_count, locked_until`,
+          [found.user_id]);
+        const row = r.rows[0];
+        if (row && row.failed_login_count % 5 === 0) {
+          await writeAudit(c, {
+            tenantId: found.tenant_id, actorUserId: found.user_id, ip: req.ip,
+            userAgent: req.headers["user-agent"] ?? null, requestId: req.requestId,
+            entity: "users", entityId: found.user_id, action: "auth.lockout",
+            after: { lockout_count: row.lockout_count, until: row.locked_until }
+          });
+        }
+      });
       throw new ApiError("INVALID_CREDENTIALS", "Invalid credentials", 401);
     }
     if (found.user_status === "pending_verification") {
@@ -338,7 +357,7 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
     }
 
     await withTenant(found.tenant_id, (c) =>
-      c.query("update users set failed_login_count=0, locked_until=null, last_login_at=now() where id=$1",
+      c.query("update users set failed_login_count=0, lockout_count=0, locked_until=null, last_login_at=now() where id=$1",
         [found.user_id]));
 
     const roles: string[] = found.roles ?? [];
@@ -399,6 +418,7 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
 
   app.get("/auth/me", { preHandler: [requireAuth] }, async (req: any) => {
     return withTenant(req.user.tid, async (c) => {
+      // Explicit column list — credentials never leave the database row.
       const u = await c.query(
         `select u.id, u.email, u.full_name, u.user_type, u.language,
                 t.name as tenant_name, t.type as tenant_type, t.status as tenant_status
