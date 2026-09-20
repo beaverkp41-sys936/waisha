@@ -61,7 +61,7 @@ function PasswordField({ label, error, show, onToggle, ...props }: any) {
   return (
     <label className="block">
       <span className="mb-4 block text-xs font-medium" style={{ color: "var(--ink-soft)" }}>{label}</span>
-      <div className="relative">
+      <div className="relative my-auto">
         <input {...props} type={show ? "text" : "password"}
           className="w-full rounded-full border px-16 py-12 pr-64 text-sm"
           style={{
@@ -238,16 +238,20 @@ export default function LoginPage() {
       <div className="w-full max-w-[960px]">
         {/* Logo — mobile only; desktop shows it inside the brand panel */}
         <div className="mb-16 flex justify-center md:hidden">
-          <div className="inline-flex items-center rounded-card bg-white px-16 py-8 shadow-sm">
-            <img src="/waisha-logo.png" alt="WAISHA logo" className="h-40 w-auto" />
-          </div>
+          <div className="inline-flex items-center self-start rounded-card bg-white px-24 py-16">
+              <img
+                src="/waisha-logo.png"
+                alt="WAISHA logo"
+                style={{ height: 110, width: "auto", maxWidth: "100%" }}
+              />
+            </div>
         </div>
 
         <div className="grid overflow-hidden rounded-card border bg-surface shadow-sm md:grid-cols-2"
           style={{ borderColor: "var(--line)" }}>
 
           {/* Brand panel — the picture's left side, in spec navy */}
-          <aside className="relative hidden flex-col justify-center overflow-hidden p-32 md:flex"
+          <aside className="relative hidden flex-col justify-start overflow-hidden p-32 md:flex"
             style={{ background: "linear-gradient(160deg, var(--brand-deep) 15%, var(--brand) 100%)" }}>
             <div aria-hidden className="absolute inset-0">
               <div className="absolute rounded-full" style={{ width: 360, height: 360, right: -130, bottom: -120, background: "rgba(255,255,255,0.08)" }} />
@@ -255,8 +259,8 @@ export default function LoginPage() {
               <div className="absolute rounded-full" style={{ width: 150, height: 150, right: 60, top: -60, background: "rgba(255,255,255,0.05)" }} />
             </div>
             <div className="relative">
-              <div className="inline-flex items-center rounded-card bg-white px-16 py-8">
-                <img src="/waisha-logo.png" alt="WAISHA logo" className="h-48 w-auto" />
+              <div className="inline-flex items-center self-start rounded-card bg-white px-24 py-12">
+                <img src="/waisha-logo.png" alt="WAISHA logo" style={{ height: 80 }} className="w-auto" />
               </div>
               <h2 className="mt-24 text-3xl font-extrabold tracking-wide text-white">{greeting.toUpperCase()}</h2>
               <p className="mt-4 text-sm font-bold uppercase tracking-[0.18em]" style={{ color: "#BFD4E2" }}>
