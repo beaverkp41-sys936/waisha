@@ -29,7 +29,7 @@ function useToday() {
 function Chip({ text, color }: { text: string; color: string }) {
   return (
     <span className="px-8 py-4 text-[10px] font-bold uppercase tracking-[0.14em]"
-      style={{ borderLeft: `4px solid ${color}`, background: `color-mix(in srgb, ${color} 10%, transparent)`, color }}>
+      style={{ borderLeft: `4px solid ${color}`, background: `color-mix(in srgb, ${color} 12%, transparent)`, color }}>
       {text}
     </span>
   );
@@ -47,7 +47,7 @@ function Kicker({ n, text }: { n: string; text: string }) {
 
 function Corridor() {
   return (
-    <div className="w-full max-w-[340px]">
+    <div className="mx-auto w-full max-w-[320px]">
       <div className="flex items-center gap-12">
         <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white">Dar es Salaam</span>
         <span className="relative h-px flex-1" style={{ background: "rgba(255,255,255,0.35)" }}>
@@ -58,7 +58,7 @@ function Corridor() {
         <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white">Kigali</span>
       </div>
       <p className="mt-4 text-center text-[10px] font-semibold uppercase tracking-[0.22em] tabular-nums"
-        style={{ color: "rgba(255,255,255,0.72)" }}>
+        style={{ color: "rgba(255,255,255,0.7)" }}>
         1,500 KM · Central Corridor
       </p>
     </div>
@@ -156,12 +156,6 @@ function ErrorChip({ msg }: { msg: string | null }) {
     </div>
   );
 }
-
-const MANIFEST: [string, string][] = [
-  ["01", "Multi-tenant, isolated by design"],
-  ["02", "Every action audited"],
-  ["03", "English · Kiswahili"]
-];
 
 export default function LoginPage() {
   const greeting = useGreeting();
@@ -266,48 +260,37 @@ export default function LoginPage() {
   }, [panel, pending]);
 
   return (
-    <div className="flex min-h-screen flex-col" style={{ background: "var(--brand-deep)" }}>
-      <div className="flex flex-1 flex-col items-center justify-center px-16 py-32">
-        {/* Brand block above the sheet — the single-page identity strip */}
-        <div className="mb-24 flex w-full max-w-[440px] flex-col items-center text-center">
-          <div className="inline-flex items-center rounded-card bg-white px-24 py-12 shadow-sm">
-            <img src="/waisha-logo.png" alt="WAISHA — where shippers meet transporters"
-              style={{ width: 260, height: "auto", maxWidth: "100%" }} />
-          </div>
-          <h1 className="mt-24 text-3xl font-extrabold tracking-tight text-white">{greeting}.</h1>
-          <p className="mt-4 text-[11px] font-bold uppercase tracking-[0.24em]" style={{ color: "var(--gold)" }}>
-            Your logistics connected
-          </p>
-          <div className="mt-16 flex w-full justify-center"><Corridor /></div>
-          <div className="mt-16 flex flex-wrap items-center justify-center gap-x-16 gap-y-8">
-            {MANIFEST.map(([n, t]) => (
-              <span key={n} className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "rgba(255,255,255,0.65)" }}>
-                <span style={{ color: "var(--gold)" }}>{n}</span> · {t}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        {/* The sheet */}
-        <div className="relative w-full max-w-[440px]">
+    <div className="flex min-h-screen flex-col items-center justify-center px-16 py-32" style={{ background: "var(--brand-deep)" }}>
+      <div className="w-full max-w-[440px]">
+        <div className="relative">
           <div aria-hidden className="absolute inset-0 rounded-card"
             style={{ transform: "translate(10px, 10px)", border: "1px solid rgba(255,255,255,0.22)" }} />
-          <div className="sheet-in relative rounded-card border bg-surface"
+
+          <div className="sheet-in relative overflow-hidden rounded-card border bg-surface"
             style={{ borderColor: "var(--line)", boxShadow: "0 24px 64px rgba(5, 18, 26, 0.45)" }}>
-            <div className="flex items-center justify-between border-b px-24 py-12" style={{ borderColor: "var(--line)" }}>
-              <span className="text-[10px] font-bold uppercase tracking-[0.2em] tabular-nums" style={{ color: "var(--ink-soft)" }}>
-                Docket WSH-0001
-              </span>
+
+            {/* Integrated header: brand on the same sheet, top — Picture 1 structure */}
+            <header className="flex items-center justify-between px-16 py-10"
+              style={{ background: "var(--brand-deep)", borderBottom: "1px solid var(--line)" }}>
+              <div className="inline-flex items-center rounded-input bg-white px-12 py-6">
+                <img src="/waisha-logo.png" alt="WAISHA — where shippers meet transporters"
+                  style={{ height: 36, width: "auto", maxWidth: 180 }} />
+              </div>
               <Chip text="Secure portal" color="var(--success)" />
-            </div>
+            </header>
 
             <div className="p-24">
+              <Kicker n="01" text="Sign in to WAISHA" />
+              <h1 className="mb-4 text-2xl font-extrabold tracking-tight" style={{ color: "var(--ink)" }}>
+                {greeting}.
+              </h1>
+              <p className="mb-16 text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: "var(--gold)" }}>
+                Your logistics connected
+              </p>
               <ErrorChip msg={error} />
 
               {panel === "login" && (
                 <div key="login" className="panel-enter">
-                  <Kicker n="01" text="Sign in" />
-                  <h2 className="mb-16 text-2xl font-bold tracking-tight" style={{ color: "var(--ink)" }}>Access your account</h2>
                   <Segmented items={loginTabs} index={loginTab} onChange={setLoginTab} />
                   <form onSubmit={submitLogin} className="mt-16 space-y-12">
                     {loginTab === 0 && (<>
@@ -338,8 +321,6 @@ export default function LoginPage() {
 
               {panel === "signup" && (
                 <div key="signup" className="panel-enter">
-                  <Kicker n="02" text="Create account" />
-                  <h2 className="mb-16 text-2xl font-bold tracking-tight" style={{ color: "var(--ink)" }}>Register with WAISHA</h2>
                   <Segmented items={["Transporter", "Shipper"]} index={signupTab} onChange={setSignupTab} />
                   <form onSubmit={submitSignup} className="mt-16 space-y-12">
                     {signupTab === 0 && (<>
@@ -370,7 +351,6 @@ export default function LoginPage() {
 
               {panel === "otp" && pending && (
                 <div key="otp" className="panel-enter">
-                  <Kicker n="03" text="Verify phone" />
                   <h2 className="mb-8 text-2xl font-bold tracking-tight" style={{ color: "var(--ink)" }}>Six-digit code</h2>
                   <p className="mb-16 text-sm" style={{ color: "var(--ink-soft)" }}>
                     Sent by SMS to {pending.phoneMasked}. Expires in 5 minutes.
@@ -417,10 +397,14 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <p className="mt-24 text-[11px] font-semibold uppercase tracking-[0.18em] tabular-nums"
-          style={{ color: "rgba(255,255,255,0.6)" }}>
-          WSH · Dar es Salaam · {today}
-        </p>
+        {/* Signature motif, slimmed: two lines under the card instead of a block above */}
+        <div className="mt-24">
+          <Corridor />
+          <p className="mt-12 text-center text-[10px] font-semibold uppercase tracking-[0.16em] tabular-nums"
+            style={{ color: "rgba(255,255,255,0.6)" }}>
+            01 Isolated by design · 02 Every action audited · 03 EN · SW · WSH · {today}
+          </p>
+        </div>
       </div>
 
       {showReset && (
