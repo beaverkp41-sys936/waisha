@@ -120,11 +120,11 @@ function OtpInput({ onComplete }: { onComplete: (code: string) => void }) {
     if (next.every(d => d !== "")) onComplete(next.join(""));
   };
   return (
-    <div className="flex justify-between gap-8" role="group" aria-label="Verification code">
+        <div className="flex items-center justify-between gap-8" role="group" aria-label="Verification code">
       {digits.map((d, i) => (
         <input key={i} ref={el => { refs.current[i] = el; }} value={d}
           inputMode="numeric" maxLength={1} aria-label={`Digit ${i + 1}`}
-          className="waisha-input h-56 w-full rounded-input border text-center text-xl"
+                    className="waisha-input h-48 w-48 rounded-input border text-center text-lg"
           style={{ borderColor: "var(--line)", background: "var(--milk)" }}
           onChange={e => setAt(i, e.target.value.replace(/\D/g, "").slice(-1))}
           onKeyDown={e => { if (e.key === "Backspace" && !digits[i] && i > 0) refs.current[i - 1]?.focus(); }}
