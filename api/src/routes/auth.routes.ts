@@ -314,7 +314,16 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
       found = r.rows[0].r;
     }
 
-    if (!found) throw new ApiError("INVALID_CREDENTIALS", "Invalid credentials", 401);
+    if (!found) {
+      // Anomaly feed (spec 12): every attempt against an unknown identity is recorded.
+      await pool.query(
+        `insert into audit_logs (id, tenant_id, actor_user_id, ip, user_agent, request_id, entity, action, after)
+         values ($1, null, null, $2, $3, $4, 'auth', 'login_failed.unknown', $5::jsonb)`,
+        [uuidv7(), req.ip ?? null, req.headers["user-agent"] ?? null,
+         req.requestId, JSON.stringify({ mode: data.mode })]);
+      await new Promise(r => setTimeout(r, 600)); // uniform delay; removes timing as an enumeration signal
+      throw new ApiError("INVALID_CREDENTIALS", "Invalid credentials", 401);
+    }
 
     await enforceRateLimit(`login:uid:${found.user_id}`, 5, 900);
     if (found.locked_until && new Date(found.locked_until) > new Date()) {
@@ -323,6 +332,7 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
 
     const ok = found.password_hash && await verifyPassword(found.password_hash, data.password);
     if (!ok) {
+      let failures = 1;
       await withTenant(found.tenant_id, async (c) => {
         // Exponential lockout (Session 3d): every 5 consecutive failures doubles
         // the lockout duration, capped at 24h. Reset only by a successful login.
@@ -338,6 +348,14 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
            returning failed_login_count, lockout_count, locked_until`,
           [found.user_id]);
         const row = r.rows[0];
+        failures = row?.failed_login_count ?? 1;
+        // Anomaly feed (spec 12): audit EVERY failed attempt, not only lockouts.
+        await writeAudit(c, {
+          tenantId: found.tenant_id, actorUserId: found.user_id, ip: req.ip,
+          userAgent: req.headers["user-agent"] ?? null, requestId: req.requestId,
+          entity: "auth", entityId: found.user_id, action: "login_failed",
+          after: { failures }
+        });
         if (row && row.failed_login_count % 5 === 0) {
           await writeAudit(c, {
             tenantId: found.tenant_id, actorUserId: found.user_id, ip: req.ip,
@@ -347,6 +365,8 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
           });
         }
       });
+      // Progressive delay: grows with the failure count, capped at 2s.
+      await new Promise(r => setTimeout(r, Math.min(300 * failures, 2000)));
       throw new ApiError("INVALID_CREDENTIALS", "Invalid credentials", 401);
     }
     if (found.user_status === "pending_verification") {

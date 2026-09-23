@@ -29,11 +29,7 @@ function useToday() {
 function Chip({ text, color }: { text: string; color: string }) {
   return (
     <span className="px-8 py-4 text-[10px] font-bold uppercase tracking-[0.14em]"
-      style={{
-        borderLeft: `4px solid ${color}`,
-        background: `color-mix(in srgb, ${color} 10%, transparent)`,
-        color
-      }}>
+      style={{ borderLeft: `4px solid ${color}`, background: `color-mix(in srgb, ${color} 10%, transparent)`, color }}>
       {text}
     </span>
   );
@@ -49,21 +45,21 @@ function Kicker({ n, text }: { n: string; text: string }) {
   );
 }
 
-function Corridor({ from, to, km, note }: { from: string; to: string; km: string; note: string }) {
+function Corridor() {
   return (
-    <div>
+    <div className="w-full max-w-[340px]">
       <div className="flex items-center gap-12">
-        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white">{from}</span>
+        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white">Dar es Salaam</span>
         <span className="relative h-px flex-1" style={{ background: "rgba(255,255,255,0.35)" }}>
           <span className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full" style={{ background: "var(--gold)", left: 0 }} />
           <span className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full" style={{ background: "var(--gold)", left: "50%" }} />
           <span className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full" style={{ background: "var(--gold)", right: 0 }} />
         </span>
-        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white">{to}</span>
+        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white">Kigali</span>
       </div>
       <p className="mt-4 text-center text-[10px] font-semibold uppercase tracking-[0.22em] tabular-nums"
         style={{ color: "rgba(255,255,255,0.72)" }}>
-        {km} · {note}
+        1,500 KM · Central Corridor
       </p>
     </div>
   );
@@ -271,179 +267,160 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen flex-col" style={{ background: "var(--brand-deep)" }}>
-      <div className="flex flex-1 items-center justify-center px-16 py-32">
-        <div className="relative w-full max-w-[1000px]">
-          {/* stacked-paper hairline frame behind the sheet */}
-          <div aria-hidden className="absolute inset-0 rounded-card"
-            style={{ transform: "translate(12px, 12px)", border: "1px solid rgba(255,255,255,0.22)" }} />
-
-          <div className="sheet-in relative overflow-hidden rounded-card border bg-surface"
-            style={{ borderColor: "var(--line)", boxShadow: "0 24px 64px rgba(5, 18, 26, 0.45)" }}>
-
-            <header className="flex items-center justify-between border-b px-24 py-12" style={{ borderColor: "var(--line)" }}>
-              <img src="/waisha-logo.png" alt="WAISHA logo" style={{ height: 56, width: "auto" }} />
-              <div className="hidden items-center gap-16 md:flex">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "var(--ink-soft)" }}>
-                  T ENGO AEGIS · Transport &amp; Logistics
-                </span>
-                <Chip text="Secure portal" color="var(--success)" />
-              </div>
-            </header>
-
-            <div className="grid md:grid-cols-2">
-              <aside className="hidden flex-col justify-between p-32 md:flex"
-                style={{ background: "linear-gradient(165deg, var(--brand-deep) 0%, var(--brand) 165%)" }}>
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.24em] tabular-nums" style={{ color: "var(--gold)" }}>
-                    Docket WSH-0001 · Secure access
-                  </p>
-                  <h2 className="mt-12 text-[44px] font-extrabold leading-[1.05] tracking-tight text-white">
-                    {greeting}.
-                  </h2>
-                  <p className="mt-8 text-[11px] font-bold uppercase tracking-[0.24em]" style={{ color: "var(--gold)" }}>
-                    Your logistics connected
-                  </p>
-
-                  <div className="mt-32 space-y-16">
-                    <Corridor from="Dar es Salaam" to="Kigali" km="1,500 KM" note="Central Corridor" />
-                    <Corridor from="Dar es Salaam" to="Tunduma" km="970 KM" note="Tanzam Highway" />
-                  </div>
-
-                  <div className="mt-32">
-                    {MANIFEST.map(([n, t]) => (
-                      <div key={n} className="flex items-baseline gap-12 border-t py-10" style={{ borderColor: "rgba(255,255,255,0.25)" }}>
-                        <span className="text-xs font-bold tabular-nums" style={{ color: "var(--gold)" }}>{n}</span>
-                        <span className="text-sm" style={{ color: "rgba(255,255,255,0.85)" }}>{t}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <p className="mt-32 text-[11px] font-semibold uppercase tracking-[0.18em] tabular-nums"
-                  style={{ color: "rgba(255,255,255,0.7)" }}>
-                  WSH · Dar es Salaam · {today}
-                </p>
-              </aside>
-
-              <section className="flex flex-col p-24 md:p-32">
-                <p className="mb-8 text-sm font-semibold md:hidden" style={{ color: "var(--brand-deep)" }}>{greeting}</p>
-                <ErrorChip msg={error} />
-
-                <div className="flex flex-1 flex-col justify-center">
-                  {panel === "login" && (
-                    <div key="login" className="panel-enter">
-                      <Kicker n="01" text="Sign in" />
-                      <h1 className="mb-16 text-[28px] font-bold tracking-tight" style={{ color: "var(--ink)" }}>Access your account</h1>
-                      <Segmented items={loginTabs} index={loginTab} onChange={setLoginTab} />
-                      <form onSubmit={submitLogin} className="mt-16 space-y-12">
-                        {loginTab === 0 && (<>
-                          <Field label="TIN" name="tin" required placeholder="123-456-789" />
-                          <Field label="Email" name="email" type="email" required />
-                        </>)}
-                        {loginTab === 1 && (<Field label="Email or phone" name="identifier" required />)}
-                        {loginTab === 2 && (<>
-                          <Field label="Company name" name="company" required />
-                          <Field label="TIN" name="tin" required placeholder="123-456-789" />
-                          <Field label="Username" name="username" required />
-                        </>)}
-                        <PasswordField label="Password" name="password" required show={showPw} onToggle={() => setShowPw(v => !v)} />
-                        <div className="flex justify-end">
-                          <button type="button" className="text-xs underline" style={{ color: "var(--brand)" }}
-                            onClick={() => { setShowReset(true); setResetDone(false); }}>
-                            Forgot password?
-                          </button>
-                        </div>
-                        <button type="submit" disabled={busy}
-                          className="w-full rounded-input py-12 text-sm font-semibold transition-colors duration-200 disabled:opacity-60"
-                          style={{ background: "var(--gold-green)", color: "var(--ink)" }}>
-                          {busy ? "Signing in" : "Sign in"}
-                        </button>
-                      </form>
-                    </div>
-                  )}
-
-                  {panel === "signup" && (
-                    <div key="signup" className="panel-enter">
-                      <Kicker n="02" text="Create account" />
-                      <h1 className="mb-16 text-[28px] font-bold tracking-tight" style={{ color: "var(--ink)" }}>Register with WAISHA</h1>
-                      <Segmented items={["Transporter", "Shipper"]} index={signupTab} onChange={setSignupTab} />
-                      <form onSubmit={submitSignup} className="mt-16 space-y-12">
-                        {signupTab === 0 && (<>
-                          <Field label="Registered company name" name="companyName" required minLength={3} maxLength={120} />
-                          <Field label="TIN" name="tin" required placeholder="123-456-789" />
-                        </>)}
-                        {signupTab === 1 && (<>
-                          <Field label="First name" name="firstName" required />
-                          <Field label="Last name" name="lastName" required />
-                          <Field label="NIDA number (20 digits)" name="nida" required inputMode="numeric" maxLength={20} />
-                        </>)}
-                        <Field label="Active phone (international format)" name="phone" required placeholder="+255712345678" />
-                        <Field label="Email" name="email" type="email" required />
-                        <PasswordField label="Password" name="password" required minLength={10} show={showPw} onToggle={() => setShowPw(v => !v)} />
-                        <PasswordField label="Confirm password" name="confirm" required show={showPw} onToggle={() => setShowPw(v => !v)} />
-                        <label className="flex items-start gap-8 text-xs" style={{ color: "var(--ink-soft)" }}>
-                          <input type="checkbox" name="terms" required className="mt-2" />
-                          <span>I accept the Terms of Service and Privacy Policy</span>
-                        </label>
-                        <button type="submit" disabled={busy}
-                          className="w-full rounded-input py-12 text-sm font-semibold transition-colors duration-200 disabled:opacity-60"
-                          style={{ background: "var(--gold-green)", color: "var(--ink)" }}>
-                          {busy ? "Creating account" : "Create account"}
-                        </button>
-                      </form>
-                    </div>
-                  )}
-
-                  {panel === "otp" && pending && (
-                    <div key="otp" className="panel-enter">
-                      <Kicker n="03" text="Verify phone" />
-                      <h1 className="mb-8 text-[28px] font-bold tracking-tight" style={{ color: "var(--ink)" }}>Six-digit code</h1>
-                      <p className="mb-16 text-sm" style={{ color: "var(--ink-soft)" }}>
-                        Sent by SMS to {pending.phoneMasked}. Expires in 5 minutes.
-                      </p>
-                      <OtpInput onComplete={verifyOtp} />
-                      <div className="mt-16 flex items-center justify-between text-sm">
-                        <button type="button" disabled={cooldown > 0} className="underline disabled:opacity-50"
-                          style={{ color: "var(--brand)" }} onClick={resendCode}>
-                          {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
-                        </button>
-                        <button type="button" className="underline" style={{ color: "var(--brand)" }}
-                          onClick={() => { setError(null); setPanel("signup"); }}>Change phone number</button>
-                      </div>
-                    </div>
-                  )}
-
-                  {panel === "success" && (
-                    <div key="success" className="panel-enter py-24 text-center">
-                      <div className="mx-auto mb-16 h-[2px] w-48" style={{ background: "var(--success)" }} aria-hidden />
-                      <h2 className="text-lg font-semibold" style={{ color: "var(--success)" }}>Account successfully created</h2>
-                      <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
-                        Your account is ready. Redirecting you to the sign-in screen.
-                      </p>
-                      <button type="button" className="mt-16 text-sm underline" style={{ color: "var(--brand)" }}
-                        onClick={() => setPanel("login")}>Go to login now</button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Sign Up now lives INSIDE the card */}
-                {panel === "login" && (
-                  <div className="mt-24 border-t pt-12 text-center text-sm" style={{ borderColor: "var(--line)" }}>
-                    <span style={{ color: "var(--ink-soft)" }}>New to WAISHA? </span>
-                    <button type="button" className="font-semibold underline" style={{ color: "var(--brand)" }}
-                      onClick={() => { setError(null); setPanel("signup"); }}>Create an account</button>
-                  </div>
-                )}
-                {panel === "signup" && (
-                  <div className="mt-24 border-t pt-12 text-center text-sm" style={{ borderColor: "var(--line)" }}>
-                    <span style={{ color: "var(--ink-soft)" }}>Already registered? </span>
-                    <button type="button" className="font-semibold underline" style={{ color: "var(--brand)" }}
-                      onClick={() => { setError(null); setPanel("login"); }}>Sign in</button>
-                  </div>
-                )}
-              </section>
-            </div>
+      <div className="flex flex-1 flex-col items-center justify-center px-16 py-32">
+        {/* Brand block above the sheet — the single-page identity strip */}
+        <div className="mb-24 flex w-full max-w-[440px] flex-col items-center text-center">
+          <div className="inline-flex items-center rounded-card bg-white px-24 py-12 shadow-sm">
+            <img src="/waisha-logo.png" alt="WAISHA — where shippers meet transporters"
+              style={{ width: 260, height: "auto", maxWidth: "100%" }} />
+          </div>
+          <h1 className="mt-24 text-3xl font-extrabold tracking-tight text-white">{greeting}.</h1>
+          <p className="mt-4 text-[11px] font-bold uppercase tracking-[0.24em]" style={{ color: "var(--gold)" }}>
+            Your logistics connected
+          </p>
+          <div className="mt-16 flex w-full justify-center"><Corridor /></div>
+          <div className="mt-16 flex flex-wrap items-center justify-center gap-x-16 gap-y-8">
+            {MANIFEST.map(([n, t]) => (
+              <span key={n} className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "rgba(255,255,255,0.65)" }}>
+                <span style={{ color: "var(--gold)" }}>{n}</span> · {t}
+              </span>
+            ))}
           </div>
         </div>
+
+        {/* The sheet */}
+        <div className="relative w-full max-w-[440px]">
+          <div aria-hidden className="absolute inset-0 rounded-card"
+            style={{ transform: "translate(10px, 10px)", border: "1px solid rgba(255,255,255,0.22)" }} />
+          <div className="sheet-in relative rounded-card border bg-surface"
+            style={{ borderColor: "var(--line)", boxShadow: "0 24px 64px rgba(5, 18, 26, 0.45)" }}>
+            <div className="flex items-center justify-between border-b px-24 py-12" style={{ borderColor: "var(--line)" }}>
+              <span className="text-[10px] font-bold uppercase tracking-[0.2em] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                Docket WSH-0001
+              </span>
+              <Chip text="Secure portal" color="var(--success)" />
+            </div>
+
+            <div className="p-24">
+              <ErrorChip msg={error} />
+
+              {panel === "login" && (
+                <div key="login" className="panel-enter">
+                  <Kicker n="01" text="Sign in" />
+                  <h2 className="mb-16 text-2xl font-bold tracking-tight" style={{ color: "var(--ink)" }}>Access your account</h2>
+                  <Segmented items={loginTabs} index={loginTab} onChange={setLoginTab} />
+                  <form onSubmit={submitLogin} className="mt-16 space-y-12">
+                    {loginTab === 0 && (<>
+                      <Field label="TIN" name="tin" required placeholder="123-456-789" />
+                      <Field label="Email" name="email" type="email" required />
+                    </>)}
+                    {loginTab === 1 && (<Field label="Email or phone" name="identifier" required />)}
+                    {loginTab === 2 && (<>
+                      <Field label="Company name" name="company" required />
+                      <Field label="TIN" name="tin" required placeholder="123-456-789" />
+                      <Field label="Username" name="username" required />
+                    </>)}
+                    <PasswordField label="Password" name="password" required show={showPw} onToggle={() => setShowPw(v => !v)} />
+                    <div className="flex justify-end">
+                      <button type="button" className="text-xs underline" style={{ color: "var(--brand)" }}
+                        onClick={() => { setShowReset(true); setResetDone(false); }}>
+                        Forgot password?
+                      </button>
+                    </div>
+                    <button type="submit" disabled={busy}
+                      className="w-full rounded-input py-12 text-sm font-semibold transition-colors duration-200 disabled:opacity-60"
+                      style={{ background: "var(--gold-green)", color: "var(--ink)" }}>
+                      {busy ? "Signing in" : "Sign in"}
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {panel === "signup" && (
+                <div key="signup" className="panel-enter">
+                  <Kicker n="02" text="Create account" />
+                  <h2 className="mb-16 text-2xl font-bold tracking-tight" style={{ color: "var(--ink)" }}>Register with WAISHA</h2>
+                  <Segmented items={["Transporter", "Shipper"]} index={signupTab} onChange={setSignupTab} />
+                  <form onSubmit={submitSignup} className="mt-16 space-y-12">
+                    {signupTab === 0 && (<>
+                      <Field label="Registered company name" name="companyName" required minLength={3} maxLength={120} />
+                      <Field label="TIN" name="tin" required placeholder="123-456-789" />
+                    </>)}
+                    {signupTab === 1 && (<>
+                      <Field label="First name" name="firstName" required />
+                      <Field label="Last name" name="lastName" required />
+                      <Field label="NIDA number (20 digits)" name="nida" required inputMode="numeric" maxLength={20} />
+                    </>)}
+                    <Field label="Active phone (international format)" name="phone" required placeholder="+255712345678" />
+                    <Field label="Email" name="email" type="email" required />
+                    <PasswordField label="Password" name="password" required minLength={10} show={showPw} onToggle={() => setShowPw(v => !v)} />
+                    <PasswordField label="Confirm password" name="confirm" required show={showPw} onToggle={() => setShowPw(v => !v)} />
+                    <label className="flex items-start gap-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+                      <input type="checkbox" name="terms" required className="mt-2" />
+                      <span>I accept the Terms of Service and Privacy Policy</span>
+                    </label>
+                    <button type="submit" disabled={busy}
+                      className="w-full rounded-input py-12 text-sm font-semibold transition-colors duration-200 disabled:opacity-60"
+                      style={{ background: "var(--gold-green)", color: "var(--ink)" }}>
+                      {busy ? "Creating account" : "Create account"}
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {panel === "otp" && pending && (
+                <div key="otp" className="panel-enter">
+                  <Kicker n="03" text="Verify phone" />
+                  <h2 className="mb-8 text-2xl font-bold tracking-tight" style={{ color: "var(--ink)" }}>Six-digit code</h2>
+                  <p className="mb-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+                    Sent by SMS to {pending.phoneMasked}. Expires in 5 minutes.
+                  </p>
+                  <OtpInput onComplete={verifyOtp} />
+                  <div className="mt-16 flex items-center justify-between text-sm">
+                    <button type="button" disabled={cooldown > 0} className="underline disabled:opacity-50"
+                      style={{ color: "var(--brand)" }} onClick={resendCode}>
+                      {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
+                    </button>
+                    <button type="button" className="underline" style={{ color: "var(--brand)" }}
+                      onClick={() => { setError(null); setPanel("signup"); }}>Change phone number</button>
+                  </div>
+                </div>
+              )}
+
+              {panel === "success" && (
+                <div key="success" className="panel-enter py-16 text-center">
+                  <div className="mx-auto mb-16 h-[2px] w-48" style={{ background: "var(--success)" }} aria-hidden />
+                  <h2 className="text-lg font-semibold" style={{ color: "var(--success)" }}>Account successfully created</h2>
+                  <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+                    Your account is ready. Redirecting you to the sign-in screen.
+                  </p>
+                  <button type="button" className="mt-16 text-sm underline" style={{ color: "var(--brand)" }}
+                    onClick={() => setPanel("login")}>Go to login now</button>
+                </div>
+              )}
+            </div>
+
+            {panel === "login" && (
+              <div className="border-t px-24 py-12 text-center text-sm" style={{ borderColor: "var(--line)" }}>
+                <span style={{ color: "var(--ink-soft)" }}>New to WAISHA? </span>
+                <button type="button" className="font-semibold underline" style={{ color: "var(--brand)" }}
+                  onClick={() => { setError(null); setPanel("signup"); }}>Create an account</button>
+              </div>
+            )}
+            {panel === "signup" && (
+              <div className="border-t px-24 py-12 text-center text-sm" style={{ borderColor: "var(--line)" }}>
+                <span style={{ color: "var(--ink-soft)" }}>Already registered? </span>
+                <button type="button" className="font-semibold underline" style={{ color: "var(--brand)" }}
+                  onClick={() => { setError(null); setPanel("login"); }}>Sign in</button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <p className="mt-24 text-[11px] font-semibold uppercase tracking-[0.18em] tabular-nums"
+          style={{ color: "rgba(255,255,255,0.6)" }}>
+          WSH · Dar es Salaam · {today}
+        </p>
       </div>
 
       {showReset && (

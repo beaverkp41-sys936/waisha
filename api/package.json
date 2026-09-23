@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "migrate": "tsx scripts/migrate.ts",
     "seed": "tsx scripts/seed.ts",
+    "scan": "tsx scripts/security-scan.ts",
     "test": "vitest run"
   },
   "dependencies": {
