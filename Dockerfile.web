@@ -1,0 +1,23 @@
+# WAISHA Web — NEXT_PUBLIC_* must be baked at build time (client bundle).
+FROM node:22-slim
+RUN npm install -g pnpm@9.15.9
+WORKDIR /app
+
+# Final domains — activated when Cloudflare DNS goes live (Part 3).
+ARG NEXT_PUBLIC_API_ORIGIN=https://waisha-api.tengoaegis.com
+ARG API_ORIGIN=https://waisha-api.tengoaegis.com
+ENV NEXT_PUBLIC_API_ORIGIN=$NEXT_PUBLIC_API_ORIGIN
+ENV API_ORIGIN=$API_ORIGIN
+
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages/types/package.json packages/types/package.json
+COPY api/package.json api/package.json
+COPY web/package.json web/package.json
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+RUN pnpm --filter @waisha/web build
+
+WORKDIR /app/web
+EXPOSE 3000
+CMD ["./node_modules/.bin/next", "start"]
