@@ -6,6 +6,7 @@ import { env } from "./env.js";
 import { registerErrorHandling } from "./plugins/errors.js";
 import { authRoutes } from "./routes/auth.routes.js";
 import { contentRoutes } from "./routes/content.routes.js";
+import { controlRoutes } from "./routes/control.routes.js";
 
 async function main() {
   const app = Fastify({
@@ -23,7 +24,7 @@ async function main() {
   app.get("/api/v1/health", async () => ({ status: "ok", time: new Date().toISOString() }));
   await app.register(authRoutes, { prefix: "/api/v1" });
   await app.register(contentRoutes, { prefix: "/api/v1" });
-
+  await app.register(controlRoutes, { prefix: "/api/v1" });
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
 }
 
