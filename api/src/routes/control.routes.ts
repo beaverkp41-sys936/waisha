@@ -142,7 +142,21 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
     } else {
       verified = verifyTotp(secret, code);
     }
-    if (!verified) throw new ApiError("OTP_INVALID", "Invalid code.", 400);
+      if (!verified) {
+      // One attempt per challenge: burn it on failure. Brute force now costs a
+      // full password login per guess — every one of them audited.
+      await withTenant(sess.tenant_id, (c) => {
+        c.query(
+          `update sessions set revoked_at = now(), revoked_reason = 'control_totp_failed'
+           where refresh_token_hash = $1`, [sha256(challengeToken)]);
+        return writeAudit(c, {
+          tenantId: sess.tenant_id, actorUserId: sess.user_id, ip: req.ip,
+          userAgent: req.headers["user-agent"] ?? null, requestId: req.requestId,
+          entity: "auth", entityId: sess.user_id, action: "control.totp.failed"
+        });
+      });
+      throw new ApiError("OTP_INVALID", "Invalid code. Sign in again.", 400);
+    }
 
     // Promote the challenge session into a full control session (2h).
     const newToken = randomToken(32);
