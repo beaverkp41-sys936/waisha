@@ -14,7 +14,7 @@ async function requireAuth(req: any) {
   req.user = claims;
 }
 
-export function licenceRoutes(app: FastifyInstance, _opts: unknown) {
+export async function licenceRoutes(app: FastifyInstance, _opts: unknown) {
 
   // Snapshot the caller sees after every login (drives the gate + banner)
   app.get("/licence", { preHandler: [requireAuth] }, async (req: any) => {
