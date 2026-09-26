@@ -12,7 +12,13 @@ const schema = z.object({
   WEB_ORIGIN: z.string().url(),
   RESEND_API_KEY: z.string().optional().default(""),
   MAIL_FROM: z.string().default("WAISHA <onboarding@resend.dev>"),
-  TIN_CHECKSUM_MODE: z.enum(["structure", "strict"]).default("structure")
+  TIN_CHECKSUM_MODE: z.enum(["structure", "strict"]).default("structure"),
+  PAYMENT_PROVIDER: z.enum(["mock", "azampay"]).default("mock"),
+  PAYMENT_MOCK_KEY: z.string().optional(),
+  AZAMPAY_BASE_URL: z.string().optional().default(""),
+  AZAMPAY_CLIENT_ID: z.string().optional().default(""),
+  AZAMPAY_CLIENT_SECRET: z.string().optional().default(""),
+  AZAMPAY_WEBHOOK_SECRET: z.string().optional().default("")
 });
 
 const parsed = schema.safeParse(process.env);

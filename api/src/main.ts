@@ -8,6 +8,7 @@ import { authRoutes } from "./routes/auth.routes.js";
 import { contentRoutes } from "./routes/content.routes.js";
 import { controlRoutes } from "./routes/control.routes.js";
 import { licenceRoutes } from "./routes/licence.routes.js";
+import { paymentsRoutes } from "./routes/payments.routes.js";
 
 async function main() {
   const app = Fastify({
@@ -27,7 +28,7 @@ async function main() {
   await app.register(contentRoutes, { prefix: "/api/v1" });
   await app.register(controlRoutes, { prefix: "/api/v1" });
   await app.register(licenceRoutes, { prefix: "/api/v1" });
-
+  await app.register(paymentsRoutes, { prefix: "/api/v1" });
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
 }
 
