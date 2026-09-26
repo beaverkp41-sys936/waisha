@@ -247,6 +247,12 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
     clearControlCookie(reply);
     return reply.send({ ok: true });
   });
+  // ---------- Public plans list (payment page, pre-auth) ----------
+  app.get("/control/plans-public", async () => {
+    const { rows } = await pool.query(
+      "select key, name, seat_limit, price_monthly, price_quarterly, price_annual, vat_rate from plans where is_active = true order by price_monthly");
+    return rows;
+  });
 
   // ---------- Plans editor (Super Admin / billing) ----------
   app.get("/control/plans", { preHandler: [requireControl] }, async (req: any) => {
