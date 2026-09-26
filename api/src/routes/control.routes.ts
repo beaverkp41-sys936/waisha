@@ -4,8 +4,8 @@ import { pool, withTenant } from "../db/pool.js";
 import { ApiError } from "../util/errors.js";
 import { uuidv7 } from "../util/uuid.js";
 import { searchHash, sha256, randomToken } from "../util/crypto.js";
-import { verifyPassword } from "../security/argon2.js";
-import { issueAccessToken, verifyAccessToken } from "../security/jwt.js";
+import { hashPassword, verifyPassword } from "../security/argon2.js";
+import { passwordSchema, pwnedCount } from "../security/password.js";
 import {
   generateTotpSecret, enrollmentQr, verifyTotp,
   generateRecoveryCodes, hashRecoveryCode
@@ -142,7 +142,7 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
     } else {
       verified = verifyTotp(secret, code);
     }
-      if (!verified) {
+    if (!verified) {
       // One attempt per challenge: burn it on failure. Brute force now costs a
       // full password login per guess — every one of them audited.
       await withTenant(sess.tenant_id, (c) => {
@@ -193,6 +193,44 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
     }
 
     setControlCookie(reply, newToken);
+    return reply.send({ ok: true });
+  });
+
+  // ---------- Change own password (spec 20; retires bootstrap credentials) ----------
+  app.post("/control/auth/change-password", { preHandler: [requireControl] }, async (req: any, reply) => {
+    const { currentPassword, newPassword } = z.object({
+      currentPassword: z.string().min(1),
+      newPassword: passwordSchema
+    }).parse(req.body);
+
+    const u = await pool.query("select password_hash from users where id=$1", [req.control.user_id]);
+    const ok = u.rows[0]?.password_hash && await verifyPassword(u.rows[0].password_hash, currentPassword);
+    if (!ok) throw new ApiError("INVALID_CREDENTIALS", "Current password is incorrect.", 401);
+
+    // HIBP check, fail-open on outage: the caller is already TOTP-authenticated,
+    // and being locked out of one's own control panel is the worse failure mode.
+    const pwned = await pwnedCount(newPassword).catch(() => -1);
+    if (pwned > 0) {
+      throw new ApiError("VALIDATION_FAILED",
+        "This password has appeared in a known data breach. Choose another.", 400,
+        [{ field: "newPassword" }]);
+    }
+
+    await withTenant(req.control.tenant_id, async (c) => {
+      await c.query("update users set password_hash=$2 where id=$1",
+        [req.control.user_id, await hashPassword(newPassword)]);
+      // Every other control session dies; this one survives.
+      await c.query(
+        `update sessions set revoked_at = now(), revoked_reason = 'password_change'
+         where user_id = $1 and revoked_at is null
+           and refresh_token_hash <> $2`,
+        [req.control.user_id, sha256(req.cookies[CONTROL_COOKIE] ?? "")]);
+      await writeAudit(c, {
+        tenantId: req.control.tenant_id, actorUserId: req.control.user_id, ip: req.ip,
+        requestId: req.requestId, entity: "users", entityId: req.control.user_id,
+        action: "control.password_changed"
+      });
+    });
     return reply.send({ ok: true });
   });
 

@@ -10,6 +10,49 @@ interface Plan {
 }
 type Draft = Partial<Record<"name" | "seat_limit" | "price_monthly" | "price_quarterly" | "price_annual" | "is_active", any>>;
 
+function ChangePassword() {
+  const [open, setOpen] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setErr(null);
+    const fd = new FormData(e.currentTarget);
+    const res = await fetch(`${API}/api/v1/control/auth/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+      body: JSON.stringify({ currentPassword: fd.get("cur"), newPassword: fd.get("new") })
+    });
+    const j = await res.json().catch(() => ({}));
+    if (res.ok) { setMsg("Password changed. Other sessions revoked."); setOpen(false); }
+    else setErr(j?.error?.message ?? "Failed");
+  }
+
+  if (!open) return (
+    <button type="button" className="text-xs underline" style={{ color: "var(--gold)" }}
+      onClick={() => setOpen(true)}>Change password</button>
+  );
+
+  return (
+    <form onSubmit={submit} className="mb-24 space-y-12 rounded-card border p-16" style={{ borderColor: "var(--gold)" }}>
+      <input name="cur" type="password" required placeholder="Current password"
+        className="w-full rounded-input border px-12 py-8 text-sm"
+        style={{ borderColor: "var(--line)", background: "var(--milk)" }} />
+      <input name="new" type="password" required minLength={10}
+        placeholder="New password (10+ chars, upper, lower, digit, symbol)"
+        className="w-full rounded-input border px-12 py-8 text-sm"
+        style={{ borderColor: "var(--line)", background: "var(--milk)" }} />
+      {err && <p className="text-xs" style={{ color: "var(--danger)" }}>{err}</p>}
+      {msg && <p className="text-xs" style={{ color: "var(--success)" }}>{msg}</p>}
+      <div className="flex gap-8">
+        <button type="submit" className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">Change</button>
+        <button type="button" onClick={() => setOpen(false)}
+          className="rounded-input border px-16 py-8 text-xs font-semibold"
+          style={{ borderColor: "var(--line)" }}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
 export default function ControlPage() {
   const [me, setMe] = useState<any>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -88,7 +131,10 @@ export default function ControlPage() {
       </header>
 
       <main className="mx-auto max-w-[900px] px-16 py-32">
-        <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Plans and pricing</h1>
+        <div className="flex items-start justify-between">
+          <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Plans and pricing</h1>
+          <ChangePassword />
+        </div>
         <p className="mt-8 mb-24 text-sm" style={{ color: "var(--ink-soft)" }}>
           These plans are what transporters see at the licence gate. Prices in TZS, exclusive of VAT (VAT is added at 18% on the payment page).
         </p>

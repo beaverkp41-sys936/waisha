@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { useLicence, TrialBanner, LicenceGate } from "./gate";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
@@ -20,6 +21,8 @@ export default function PostLogin() {
   const [me, setMe] = useState<any>(null);
   const [sessions, setSessions] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const { licence, loading, reload } = useLicence();
+  const [gateOpen, setGateOpen] = useState(false);
 
   const api = useCallback(async (path: string, init?: RequestInit): Promise<Response> => {
     const token = sessionStorage.getItem("waisha_access");
@@ -67,9 +70,26 @@ export default function PostLogin() {
     window.location.href = "/login";
   }
 
+  async function startTrial() {
+    setError(null);
+    try {
+      const r = await api("/licence/trial", { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) { setGateOpen(false); reload(); }
+      else setError(j?.error?.message ?? "Could not start trial");
+    } catch (e: any) {
+      if (e.message !== "session ended") setError(e.message);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-[720px] px-16 py-48">
       <h1 className="mb-24 text-xl font-bold" style={{ color: "var(--brand-deep)" }}>Account</h1>
+
+      {licence && (
+        <TrialBanner licence={licence} onActivate={() => setGateOpen(true)} />
+      )}
+
       <ErrorChip msg={error} />
 
       {me && (
@@ -78,6 +98,11 @@ export default function PostLogin() {
           <p className="text-sm" style={{ color: "var(--ink-soft)" }}>
             {me.tenant_name} · {me.tenant_type} · {me.tenant_status}
           </p>
+          {licence?.plan && (
+            <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+              Plan: <strong>{licence.plan}</strong> · Status: {licence.subscription_status ?? licence.tenant_status}
+            </p>
+          )}
         </section>
       )}
 
@@ -122,6 +147,14 @@ export default function PostLogin() {
         onClick={signOut}>
         Sign out
       </button>
+
+      {licence && licence.tenant_status === "pending_verification" && (
+        <LicenceGate
+          licence={licence}
+          onClose={() => setGateOpen(false)}
+          onTrial={startTrial}
+        />
+      )}
     </div>
   );
 }
