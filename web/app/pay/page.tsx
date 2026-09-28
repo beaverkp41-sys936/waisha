@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
@@ -28,7 +28,7 @@ function ErrorChip({ msg }: { msg: string | null }) {
   );
 }
 
-export default function PayPage() {
+function PayContent() {
   const params = useSearchParams();
   const token = typeof window !== "undefined" ? sessionStorage.getItem("waisha_access") : null;
 
@@ -239,5 +239,17 @@ export default function PayPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function PayPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center" style={{ background: "var(--milk)" }}>
+        <p className="text-sm" style={{ color: "var(--ink-soft)" }}>Loading payment page</p>
+      </div>
+    }>
+      <PayContent />
+    </Suspense>
   );
 }
