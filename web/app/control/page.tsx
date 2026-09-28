@@ -122,6 +122,7 @@ export default function ControlPage() {
               {me.roles.join(" · ")}
             </span>
           ) : null}
+          <a href="/control/tenants" className="text-xs font-semibold underline" style={{ color: "var(--gold)" }}>Tenants</a>
           <button type="button" onClick={logout}
             className="rounded-input border px-16 py-8 text-xs font-semibold text-white"
             style={{ borderColor: "rgba(255,255,255,0.4)" }}>

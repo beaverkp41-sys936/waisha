@@ -35,6 +35,10 @@ async function requireControl(req: any) {
   req.control = s;
 }
 
+function hasLicenceRole(roles: string[] | undefined): boolean {
+  return !!roles && (roles.includes("super_admin") || roles.includes("billing_admin"));
+}
+
 export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- Step 1: password ----------
@@ -247,6 +251,37 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
     clearControlCookie(reply);
     return reply.send({ ok: true });
   });
+
+  // ---------- Tenants: list (Control; super_admin / billing_admin) ----------
+  app.get("/control/tenants", { preHandler: [requireControl] }, async (req: any) => {
+    if (!hasLicenceRole(req.control.roles ?? [])) throw new ApiError("FORBIDDEN", "Not permitted", 403);
+    const q = ((req.query as any)?.q ?? "").toString().trim();
+    const { rows } = await pool.query(
+      "select * from platform_auth.list_tenants_for_control($1)", [q || null]);
+    return rows;
+  });
+
+  // ---------- Tenants: manual activate / extend (money verified out-of-band) ----------
+  app.post("/control/tenants/:id/activate", { preHandler: [requireControl] }, async (req: any, reply) => {
+    if (!hasLicenceRole(req.control.roles ?? [])) throw new ApiError("FORBIDDEN", "Not permitted", 403);
+    await enforceRateLimit(`activate:uid:${req.control.user_id}`, 20, 3600);
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      planKey: z.enum(["starter", "business", "enterprise"]),
+      billingCycle: z.enum(["monthly", "quarterly", "annual"]),
+      provider: z.enum(["azampesa", "mpesa", "tigopesa", "airtel", "halopesa", "bank"]),
+      providerTxnId: z.string().max(100).optional(),
+      amountOverride: z.number().positive().optional()
+    }).parse(req.body);
+    const r = await pool.query(
+      "select platform_auth.manual_activate($1,$2,$3,$4,$5,$6,$7) as r",
+      [id, body.planKey, body.billingCycle, body.provider,
+       body.providerTxnId ?? null, body.amountOverride ?? null, req.control.user_id]);
+    const res = r.rows[0].r;
+    if (res.status === "ok") return reply.send(res);
+    throw new ApiError("VALIDATION_FAILED", res.message ?? "Activation failed", 400);
+  });
+
   // ---------- Public plans list (payment page, pre-auth) ----------
   app.get("/control/plans-public", async () => {
     const { rows } = await pool.query(
