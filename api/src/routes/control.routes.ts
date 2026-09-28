@@ -122,8 +122,15 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
     const sess = s.rows[0]?.s;
     if (!sess || new Date(sess.expires_at) < new Date()) throw new ApiError("TOKEN_EXPIRED", "Challenge expired - sign in again", 401);
 
-    const u = await pool.query(
-      "select totp_secret_encrypted from users where id=$1", [sess.user_id]);
+    // RLS-safe read: the secret fetch needs the tenant context (production runs
+    // as the restricted role; a context-less read returns zero rows).
+    const u = await withTenant(sess.tenant_id, (c) => c.query(
+      "select totp_secret_encrypted from users where id=$1", [sess.user_id]));
+    if (!u.rows[0]) {
+      // Fail closed: with the tenant context set, an empty read means the
+      // session and the user no longer align - force a fresh sign-in.
+      throw new ApiError("TOKEN_EXPIRED", "Challenge expired - sign in again", 401);
+    }
     const secret = (await import("../util/crypto.js"))
       .decryptField(Buffer.from(u.rows[0].totp_secret_encrypted));
 
@@ -207,7 +214,8 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
       newPassword: passwordSchema
     }).parse(req.body);
 
-    const u = await pool.query("select password_hash from users where id=$1", [req.control.user_id]);
+    const u = await withTenant(req.control.tenant_id, (c) => c.query(
+      "select password_hash from users where id=$1", [req.control.user_id]));
     const ok = u.rows[0]?.password_hash && await verifyPassword(u.rows[0].password_hash, currentPassword);
     if (!ok) throw new ApiError("INVALID_CREDENTIALS", "Current password is incorrect.", 401);
 
