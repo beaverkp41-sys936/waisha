@@ -67,10 +67,11 @@ export function TrialBanner({ licence, onActivate }: { licence: LicenceInfo; onA
   );
 }
 
-export function LicenceGate({ licence, onClose, onTrial }: {
-  licence: LicenceInfo; onClose: () => void; onTrial: () => void;
+export function LicenceGate({ licence, onPay, onTrial }: {
+  licence: LicenceInfo; onPay: () => void; onTrial: () => void;
 }) {
-  const [busy, setBusy] = useState<"pay" | "trial" | null>(null);
+  const [busy, setBusy] = useState<"trial" | null>(null);
+
   return (
     <div role="dialog" aria-modal="true" aria-label="Activate your licence"
       className="fixed inset-0 z-50 flex items-center justify-center p-16"
@@ -82,10 +83,9 @@ export function LicenceGate({ licence, onClose, onTrial }: {
           Choose how you would like to begin. Your data is safe either way.
         </p>
         <div className="space-y-12">
-          <button type="button" disabled={busy !== null}
-            onClick={() => { setBusy("pay"); onClose(); }}
+          <button type="button" onClick={onPay}
             className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">
-            {busy === "pay" ? "Loading" : "Pay now"}
+            Pay now
           </button>
           <button type="button" disabled={busy !== null} onClick={() => { setBusy("trial"); onTrial(); }}
             className="w-full rounded-input border py-12 text-sm font-semibold disabled:opacity-60"

@@ -151,7 +151,7 @@ export default function PostLogin() {
       {licence && licence.tenant_status === "pending_verification" && (
         <LicenceGate
           licence={licence}
-          onClose={() => setGateOpen(false)}
+          onPay={() => { window.location.href = "/pay"; }}
           onTrial={startTrial}
         />
       )}

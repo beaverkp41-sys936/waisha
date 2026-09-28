@@ -76,7 +76,7 @@ export async function paymentsRoutes(app: FastifyInstance, _opts: unknown) {
            amount_subtotal, vat_rate, vat_amount, amount_total, status,
            period_start, period_end, due_at)
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'issued',
-           current_date, current_date + make_interval(months => $10)::date,
+           current_date, (current_date + make_interval(months => $10))::date,
            now() + interval '7 days')
          returning id`, [req.user.tid, subscriptionId, number, body.billingCycle, body.seats,
           amounts.subtotal, amounts.vatRate, amounts.vatAmount, amounts.total, months]);
