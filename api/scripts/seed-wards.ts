@@ -1,9 +1,11 @@
 /**
- * Seeds geo_wards from api/seeds/geo_tz_wards.txt (operator-collected, 31 regions).
- * v2: fixes the colon<-1 truthiness bug that skipped all ward lines; strips
- * urban/rural markers from the match base (they become the U/R discriminator);
- * handles merged councils (warns), duplicates (dedupes), missing districts.
- * Idempotent - safe to re-run.
+ * Seeds geo_wards from api/seeds/geo_tz_wards.txt — CANONICAL FORMAT v3:
+ *   "DODOMA REGION" region headers between dashed rules,
+ *   "District Council: <name>" council headers,
+ *   "- <ward>" ward lists.
+ * Handles merged councils (warns, attaches to first), duplicate wards
+ * (dedupes), missing districts (creates, warns), urban/rural pairs
+ * (District->Rural, City/Municipal/Town->Urban). Idempotent.
  */
 import "dotenv/config";
 import { readFileSync } from "node:fs";
@@ -29,10 +31,8 @@ const REGION_ALIASES: [string, string][] = [
 const PHRASE_FIXES: [RegExp, string][] = [
   [/missenyi/i, "Misenyi"],
   [/handani/i, "Handeni"],
-  [/^dar es salaam city council/i, "Ilala"],
-  [/^mjini district council/i, "Mjini"]
+  [/^mjini district council/i, "Mjini"],
 ];
-// Marker words are stripped from the match base - they live in markerOf().
 const NOISE = new Set(["council", "councils", "municipal", "town", "city", "district",
   "dc", "mji", "mjini", "vijijini", "urban", "rural"]);
 
@@ -46,9 +46,6 @@ function markerOf(name: string): "U" | "R" | "" {
   if (/(mjini|urban|municipal|city|jiji|town)/.test(s)) return "U";
   if (/(vijijini|rural)/.test(s)) return "R";
   return "";
-}
-function cleanWard(w: string): string {
-  return w.replace(/\./g, "").replace(/\s+/g, " ").trim();
 }
 
 interface Dist { id: number; name: string; base: string; marker: "U" | "R" | ""; }
@@ -99,33 +96,30 @@ async function main() {
 
   for (const raw of lines) {
     const line = raw.trim();
-    if (!line || /^=+$/.test(line)) continue;
-    if (/^(TANZANIA|ZANZIBAR|UNGUJA ISLAND|PEMBA ISLAND)/i.test(line) && !/REGION/i.test(line)) continue;
+    if (!line || /^[-=]+$/.test(line)) continue;
+    if (/^wards?:?\s*$/i.test(line)) continue;
+    if (/^(TANZANIA|ZANZIBAR|UNGUJA ISLAND|PEMBA ISLAND|TANZANIA MAINLAND)/i.test(line)) continue;
 
-    const colon = line.indexOf(":");
-    const head = colon >= 0 ? line.slice(0, colon) : line;
-    const tail = colon >= 0 ? line.slice(colon + 1) : "";
-    const headUpper = head.toUpperCase();
-
-    if (/\bREGION\b/.test(headUpper)) {
+    // Region header
+    if (/\bREGION\b/i.test(line) && !/^District Council/i.test(line)) {
       for (const [alias, code] of REGION_ALIASES) {
-        if (headUpper.includes(alias)) {
+        if (line.toUpperCase().includes(alias)) {
           regionId = regions.get(code) ?? null;
           if (regionId) { stats.regions.add(code); current = null; }
           break;
         }
       }
       if (regionId === null) unmatched.push(line);
-      if (!/COUNCIL/i.test(headUpper)) continue;
+      continue;
     }
 
-    if (/COUNCIL/i.test(headUpper) && regionId !== null) {
-      let phrase = head.replace(/^\s*[\d.]+\s*/, "").trim();
+    // Council header: "District Council: <name>"
+    const councilMatch = line.match(/^District Council:\s*(.+)$/i);
+    if (councilMatch && regionId !== null) {
+      let phrase = councilMatch[1].trim();
       for (const [re, rep] of PHRASE_FIXES) phrase = phrase.replace(re, rep);
-      const cut = phrase.match(/^(.*?council)/i);
-      if (cut) phrase = cut[1].replace(/\s+/g, " ").trim();
-      if (/(councils|\s\/\s|,\s)/i.test(head.replace(cut ? cut[1] : "", ""))) {
-        merged.push(head.replace(/\s+/g, " ").slice(0, 70));
+      if (/(councils|\s\/\s|,\s)/i.test(phrase)) {
+        merged.push(phrase.slice(0, 70));
       }
 
       const cands = byRegion.get(regionId) ?? [];
@@ -154,21 +148,19 @@ async function main() {
         if (m.ambiguous) merged.push(`${phrase} (urban/rural pair - attached to ${dist.name})`);
       }
       current = { id: dist.id, name: dist.name, seen: new Set() };
+      continue;
     }
 
-    // THE FIX: colon === -1 means "no colon on this line" -> it is a ward list.
-    // (The old `!colon` was false for -1, silently skipping every ward line.)
-    const wardText = /COUNCIL/i.test(headUpper) && colon >= 0 ? tail : (colon < 0 ? line : "");
-    if (current && wardText.trim()) {
-      for (const w of wardText.split(",")) {
-        const name = cleanWard(w);
-        if (!name || current.seen.has(name.toLowerCase())) { if (name) stats.dupes++; continue; }
-        current.seen.add(name.toLowerCase());
-        const ins = await client.query(
-          "insert into geo_wards (district_id, name) values ($1,$2) on conflict do nothing returning id",
-          [current.id, name]);
-        if (ins.rowCount) stats.wards++; else stats.dupes++;
-      }
+    // Ward line: "- <name>"
+    const wardMatch = line.match(/^-\s*(.+)$/);
+    if (wardMatch && current) {
+      const name = wardMatch[1].replace(/\s+/g, " ").trim();
+      if (!name || current.seen.has(name.toLowerCase())) { if (name) stats.dupes++; continue; }
+      current.seen.add(name.toLowerCase());
+      const ins = await client.query(
+        "insert into geo_wards (district_id, name) values ($1,$2) on conflict do nothing returning id",
+        [current.id, name]);
+      if (ins.rowCount) stats.wards++; else stats.dupes++;
     }
   }
 
