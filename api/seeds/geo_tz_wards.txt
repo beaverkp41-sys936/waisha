@@ -1,0 +1,528 @@
+
+DODOMA REGION
+
+Kondoa District Council:
+Bumbuta, Changaa, Chemchem, Haubi, Hooni, Itaswi, Kikelelwa, Kinyasi, Kisese, Kwadelo, Masange, Mnenia, Pahi, Salanka, Soera, Suruko, Thawi.
+
+Kondoa Town Council:
+Bolisa, Chemchem, Kilimani, Kingale, Kondoa Mjini, Kolo, Suruko, Tampori.
+
+Mpwapwa District Council:
+Berege, Chipogolo, Chuni, Godegode, Gulwe, Inzomvu, Kibakwe, Kingiti, Lukole, Lumuma, Lupeta, Malolo, Matamondo, Mbuga, Mima, Godegode, Mpwapwa Mjini, Munsase, Ng'hambi, Pwaga, Rudi, Ving'hawe, Wotta.
+
+Kongwa District Council:
+Chamkoroma, Hogoro, Ichemba, Kibaigwa, Kongwa, Mkoka, Mlali, Njoge, Sagara, Sejeli, Ugogoni, Zoissa.
+
+Chamwino District Council:
+Buigiri, Chamwino, Chilonwa, Dabalo, Fufu, Handali, Haneti, Ikowa, Handali, Majeleko, Makang'wa, Manchali, Mvumi Mission, Mvumi Makulu, Segala, Muheti.
+
+Dodoma City Council:
+Chafa, Chang'ombe, Hazina, Hombolo Bwawani, Hombolo Makulu, Ipala, Iyumbu, Kikuyu Kaskazini, Kikuyu Kusini, Kilimani, Kizota, Madukani, Makulu, Makole, Mbwanji, Mkejewa, Mnadani, Mpunguzi, Msalato, Mtumba, Nala, Njiapanda, Nzuguni, Tambukareli, Viwandani, Zuzu.
+
+Bahi District Council:
+Bahi, Chali, Chibelela, Chikola, Chipanga, Ibihwa, Ilindi, Kigwe, Lamaiti, Mpamantwa, Mwitikira, Zanka.
+
+Chemba District Council:
+Babayu, Chemba, Churuku, Farkwa, Goima, Gwandi, Jangalo, Kidoka, Kimaha, Kintinku, Kwadelo, Lalta, Makorongo, Mondo, Mrijo, Paranga, Sanka, Santilya.
+
+
+ARUSHA REGION
+
+Monduli District Council:
+Engaruka, Engaruka, Esilalei, Lepurko, Makuyuni, Meserani, Monduli Juu, Monduli Mjini, Mto wa Mbu, Sepeko, Selela.
+
+Meru District Council:
+Akheri, Ambureni, Kikwe, King'ori, Leguruki, Maji ya Chai, Makiba, Maroroni, Ngaramtoni, Ngarenanyuki, Poli, Usa River.
+
+Arusha District Council:
+Bangata, Bwawani, Ilkiding'a, Kimnyaki, Kiranyi, Mateves, Mussa, Olkokola, Olturoto, Oltrumet, Sambasha, Sokon II.
+
+Longido District Council:
+Engarenaibor, Gelai Lumbwa, Gelai Meirugoi, Kamwanga, Kitumbeine, Longido, Matale, Mundarara, Namanga, Oldeani, Olmolog, Tingatinga.
+
+Karatu District Council:
+Baray, Endabash, Endamarariek, Ganako, Karatu, Mang'ola, Mbulumbulu, Oldeani, Rhotia.
+
+Ngorongoro District Council:
+Alailelai, Arash, Digodigo, Endululen, Kakesio, Malambo, Naiyobi, Nainokanoka, Nayobi, Ngorongoro, Olbalbal, Sale, Samunge, Soitsambu.
+
+Arusha City Council:
+Baraa, Daraja Mbili, Elerai, Engutoto, Kaloleni, Kati, Kimandolu, Lemara, Levolosi, Moshono, Ngarenaro, Olasiti, Olesha, Sombetini, Sokon I, Terrat, Themi.
+
+
+KILIMANJARO REGION
+
+Rombo District Council:
+Aleni, Holili, Kamwanga, Kareni, Kirwa Keni, Kitirima, Mahida, Makiidi, Mamsera, Mkuu, Mengwe, Nanjara, Olele, Rehea, Tarakea, Usseri.
+
+Mwanga District Council:
+Jipe, Kifaru, Kirya, Kivisini, Lembeni, Mgagao, Msangeni, Mwanga, Shighatini, Toloha, Ugweno.
+
+Same District Council:
+Bende, Bombo, Chome, Hedaru, Kalemawe, Kihurio, Kirangare, Kisiwani, Makanya, Mamba, Msindo, Mtii, Same, Vumari, Vunta.
+
+Moshi Municipal Council:
+Bondeni, Karanga, Kiboriloni, Kilimanjaro, Korongoni, Longuo, Mawenzi, Mfumuni, Miembeni, Njoro, Pasua, Rau, Shirimatunda, Soweto.
+
+Moshi District Council:
+Arusha Chini, Kahe, Kibosho, Kimochi, Kindi, Mabogini, Machame, Marangu, Mbokumu, Old Moshi, Okoani, Uru.
+
+Hai District Council:
+Bondeni, Machame Narumu, Machame Kaskazini, Machame Kusini, Masama Kaskazini, Masama Kusini, Masama Magharibi, Rombo, Weruweru.
+
+Siha District Council:
+Biriri, Kashashi, Livishi, Makiwaru, Nasai, Ngarenairobi, Sanya Juu, Siha Kaskazini, Siha Kati, Siha Magharibi.
+
+
+TANGA REGION
+
+Lushoto District Council:
+Gare, Kwai, Lushoto, Magamba, Makanya, Malindi, Manolo, Mbaramo, Mgwashi, Mtae, Rangwi, Soni, Ubiri.
+
+Bumbuli District Council:
+Bumbuli, Funta, Kwamneke, Lushoto, Mayo, Mgwashi, Mponda, Soni, Tamota, Usambara.
+
+Korogwe District Council / Town Council:
+Bungu, Chekelei, Dera, Kilole, Korogwe Mjini, Kwagunda, Kwamndolwa, Magoma, Makuyuni, Mashewa, Mazinde, Mombo, Ngombezi, Rusagira.
+
+Muheza District Council:
+Amani, Bwembwera, Gombelo, Kigombe, Kilulu, Kwaraguru, Luengera, Magila, Misozwe, Muheza, Ngomeni, Potwe, Zirai.
+
+Tanga City Council:
+Central, Chongoleani, Duga, Kiomoni, Mabawa, Mazingara, Mnyanjani, Msambweni, Mwanzange, Ngamiani, Nzinga, Pongwe, Tangasisi, Usagara.
+
+Pangani, Handani, Kilindi, Mkinga District Councils:
+Pangani, Bushiri, Kimang'a, Kipumbwi, Mkwaja, Handeni, Mazingara, Chanika, Kwedzinga, Sindeni, Songe, Kibirashi, Kimbe, Maramba, Mkinga.
+
+
+DAR ES SALAAM REGION
+
+Kinondoni Municipal Council:
+Hananasif, Kawe, Kijitonyama, Kinondoni, Kunduchi, Magomeni, Makumbusho, Mbweni, Mikocheni, Msasani, Mwananyamala, Ndugumbi, Tandale.
+
+Dar es Salaam City Council (Ilala):
+Buguruni, Chanika, Gerezani, Ilala, Jangwani, Kariakoo, Kipawa, Kitunda, Kivukoni, Msongola, Mchafukoge, Pugu, Segerea, Ukonga, Vingunguti.
+
+Temeke Municipal Council:
+Azimio, Chamazi, Chang'ombe, Charambe, Keko, Kiburugwa, Kurasini, Mbagala, Mbagala Kuu, Mtoni, Tandika, Temeke, Toangoma.
+
+Kigamboni Municipal Council:
+Kigamboni, Kibada, Kisarawe II, Mjimwema, Pembamnazi, Somangila, Tungi, Vijibweni.
+
+Ubungo Municipal Council:
+Goba, Kwembe, Mbezi, Manzese, Mabibo, Makuburi, Sinza, Ubungo.
+
+
+MOROGORO REGION
+
+Kilosa District Council:
+Chate, Dumila, Kimamba I, Kimamba II, Kishamba, Lumuma, Mabwerebwere, Magole, Masanze, Mikumi, Mkwatani, Ruaha, Rudewa, Tindiga, Ulaya.
+
+Morogoro Municipal Council:
+Bigwa, Boma, Chamwino, Kichangani, Kididimo, Kilakala, Kingorwila, Kingoluwira, Kiwanja cha Ndege, Mazimbu, Mbuyuni, Mlimani, Mwembesongo, Sabasaba, Sultani Area.
+
+Morogoro District Council:
+Bwakila Chini, Gwata, Kibogwa, Kibuko, Kisingisi, Kolero, Matombo, Mkesa, Mkuyuni, Ngerengere, Selembala, Tomondo.
+
+Mvomero District Council:
+Bunduki, Diongoya, Hembeti, Kibaoni, Kibati, Lelu, Melela, Mkindo, Mlali, Mvomero, Nyandira, Sungaji, Tchenzema.
+
+Ifakara Town Council / Kilombero District Council:
+Chisano, Idete, Ifakara, Katindiuka, Kiberege, Kidatu, Kibaoni, Mang'ula, Mlimba, Msolwa Station, Sanje, Utengule.
+
+Ulanga District Council / Malinyi District Council:
+Isongo, Lugala, Lupiro, Mahenge, Malinyi, Mawenzi, Minepa, Ngoheranga, Ruaha, Sofi, Usagara, Vigoi.
+
+Gairo District Council:
+Chagongwe, Gairo, Idibo, Iyogwe, Kibedya, Mandege, Rubeho, Ukaguru.
+
+
+PWANI REGION
+
+Bagamoyo District Council:
+Dunda, Fukayosi, Kiwangwa, Kerege, Mapinga, Magomeni, Nia njema, Yombo.
+
+Chalinze District Council:
+Bwilingu, Chalinze, Kibindu, Kimange, Lugoba, Mandera, Mbwewe, Msata, Ubena Zomozi.
+
+Kibaha Town Council / Kibaha District Council:
+Maili Moja, Kibaha, Kongowe, Mlandizi, Pangani, Tumbi, Visiga, Bokomnemela, Gwata, Kikongo, Magindu, Ruvu.
+
+Kisarawe District Council:
+Chole, Kisarawe, Kazimzumbwi, Kiluvya, Mafizi, Maneromango, Marui, Msanga, Vikumbulu.
+
+Mkuranga District Council:
+Kisiju, Kitomondo, Lukanga, Magawa, Mkuranga, Mwandege, Nyamato, Shungubweni, Vikindu, Vianzi.
+
+Rufiji District Council / Kibiti District Council:
+Bungu, Ikwiriri, Kibiti, Mahenge, Mbwara, Mohoro, Muhoro, Ngapanya, Utete.
+
+Mafia District Council:
+Baleni, Jibondo, Kimbini, Kirongwe, Ndagoni, Utende.
+
+
+LINDI REGION
+
+Kilwa District Council:
+Kandawale, Kibata, Kikole, Kilwa Masoko, Kilwa Kivinje, Lihimalyao, Mandawa, Mingumbi, Pande, Songosongo.
+
+Lindi Municipal Council / Lindi District Council:
+Jamhuri, Makonde, Matopeni, Mchinga, Mikindani, Mlandala, Mnara, Ndoro, Ng'apa, Rahaleo, Rutamba, Sokoine.
+
+Nachingwea District Council:
+Lionja, Marambo, Mbodu, Nachingwea, Naipanga, Nambambo, Nditi, Ruponda, Stesheni.
+
+Liwale District Council:
+Kibutuka, Liwale Mjini, Makangaga, Mkutano, Mirui, Nangando, Ngangange.
+
+Ruangwa District Council:
+Chunyu, Likunja, Luchelegwa, Mandawa, Mnacho, Nachingwea, Narung'ombe, Ruangwa.
+
+
+MTWARA REGION
+
+Mtwara Municipal Council / Mtwara District Council:
+Chikongola, Chivula, Jangwani, Likombe, Majengo, Mikindani, Mitengo, Naliendele, Rahaleo, Shangani, Vigaeni.
+
+Nanyamba Town Council:
+Dinyecha, Mbwarapwarapa, Milangali, Mtimbwilimbwi, Nanyamba, Njengwa, Tangazo.
+
+Masasi District Council / Town Council:
+Chiungutwa, Jitegemee, Lukuledi, Lupaso, Masasi Mjini, Mbangala, Mwena, Mumbaru, Namajani, Nyasa.
+
+Newala District Council / Town Council:
+Chilangala, Kitangari, Luagala, Luchingu, Maputo, Mchinga, Mpwapwa, Newala Mjini.
+
+Tandahimba District Council:
+Kitama, Luagala, Mahuta, Mchichira, Mihambwe, Naputa, Tandahimba.
+
+Nanyumbu District Council:
+Chipuputa, Mangaka, Masuguru, Nanyumbu, Sazawima.
+
+
+RUVUMA REGION
+
+Songea Municipal Council / Songea District Council:
+Bombambili, Lilambo, Lizaboni, Majengo, Matarawe, Mbinga Mhalule, Mfaranyaki, Misufini, Mshangano, Ruvuma, Subira.
+
+Madaba District Council:
+Goba, Litisha, Mamboya, Matetereka, Wino.
+
+Tunduru District Council:
+Jakika, Kalulu, Ligoma, Masonya, Mathias, Mlingoti, Mmezamo, Nalasi, Namasakata, Tunduru Mjini.
+
+Mbinga District Council / Town Council:
+Kigonsera, Kilimani, Luwaita, Maguu, Mbamba Bay, Mbinga Mjini, Mkitu, Nyoni, Utiri.
+
+Nyasa District Council:
+Kingerikiti, Mbamba Bay, Liuli, Linga, Mbaha, Mtipwili, Tingi.
+
+Namtumbo District Council:
+Hanga, Ligera, Luchili, Lusewa, Mgombasi, Namtumbo, Rwinga, Mgonserahi.
+
+
+IRINGA REGION
+
+Iringa Municipal Council:
+Gangilonga, Igumbilo, Ilala, Isakalilo, Kihesa, Kitanzini, Kwakilosa, Mkwawa, Mlepwa, Mshindo, Ruaha.
+
+Iringa District Council:
+Ifunda, Izazi, Kalenga, Kihorogota, Lumuli, Mlenge, Nzihi, Pawaga, Wasa.
+
+Kilolo District Council:
+Boma la Ng'ombe, Ilula, Image, Kilolo, Lugalo, Mahenge, Nyalumbu, Ruaha Mbuyuni.
+
+Mafinga Town Council / Mufindi District Council:
+Bumilayinga, Igowole, Ifwagi, Kibengu, Kinyanambo, Malangali, Mafinga, Mdabulo, Sadani, Upendo.
+
+
+MBEYA REGION
+
+Mbeya City Council:
+Forest, Ghana, Isanga, Iyunga, Ilemi, Forest, Mbalizi, Mwanjelwa, Nzovwe, Ruanda, Sinde, Sisimba, Uyole.
+
+Mbeya District Council:
+Inyala, Isuto, Ijombe, Lwanjiro, Masoko, Santilya, Songwe, Utengule.
+
+Chunya District Council:
+Chunya Mjini, Chalangwa, Lupa, Makongolosi, Matundasi, Mtanila, Sangambi.
+
+Kyela District Council:
+Ipinda, Ikolo, Kajunjumele, Kyela Mjini, Lusanje, Matema, Ngonga, Ngana.
+
+Rungwe District Council:
+Kiwira, Lufingo, Masoko, Tukuyu Mjini, Suma, Busekelo, Mwakaleli.
+
+Mbarali District Council:
+Chimala, Igurusi, Mahongole, Mapogoro, Rujewa, Ubaruku, Utengule Usangu.
+
+
+SINGIDA REGION
+
+Singida Municipal Council / Singida District Council:
+Ipembe, Kindai, Mandewa, Mitunduruni, Mughanga, Mungumaji, Utemini, Ilongero, Kinyeto, Mgori, Munsakoma.
+
+Iramba District Council:
+Kiomboi, Kinampanda, Shelui, Ndago, Ulemo, Mbelekese.
+
+Manyoni District Council / Itigi District Council:
+Itigi, Kintinku, Manyoni, Muhintiri, Sanza, Solya, Chikuyu.
+
+Ikungi District Council:
+Dung'unyi, Ikungi, Ihanja, Issuna, Liumba, Mgungira, Puma.
+
+Mkalama District Council:
+Iguguno, Ibohi, Kinyangiri, Nduguti, Mpambaa.
+
+
+TABORA REGION
+
+Tabora Municipal Council:
+Cheyo, Chemchem, Gongoni, Ipuli, Isevya, Kabila, Kitete, Malolo, Ng'ambo, Tambukareli, Uyui.
+
+Uyui District Council:
+Ibiri, Iketi, Isikizya, Kigwa, Loolo, Mwawe, Tura.
+
+Nzega District Council / Town Council:
+Igusule, Larch, Nzega Mjini, Nkinga, Puge, Semembela, Utwigu.
+
+Igunga District Council:
+Choma, Igunga, Igurubi, Kinungu, Nkinga, Sungwizi, Simbo.
+
+Urambo District Council:
+Muungano, Songambele, Urambo, Usoke, Uyumbu.
+
+Sikonge District Council:
+Chitemo, Kitunda, Misoli, Ngoywa, Sikonge.
+
+Kaliua District Council:
+Igagala, Kaliua, Kazaroho, Mwongozo, Ulyankulu.
+
+
+RUKWA REGION
+
+Sumbawanga Municipal Council / Sumbawanga District Council:
+Chanji, Kizwite, Katandala, Majengo, Malangali, Old Sumbawanga, Senga, Ilemba, Kaoze, Laela, Mpui.
+
+Kalambo District Council:
+Kasanga, Kisumba, Matai, Mwimbi, Sopa, Sazira.
+
+Nkasi District Council:
+Chala, Kabwe, Kipili, Kirando, Namanyere, Nkoswe, Sintali.
+
+
+KIGOMA REGION
+
+Kigoma Ujiji Municipal Council / Kigoma District Council:
+Bangwe, Buhanda, Gungu, Kagera, Kasimbu, Kibirizi, Mwanga Kaskazini, Mwanga Kusini, Mwanga Kaskazini, Mwanga Kusini, Rugos, Ujiji.
+
+Kasulu District Council / Town Council:
+Heru Juu, Kigoma, Kigunga, Kasulu Mjini, Kimanya, Makere, Muhunga, Nyakitonto.
+
+Kibondo District Council / Kakonko District Council:
+Biturana, Kakonko, Kibondo, Kizaje, Mabamba, Murungu, Nyamidaho.
+
+Uvinza District Council:
+Buhingu, Ilagala, Kalya, Nguruka, Sunuka, Uvinza.
+
+
+SHINYANGA REGION
+
+Shinyanga Municipal Council / Shinyanga District Council:
+Chamaguha, Choma, Ibinzamata, Kambarage, Kaseke, Lubaga, Mwamalili, Nkolandoto, Didia, Iselamagazi, Tinde.
+
+Kahama Town Council / Ushetu / Msalala District Councils:
+Kahama Mjini, Malunga, Mhungula, Nyasubi, Zongomera, Chela, Msalala, Ushetu, Lunguya.
+
+Kishapu District Council:
+Mwadui, Kishapu, Lagana, Mondo, Mwamalasa, Songwa, Uchunga.
+
+
+KAGERA REGION
+
+Bukoba Municipal Council / Bukoba District Council:
+Bakoba, Bilele, Hamugembe, Kashai, Kibeta, Kitendaguro, Nshambya, Nyakato, Izimbya, Kaibanja, Kyamulaile, Maruku.
+
+Muleba District Council:
+Buganguzi, Kamachumu, Muleba, Nshamba, Muhutwe, Bumbire, Rutabo.
+
+Karagwe District Council / Kyerwa District Council:
+Kayanga, Bugene, Kituntu, Murongo, Nkwenda, Nsheshe.
+
+Biharamulo District Council / Chato District Council:
+Biharamulo, Nyarubungo, Lusahunga, Bwina, Chato, Muganza.
+
+Ngara District Council / Missenyi District Council:
+Bugufi, Kanazi, Kirushya, Ngara Mjini, Bunazi, Mutukula, Kasambya.
+
+
+MWANZA REGION
+
+Nyamagana Municipal Council:
+Buhongwa, Butimba, Igoma, Luchelele, Mirongo, Mkolani, Nyamagana, Nyegezi, Pasiansi.
+
+Ilemela Municipal Council:
+Buswelu, Bugogwa, Ibungilo, Ilemela, Kitangiri, Kirumba, Mecco, Nyamanoro, Nyakato, Sangabuye.
+
+Sengerema District Council / Buchosa District Council:
+Katunguru, Misungwi, Sengerema, Nyanzenda, Kalebezo, Buchosa, Katwe.
+
+Magu District Council:
+Kahangala, Kisesa, Kitumba, Magu Mjini, Nyanguge, Sukuma.
+
+Ukerewe District Council:
+Bwiro, Kagunguli, Nansio, Namagondo, Muriti.
+
+Misungwi District Council / Kwimba District Council:
+Misungwi, Usagara, Fella, Ngudu, Malya, Sumve.
+
+
+MARA REGION
+
+Musoma Municipal Council / Musoma District Council:
+Bweri, Kitaji, Kigera, Mukendo, Nyasho, Nyakato, Mwisenge, Bwasi, Mugango, Suguti.
+
+Tarime District Council / Town Council:
+Bomani, Nyamwaga, Sirari, Tarime Mjini, Gorong'a, Nyarero.
+
+Serengeti District Council:
+Ikoma, Manchira, Mugumu, Natta, Robanda, Rung'abure.
+
+Bunda District Council / Town Council:
+Bunda Stoo, Bunda Mjini, Guta, Kibara, Nansimo, Nyasura.
+
+Rorya District Council / Butiama District Council:
+Shirati, Kobero, Roche, Butiama, Kiabakari, Kukirango.
+
+
+MANYARA REGION
+
+Babati Town Council / District Council:
+Babati, Bonga, Singe, Bagara, Dareda, Magugu, Gallapo, Nkaiti.
+
+Hanang District Council:
+Katesh, Endasak, Bassotu, Dirma, Gendabi, Mashariki.
+
+Mbulu District Council / Town Council:
+Ayalagaya, Dongobesh, Kainam, Mbulu Mjini, Yaeda Ampa.
+
+Simanjiro District Council:
+Emboreet, Mirerani, Naberera, Orkesumet, Ruvu Remit.
+
+Kiteto District Council:
+Kibaya, Bwagamoyo, Dosidosi, Engusero, Matui.
+
+
+NJOMBE REGION
+
+Njombe Town Council / District Council:
+Ihanga, Kambarage, Luhembe, Matola, Njombe Mjini, Ramadhani, Utalingolo, Kichiwa.
+
+Makambako Town Council:
+Kitandililo, Lyamkena, Mlowa, Mwembetogwa, Ubena, Utengule.
+
+Ludewa District Council:
+Ludewa, Manda, Milo, Mawengi, Lupingu.
+
+Makete District Council:
+Iwawa, Kitulo, Lupila, Matamba, Mang'oto.
+
+Wanging'ombe District Council:
+Igwachanya, Kijombe, Mdandu, Saja, Wanging'ombe.
+
+
+KATAVI REGION
+
+Mpanda Municipal Council:
+Kawawa, Kashaulili, Magamba, Makanyagio, Misunkumilo, Nsemulwa, Shanwe.
+
+Nsimbo / Tanganyika / Mlele District Councils:
+Sitalike, Urwira, Inyonga, Karema, Majimoto, Usevya, Kibaoni.
+
+
+SIMIYU REGION
+
+Bariadi Town Council / District Council:
+Bariadi, Bunamu, Gapex, Malambo, Somanda, Dutwa, Gamboshi, Nkololo.
+
+Itilima / Meatu / Maswa / Busega District Councils:
+Lagangabilili, Mwanhuzi, Nyalikungu, Nyashimo, Shanwa, Lalago.
+
+
+GEITA REGION
+
+Geita Town Council / District Council:
+Kalangalala, Kanyala, Kasamwa, Mtakuja, Nyankumbu, Nkome, Nzera, Katoro.
+
+Bukombe / Chato / Mbogwe / Nyang'hwale District Councils:
+Ushirombo, Chato, Masumbwe, Kharumwa, Busolwa.
+
+
+SONGWE REGION
+
+Mbozi District Council:
+Vwawa, Mlowo, Hasamba, Iyula, Myovizi, Nsanga.
+
+Tunduma Town Council / Momba District Council:
+Tunduma, Chapwa, Chitete, Ndalambo, Chilulumo.
+
+Songwe / Ileje District Councils:
+Mbangala, Mampulo, Itumba, Isongole, Ndola.
+
+
+
+=================================================
+ZANZIBAR
+=================================================
+
+
+UNGUJA ISLAND
+
+MJINI MAGHARIBI REGION (Zanzibar Urban/West)
+
+Mjini District Council (Zanzibar City / Urban):
+Gulioni, Kikwajuni Bondeni, Kikwajuni Juu, Kilimani, Kiponda, Kisima Majongoo, Kisiwandui, Kwaalinatu, Makadara, Malindi, Mchangani, Miembeni, Mikunguni, Mkunazini, Muembeshauri, Mwembeladu, Rahaleo, Shangani, Vikokotoni.
+
+Magharibi 'A' District Council (West A):
+Dole, Fuoni, Kama, Kianga, Kihinani, Mtoni, Mwakaje, Mwanyanya, Mweera, Welezo.
+
+Magharibi 'B' District Council (West B):
+Chukwani, Dimani, Fuoni Kibondeni, Kombeni, Kwarara, Mazizini, Mbweni, Nyamanzi, Shakani, Tomondo.
+
+
+KASKAZINI UNGUJA REGION (North Unguja)
+
+Kaskazini 'A' District Council (North A):
+Banda Kuu, Bandamaji, Bwereu, Chaani Kubwa, Chaani Masingini, Chutama, Fukuchani, Gamba, Kandwi, Kidoti, Kigomani, Kilimani, Kinyasini, Kiungani, Kivunge, Matemwe, Mkokotoni, Mkwajuni, Mto wa Pwani, Nungwi, Tazari, Tumbatu Gomani, Tumbatu Jongowe.
+
+Kaskazini 'B' District Council (North B):
+Donge Karange, Donge Mbiji, Donge Mtambile, Donge Pwani, Fujoni, Kidanzini, Kinduni, Kitope, Kiwengwa, Mahonda, Makoba, Mangapwani, Misufini, Mkadini, Upenja, Zingwezingwe.
+
+
+KUSINI UNGUJA REGION (South/Central Unguja)
+
+Kati District Council (Central Unguja):
+Bambi, Binguni, Bungi, Charawe, Cheju, Chwaka, Dunga Bweni, Dunga Kiembeni, Ghana, Jendele, Jumbi, Koani, Mitakawani, Mpapa, Ubago, Uroa, Uzini.
+
+Kusini District Council (South Unguja):
+Bwejuu, Dongwe, Jambiani Kibigija, Jambiani Kikadini, Kibuteni, Kijini, Makunduchi, Michamvi, Muungoni, Muyuni A, Muyuni B, Kizimkazi Dimbani, Kizimkazi Mkunguni, Paje.
+
+
+PEMBA ISLAND
+
+KASKAZINI PEMBA REGION (North Pemba)
+
+Wete District Council:
+Chanjamjawiri, Fundo, Gando, Jadida, Kambini, Kojani, Limani, Maziwang'ombe, Mchangani, Mtambwe Kaskazini, Mtambwe Kusini, Piki, Selemu, Utaani, Wete Mjini.
+
+Micheweni District Council:
+Chanjaani, Chimba, Kinyasini, Konde, Kipangani, Majenzi, Makangale, Micheweni, Msuka Magharibi, Msuka Mashariki, Shumba Mjini, Tumbe.
+
+
+KUSINI PEMBA REGION (South Pemba)
+
+Chake Chake District Council:
+Chachani, Chanjaani, Chonga, Gombani, Kibokoni, Kichungwani, Kilindi, Kwale, Madungu, Matale, Mbuzini, Mfikiwa, Mgogoni, Msingini, Ndagoni, Ole, Pujini, Tibirinzi, Vitongoji, Wawi, Wesha, Ziwani.
+
+Mkoani District Council:
+Chokocho, Chambani, Jombwe, Kangani, Kengeja, Makoani, Mbuguanjifu, Mizingani, Mtambile, Muambe, Mwambe, Ng'ambwa, Shamiani, Stahabu, Ukutini.
