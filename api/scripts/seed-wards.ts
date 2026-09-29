@@ -1,8 +1,9 @@
 /**
  * Seeds geo_wards from api/seeds/geo_tz_wards.txt (operator-collected, 31 regions).
- * Handles: region headers, council headers, merged councils (warns, attributes
- * to first), duplicate wards (dedupes), missing districts (creates, warns),
- * urban/rural disambiguation. Idempotent - safe to re-run.
+ * v2: fixes the colon<-1 truthiness bug that skipped all ward lines; strips
+ * urban/rural markers from the match base (they become the U/R discriminator);
+ * handles merged councils (warns), duplicates (dedupes), missing districts.
+ * Idempotent - safe to re-run.
  */
 import "dotenv/config";
 import { readFileSync } from "node:fs";
@@ -26,9 +27,14 @@ const REGION_ALIASES: [string, string][] = [
   ["GEITA", "TZ-GEI"], ["SONGWE", "TZ-SON"],
 ];
 const PHRASE_FIXES: [RegExp, string][] = [
-  [/missenyi/i, "Misenyi"], [/handani/i, "Handeni"]
+  [/missenyi/i, "Misenyi"],
+  [/handani/i, "Handeni"],
+  [/^dar es salaam city council/i, "Ilala"],
+  [/^mjini district council/i, "Mjini"]
 ];
-const NOISE = new Set(["council", "councils", "municipal", "town", "city", "district", "dc", "mji"]);
+// Marker words are stripped from the match base - they live in markerOf().
+const NOISE = new Set(["council", "councils", "municipal", "town", "city", "district",
+  "dc", "mji", "mjini", "vijijini", "urban", "rural"]);
 
 function normBase(name: string): string {
   const words = name.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)
@@ -75,7 +81,6 @@ async function main() {
     regions.set(r.code, r.id);
   }
   const byRegion = new Map<number, Dist[]>();
-  // FIX: geo_districts has name_en/name_sw (migration 012) - not "name"
   for (const d of (await client.query("select id, region_id, name_en from geo_districts")).rows) {
     const list = byRegion.get(d.region_id) ?? [];
     list.push({ id: d.id, name: d.name_en, base: normBase(d.name_en), marker: markerOf(d.name_en) });
@@ -135,7 +140,6 @@ async function main() {
         if (ins.rowCount) {
           id = ins.rows[0].id;
         } else {
-          // FIX: name_en, not name
           const ex = await client.query(
             "select id, name_en from geo_districts where region_id=$1 and name_en=$2", [regionId, phrase]);
           id = ex.rows[0].id;
@@ -143,15 +147,18 @@ async function main() {
         dist = { id, name: phrase, base: normBase(phrase), marker: markerOf(phrase) };
         cands.push(dist);
         created.push(phrase);
+        stats.created++;
         console.log(`  + new district: ${phrase}`);
       } else {
         stats.matched++;
-        if (m.ambiguous) merged.push(`${phrase} (ambiguous urban/rural - attached to ${dist.name})`);
+        if (m.ambiguous) merged.push(`${phrase} (urban/rural pair - attached to ${dist.name})`);
       }
       current = { id: dist.id, name: dist.name, seen: new Set() };
     }
 
-    const wardText = /COUNCIL/i.test(headUpper) && colon >= 0 ? tail : (!colon ? line : "");
+    // THE FIX: colon === -1 means "no colon on this line" -> it is a ward list.
+    // (The old `!colon` was false for -1, silently skipping every ward line.)
+    const wardText = /COUNCIL/i.test(headUpper) && colon >= 0 ? tail : (colon < 0 ? line : "");
     if (current && wardText.trim()) {
       for (const w of wardText.split(",")) {
         const name = cleanWard(w);
