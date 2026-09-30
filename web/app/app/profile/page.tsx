@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-
-const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
+import { apiFetch } from "../api-client";
 
 export default function ProfilePage() {
   const [form, setForm] = useState<any>(null);
@@ -11,12 +10,13 @@ export default function ProfilePage() {
 
   useEffect(() => {
     (async () => {
-      const token = sessionStorage.getItem("waisha_access");
-      const res = await fetch(`${API}/api/v1/profile`, {
-        credentials: "include", headers: token ? { Authorization: `Bearer ${token}` } : {}
-      });
-      if (res.status === 401) { window.location.href = "/login"; return; }
-      if (res.ok) setForm(await res.json());
+      try {
+        const res = await apiFetch("/profile");
+        if (res.ok) setForm(await res.json());
+        else setError("Could not load profile.");
+      } catch (e: any) {
+        if (e.message !== "session ended") setError(e.message);
+      }
     })();
   }, []);
 
@@ -24,12 +24,10 @@ export default function ProfilePage() {
 
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); setError(null); setBusy(true);
-    const token = sessionStorage.getItem("waisha_access");
     try {
-      const res = await fetch(`${API}/api/v1/profile`, {
-        method: "PUT", headers: { "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        credentials: "include",
+      const res = await apiFetch("/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           companyName: form.companyName,
           brelaNumber: form.brela_number || undefined,
@@ -47,6 +45,8 @@ export default function ProfilePage() {
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setError(j?.error?.message ?? "Save failed"); return; }
       setSaved(true); setTimeout(() => setSaved(false), 2500);
+    } catch (e: any) {
+      if (e.message !== "session ended") setError(e.message);
     } finally { setBusy(false); }
   }
 

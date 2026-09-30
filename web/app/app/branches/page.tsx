@@ -1,7 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-
-const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
+import { apiFetch } from "../api-client";
 
 interface Region { id: number; name_en: string; name_sw: string; }
 interface District { id: number; name_en: string; name_sw: string; }
@@ -9,27 +8,7 @@ interface Ward { id: number; name: string; }
 interface Branch { id: string; kind: string; name: string; region_name: string | null;
   district_name: string | null; }
 
-function useApi() {
-  return useCallback(async (path: string, init?: RequestInit): Promise<Response> => {
-    const token = sessionStorage.getItem("waisha_access");
-    const doFetch = (t: string | null) => fetch(`${API}/api/v1${path}`, {
-      ...init, credentials: "include",
-      headers: { ...(init?.headers ?? {}), ...(t ? { Authorization: `Bearer ${t}` } : {}) }
-    });
-    let res = await doFetch(token);
-    if (res.status === 401) {
-      const r = await fetch(`${API}/api/v1/auth/refresh`, { method: "POST", credentials: "include" });
-      if (r.ok) { const j = await r.json(); sessionStorage.setItem("waisha_access", j.accessToken);
-        return doFetch(j.accessToken); }
-      window.location.href = "/login";
-      throw new Error("session ended");
-    }
-    return res;
-  }, []);
-}
-
 export default function BranchesPage() {
-  const api = useApi();
   const [branches, setBranches] = useState<Branch[]>([]);
   const [regions, setRegions] = useState<Region[]>([]);
   const [districts, setDistricts] = useState<District[]>([]);
@@ -40,34 +19,34 @@ export default function BranchesPage() {
   const [form, setForm] = useState({ kind: "branch", name: "", regionId: "", districtId: "", wardId: "", street: "", contactPerson: "", phone: "" });
 
   const loadBranches = useCallback(async () => {
-    const res = await api("/branches");
+    const res = await apiFetch("/branches");
     if (res.ok) setBranches(await res.json());
-  }, [api]);
+  }, []);
 
   useEffect(() => {
     (async () => {
-      const g = await api("/geo/regions");
+      const g = await apiFetch("/geo/regions");
       if (g.ok) setRegions(await g.json());
       loadBranches();
     })();
-  }, [api, loadBranches]);
+  }, [loadBranches]);
 
   async function pickRegion(v: string) {
     setForm(f => ({ ...f, regionId: v, districtId: "", wardId: "" }));
     setWards([]);
-    if (v) { const d = await api(`/geo/districts/${v}`); if (d.ok) setDistricts(await d.json()); }
+    if (v) { const d = await apiFetch(`/geo/districts/${v}`); if (d.ok) setDistricts(await d.json()); }
     else setDistricts([]);
   }
   async function pickDistrict(v: string) {
     setForm(f => ({ ...f, districtId: v, wardId: "" }));
-    if (v) { const w = await api(`/geo/wards/${v}`); if (w.ok) setWards(await w.json()); }
+    if (v) { const w = await apiFetch(`/geo/wards/${v}`); if (w.ok) setWards(await w.json()); }
     else setWards([]);
   }
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); setError(null); setNotice(null); setBusy(true);
     try {
-      const res = await api("/branches", { method: "POST",
+      const res = await apiFetch("/branches", { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kind: form.kind, name: form.name,
@@ -87,7 +66,7 @@ export default function BranchesPage() {
   }
 
   async function remove(id: string) {
-    await api(`/branches/${id}`, { method: "DELETE" });
+    await apiFetch(`/branches/${id}`, { method: "DELETE" });
     loadBranches();
   }
 

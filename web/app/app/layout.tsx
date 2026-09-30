@@ -10,6 +10,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <nav className="flex gap-16 text-xs font-semibold">
             <Link href="/app/profile" className="underline" style={{ color: "var(--gold)" }}>Profile</Link>
             <Link href="/app/branches" className="underline" style={{ color: "var(--gold)" }}>Branches</Link>
+            <Link href="/post-login" className="underline" style={{ color: "var(--gold)" }}>Account</Link>
           </nav>
         </div>
         <span className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "rgba(255,255,255,0.6)" }}>
