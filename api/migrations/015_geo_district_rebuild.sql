@@ -163,6 +163,7 @@ from (values
  ('TZ-SHW','Kahama Town','Kahama Mji'),
  ('TZ-SHW','Ushetu','Ushetu'),
  ('TZ-SHW','Msalala','Msalala'),
+ ('TZ-SHW','Kishapu','Kishapu'),
  ('TZ-SIM','Bariadi Town','Bariadi Mji'),
  ('TZ-SIM','Bariadi (Rural)','Bariadi Vijijini'),
  ('TZ-SIM','Itilima','Itilima'),
