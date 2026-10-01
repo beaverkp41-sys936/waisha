@@ -33,7 +33,9 @@ const vesselSchema = z.object({
   insuranceExpiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   inspectionExpiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   roadLicenceExpiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  branchId: z.string().uuid().nullable().optional()
+  branchId: z.string().uuid().nullable().optional(),
+  status: z.enum(["on_route","standby","booked","in_garage","out_of_service"]).optional(),
+  statusReason: z.string().max(200).optional()
 });
 
 export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
