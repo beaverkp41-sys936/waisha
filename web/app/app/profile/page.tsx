@@ -2,6 +2,14 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "../api-client";
 
+function errorText(json: any, fallback: string): string {
+  const d = json?.error?.details;
+  const extra = Array.isArray(d) && d.length
+    ? ` (${d.map((x: any) => `${x.field ? `${x.field}: ` : ""}${x.message ?? ""}`).join("; ")})`
+    : "";
+  return (json?.error?.message ?? fallback) + extra;
+}
+
 export default function ProfilePage() {
   const [form, setForm] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,17 +41,23 @@ export default function ProfilePage() {
           brelaNumber: form.brela_number || undefined,
           vatNumber: form.vat_number || undefined,
           transportLicenceNo: form.transport_licence_no || undefined,
-          transportLicenceExpiry: form.transport_licence_expiry || undefined,
+          transportLicenceExpiry: form.transport_licence_expiry
+            ? String(form.transport_licence_expiry).slice(0, 10)
+            : undefined,
           yearEstablished: form.year_established ? Number(form.year_established) : undefined,
           fleetSizeDeclared: form.fleet_size_declared ? Number(form.fleet_size_declared) : undefined,
           servicesOffered: form.services_offered || undefined,
           corridorsServed: form.corridors_served || undefined,
           description: form.description || undefined,
-          website: form.website || undefined
+          website: form.website
+            ? (form.website.startsWith("http://") || form.website.startsWith("https://")
+                ? form.website
+                : `https://${form.website}`)
+            : undefined
         })
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(j?.error?.message ?? "Save failed"); return; }
+      if (!res.ok) { setError(errorText(j, "Save failed")); return; }
       setSaved(true); setTimeout(() => setSaved(false), 2500);
     } catch (e: any) {
       if (e.message !== "session ended") setError(e.message);
@@ -116,7 +130,7 @@ export default function ProfilePage() {
         </label>
         <label className="block">
           <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Website</span>
-          <input value={F("website")} onChange={e => set("website", e.target.value)} placeholder="https://" className={inputCls} style={inputStyle} />
+          <input value={F("website")} onChange={e => set("website", e.target.value)} placeholder="wema.com" className={inputCls} style={inputStyle} />
         </label>
         <button type="submit" disabled={busy} className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">
           {busy ? "Saving" : saved ? "Saved" : "Save profile"}
