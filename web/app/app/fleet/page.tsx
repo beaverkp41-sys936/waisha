@@ -45,7 +45,7 @@ export default function FleetPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<Record<string, any>>({
     name: "", vesselType: "truck_head", plateNumber: "", make: "", model: "",
     yearManufactured: "", capacityTonnes: "", fuelType: "diesel",
     branchId: "", insuranceExpiry: "", inspectionExpiry: "", roadLicenceExpiry: "",
