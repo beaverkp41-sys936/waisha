@@ -1,8 +1,12 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { apiFetch } from "../api-client";
-import { MapContainer, TileLayer, Marker, Polyline, Popup } from "react-leaflet";
-import "leaflet/dist/leaflet.css";
+
+const RouteMap = dynamic(() => import("./route-map"), {
+  ssr: false,
+  loading: () => <p className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>Loading map…</p>
+});
 
 interface Region { id: number; name_en: string; }
 interface RegionCoords { id: number; code: string; name_en: string; lat: number; lng: number; }
@@ -111,7 +115,7 @@ export default function RoutesPage() {
     if (a && b) setForm(f => ({ ...f, distanceKm: String(haversineKm(a, b)) }));
   }, [form.originRegionId, form.destRegionId, regionCoords]);
 
-  // Leaflet's default marker icons break under bundlers — fix them once
+  // Leaflet's default marker icons break under bundlers — fix them once, client-side
   useEffect(() => {
     import("leaflet").then((L) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -315,18 +319,11 @@ export default function RoutesPage() {
 
           {formMarkers && (
             <div className="rounded-card overflow-hidden" style={{ height: 280, border: "1px solid var(--line)" }}>
-              <MapContainer center={formMarkers.center} zoom={6} style={{ height: "100%", width: "100%" }}>
-                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                  attribution="&copy; OpenStreetMap contributors" />
-                <Marker position={[formMarkers.a.lat, formMarkers.a.lng]}>
-                  <Popup>Origin: {formMarkers.a.name_en}</Popup>
-                </Marker>
-                <Marker position={[formMarkers.b.lat, formMarkers.b.lng]}>
-                  <Popup>Destination: {formMarkers.b.name_en}</Popup>
-                </Marker>
-                <Polyline positions={[[formMarkers.a.lat, formMarkers.a.lng], [formMarkers.b.lat, formMarkers.b.lng]]}
-                  pathOptions={{ color: "#2E6F95", weight: 2, dashArray: "6 8" }} />
-              </MapContainer>
+              <RouteMap
+                a={{ lat: formMarkers.a.lat, lng: formMarkers.a.lng, name: formMarkers.a.name_en }}
+                b={{ lat: formMarkers.b.lat, lng: formMarkers.b.lng, name: formMarkers.b.name_en }}
+                center={formMarkers.center}
+              />
             </div>
           )}
 
