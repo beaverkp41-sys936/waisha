@@ -48,10 +48,12 @@ function errorText(json: any, fallback: string): string {
 
 function haversineKm(a: RegionCoords, b: RegionCoords): number {
   const R = 6371;
-  const dLat = (b.lat - a.lat) * Math.PI / 180;
-  const dLng = (b.lng - a.lng) * Math.PI / 180;
+  const aLat = Number(a.lat), aLng = Number(a.lng);
+  const bLat = Number(b.lat), bLng = Number(b.lng);
+  const dLat = (bLat - aLat) * Math.PI / 180;
+  const dLng = (bLng - aLng) * Math.PI / 180;
   const s = Math.sin(dLat / 2) ** 2 +
-    Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) *
+    Math.cos(aLat * Math.PI / 180) * Math.cos(bLat * Math.PI / 180) *
     Math.sin(dLng / 2) ** 2;
   return Math.round(2 * R * Math.asin(Math.sqrt(s)) * 1.25);
 }
@@ -201,12 +203,16 @@ export default function RoutesPage() {
     openDetail(detail);
   }
 
-  // Map coordinates for the currently-selected origin/destination in the form
+  // Map coordinates — coerce pg numeric strings to numbers, guard against NaN
   const formMarkers = useMemo(() => {
     const a = regionCoords.find(r => r.id === Number(form.originRegionId));
     const b = regionCoords.find(r => r.id === Number(form.destRegionId));
     if (!a || !b) return null;
-    return { a, b, center: [(a.lat + b.lat) / 2, (a.lng + b.lng) / 2] as [number, number] };
+    const aLat = Number(a.lat), aLng = Number(a.lng);
+    const bLat = Number(b.lat), bLng = Number(b.lng);
+    if (Number.isNaN(aLat) || Number.isNaN(aLng) || Number.isNaN(bLat) || Number.isNaN(bLng)) return null;
+    return { a: { ...a, lat: aLat, lng: aLng }, b: { ...b, lat: bLat, lng: bLng },
+      center: [(aLat + bLat) / 2, (aLng + bLng) / 2] as [number, number] };
   }, [form.originRegionId, form.destRegionId, regionCoords]);
 
   const inputCls = "w-full rounded-input border px-12 py-8 text-sm";
