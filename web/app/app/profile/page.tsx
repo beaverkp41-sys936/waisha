@@ -37,7 +37,7 @@ export default function ProfilePage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          companyName: form.companyName,
+          companyName: form.company_name,
           brelaNumber: form.brela_number || undefined,
           vatNumber: form.vat_number || undefined,
           transportLicenceNo: form.transport_licence_no || undefined,
