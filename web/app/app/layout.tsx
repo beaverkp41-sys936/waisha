@@ -11,6 +11,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <Link href="/app/profile" className="underline" style={{ color: "var(--gold)" }}>Profile</Link>
             <Link href="/app/branches" className="underline" style={{ color: "var(--gold)" }}>Branches</Link>
             <Link href="/app/fleet" className="underline" style={{ color: "var(--gold)" }}>Fleet</Link>
+            <Link href="/app/routes" className="underline" style={{ color: "var(--gold)" }}>Routes</Link>
             <Link href="/post-login" className="underline" style={{ color: "var(--gold)" }}>Account</Link>
           </nav>
         </div>
