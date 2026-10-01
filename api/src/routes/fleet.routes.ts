@@ -17,7 +17,7 @@ const TRIAL_VESSEL_LIMIT = 3; // decision #1: trial tenants capped at 3 vessels
 
 const vesselSchema = z.object({
   name: z.string().trim().min(1).max(80),
-  vesselType: z.enum(["truck_head","trailer","tanker","flatbed","tipper","reefer","box_truck","van","pickup","lowbed","barge","boat","rail_wagon"]),
+  vesselType: z.enum(["truck_head","trailer","tanker","flatbed","tipper","reefer","box_truck","van","pickup","lowbed","barge","boat","rail_wagon","cargo_ship","ferry","tank_barge"]),
   plateNumber: z.string().trim().min(3).max(20),
   chassisVin: z.string().max(60).optional(),
   engineNumber: z.string().max(60).optional(),
@@ -34,6 +34,9 @@ const vesselSchema = z.object({
   inspectionExpiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   roadLicenceExpiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   branchId: z.string().uuid().nullable().optional(),
+  imoNumber: z.string().max(30).optional(),
+  homePort: z.string().max(80).optional(),
+  waterBody: z.enum(["lake_victoria","lake_tanganyika","lake_nyasa","indian_ocean","river"]).optional(),
   status: z.enum(["on_route","standby","booked","in_garage","out_of_service"]).optional(),
   statusReason: z.string().max(200).optional()
 });
@@ -97,8 +100,10 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
            chassis_vin, engine_number, make, model, year_manufactured,
            capacity_tonnes, capacity_m3, capacity_teu, fuel_type, odometer_km,
            insurance_policy, insurance_expiry, inspection_expiry, road_licence_expiry,
+           imo_number, home_port, water_body,
            status, created_by, updated_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'standby',$21,$21)`,
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+           $21,$22,$23,'standby',$24,$24)`,
         [id, req.user.tid, body.branchId ?? null, body.name, body.vesselType,
          body.plateNumber, body.chassisVin ?? null, body.engineNumber ?? null,
          body.make ?? null, body.model ?? null, body.yearManufactured ?? null,
@@ -106,12 +111,14 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
          body.fuelType, body.odometerKm,
          body.insurancePolicy ?? null, body.insuranceExpiry ?? null,
          body.inspectionExpiry ?? null, body.roadLicenceExpiry ?? null,
+         body.imoNumber ?? null, body.homePort ?? null, body.waterBody ?? null,
          req.user.sub]);
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         requestId: req.requestId, entity: "vessels", entityId: id,
         action: "vessel.created",
-        after: { name: body.name, type: body.vesselType, plate: body.plateNumber }
+        after: { name: body.name, type: body.vesselType, plate: body.plateNumber,
+                 waterBody: body.waterBody ?? null }
       });
     });
     return reply.status(201).send({ id });
@@ -138,7 +145,9 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
       capacityTeu: "capacity_teu", fuelType: "fuel_type", odometerKm: "odometer_km",
       insurancePolicy: "insurance_policy", insuranceExpiry: "insurance_expiry",
       inspectionExpiry: "inspection_expiry", roadLicenceExpiry: "road_licence_expiry",
-      branchId: "branch_id", status: "status", statusReason: "status_reason"
+      branchId: "branch_id", imoNumber: "imo_number", homePort: "home_port",
+      waterBody: "water_body",
+      status: "status", statusReason: "status_reason"
     };
     for (const [k, col] of Object.entries(map)) {
       if ((body as any)[k] !== undefined) {
