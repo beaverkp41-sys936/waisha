@@ -15,13 +15,17 @@ export default function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [isNew, setIsNew] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
         const res = await apiFetch("/profile");
-        if (res.ok) setForm(await res.json());
-        else setError("Could not load profile.");
+        if (res.ok) {
+          const data = await res.json();
+          setForm(data);
+          setIsNew(data.isNew === true);
+        } else setError("Could not load profile.");
       } catch (e: any) {
         if (e.message !== "session ended") setError(e.message);
       }
@@ -58,6 +62,7 @@ export default function ProfilePage() {
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setError(errorText(j, "Save failed")); return; }
+      setIsNew(false);
       setSaved(true); setTimeout(() => setSaved(false), 2500);
     } catch (e: any) {
       if (e.message !== "session ended") setError(e.message);
@@ -133,7 +138,7 @@ export default function ProfilePage() {
           <input value={F("website")} onChange={e => set("website", e.target.value)} placeholder="wema.com" className={inputCls} style={inputStyle} />
         </label>
         <button type="submit" disabled={busy} className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">
-          {busy ? "Saving" : saved ? "Saved" : "Save profile"}
+          {busy ? "Saving" : saved ? "Saved" : isNew ? "Save profile" : "Update profile"}
         </button>
       </form>
     </div>
