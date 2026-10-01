@@ -5,8 +5,9 @@ import { apiFetch } from "../api-client";
 interface Region { id: number; name_en: string; name_sw: string; }
 interface District { id: number; name_en: string; name_sw: string; }
 interface Ward { id: number; name: string; }
-interface Branch { id: string; kind: string; name: string; region_name: string | null;
-  district_name: string | null; }
+interface Branch { id: string; kind: string; name: string; region_id: number | null;
+  district_id: number | null; region_name: string | null; district_name: string | null;
+  ward: string | null; contact_person: string | null; has_phone: boolean; }
 
 export default function BranchesPage() {
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -16,6 +17,7 @@ export default function BranchesPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ kind: "branch", name: "", regionId: "", districtId: "", wardId: "", street: "", contactPerson: "", phone: "" });
 
   const loadBranches = useCallback(async () => {
@@ -43,30 +45,71 @@ export default function BranchesPage() {
     else setWards([]);
   }
 
+  function startEdit(b: Branch) {
+    setEditingId(b.id);
+    setForm({
+      kind: b.kind, name: b.name,
+      regionId: b.region_id ? String(b.region_id) : "",
+      districtId: b.district_id ? String(b.district_id) : "",
+      wardId: "", street: "",
+      contactPerson: b.contact_person ?? "", phone: ""
+    });
+    setError(null); setNotice(null);
+    // load cascades for pre-selection
+    (async () => {
+      if (b.region_id) {
+        const d = await apiFetch(`/geo/districts/${b.region_id}`);
+        if (d.ok) setDistricts(await d.json());
+      }
+      if (b.district_id) {
+        const w = await apiFetch(`/geo/wards/${b.district_id}`);
+        if (w.ok) setWards(await w.json());
+        // pre-select ward by NAME (stored name -> current ward id)
+        setForm(f => ({ ...f, districtId: String(b.district_id) }));
+        setWards(prev => {
+          const match = prev.find(x => x.name === b.ward);
+          if (match) setTimeout(() => setForm(f => ({ ...f, wardId: String(match.id) })), 0);
+          return prev;
+        });
+      }
+    })();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setForm({ kind: "branch", name: "", regionId: "", districtId: "", wardId: "", street: "", contactPerson: "", phone: "" });
+    setDistricts([]); setWards([]);
+  }
+
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); setError(null); setNotice(null); setBusy(true);
     try {
-      const res = await apiFetch("/branches", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: form.kind, name: form.name,
-          regionId: form.regionId ? Number(form.regionId) : null,
-          districtId: form.districtId ? Number(form.districtId) : null,
-          wardId: form.wardId ? Number(form.wardId) : null,
-          street: form.street || undefined,
-          contactPerson: form.contactPerson || undefined,
-          phone: form.phone || undefined
-        }) });
+      const payload = {
+        kind: form.kind, name: form.name,
+        regionId: form.regionId ? Number(form.regionId) : null,
+        districtId: form.districtId ? Number(form.districtId) : null,
+        wardId: form.wardId ? Number(form.wardId) : null,
+        street: form.street || undefined,
+        contactPerson: form.contactPerson || undefined,
+        phone: form.phone || undefined
+      };
+      const res = editingId
+        ? await apiFetch(`/branches/${editingId}`, { method: "PUT",
+            headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+        : await apiFetch("/branches", { method: "POST",
+            headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setError(j?.error?.message ?? "Failed"); return; }
-      setNotice(`Branch "${form.name}" saved.`);
-      setForm(f => ({ ...f, name: "", wardId: "", street: "", contactPerson: "", phone: "" }));
+      setNotice(editingId ? `Branch "${form.name}" updated.` : `Branch "${form.name}" saved.`);
+      cancelEdit();
       loadBranches();
     } finally { setBusy(false); }
   }
 
   async function remove(id: string) {
     await apiFetch(`/branches/${id}`, { method: "DELETE" });
+    if (editingId === id) cancelEdit();
     loadBranches();
   }
 
@@ -76,7 +119,9 @@ export default function BranchesPage() {
 
   return (
     <div className="mx-auto max-w-[760px] px-16 py-32">
-      <h1 className="mb-8 text-xl font-bold" style={{ color: "var(--ink)" }}>Branches</h1>
+      <h1 className="mb-8 text-xl font-bold" style={{ color: "var(--ink)" }}>
+        {editingId ? "Edit branch" : "Branches"}
+      </h1>
       <p className="mb-24 text-sm" style={{ color: "var(--ink-soft)" }}>
         HQ first, then sub-HQ and branches. Locations use the official Region → Council → Ward structure.
       </p>
@@ -85,7 +130,8 @@ export default function BranchesPage() {
       {notice && <div role="status" className="mb-16 px-12 py-8 text-sm"
         style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>{notice}</div>}
 
-      <form onSubmit={submit} className="mb-32 space-y-12 rounded-card border bg-surface p-24" style={{ borderColor: "var(--line)" }}>
+      <form onSubmit={submit} className="mb-32 space-y-12 rounded-card border bg-surface p-24"
+        style={{ borderColor: editingId ? "var(--gold)" : "var(--line)" }}>
         <div className="grid grid-cols-2 gap-12">
           <label className="block">
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Type</span>
@@ -140,9 +186,17 @@ export default function BranchesPage() {
             <input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+255712345678" className={inputCls} style={inputStyle} />
           </label>
         </div>
-        <button type="submit" disabled={busy} className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">
-          {busy ? "Saving" : "Add branch"}
-        </button>
+        <div className="flex gap-8">
+          <button type="submit" disabled={busy} className="waisha-btn flex-1 rounded-input py-12 text-sm font-semibold disabled:opacity-60">
+            {busy ? "Saving" : editingId ? "Update branch" : "Add branch"}
+          </button>
+          {editingId && (
+            <button type="button" onClick={cancelEdit}
+              className="rounded-input border px-16 py-12 text-sm font-semibold" style={{ borderColor: "var(--line)" }}>
+              Cancel
+            </button>
+          )}
+        </div>
       </form>
 
       <div className="overflow-hidden rounded-card border bg-surface" style={{ borderColor: "var(--line)" }}>
@@ -150,7 +204,8 @@ export default function BranchesPage() {
           <thead>
             <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
               <th className="p-12">Name</th><th className="p-12">Type</th>
-              <th className="p-12">Region</th><th className="p-12">Council</th><th></th>
+              <th className="p-12">Region</th><th className="p-12">Council</th>
+              <th className="p-12">Ward</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -160,13 +215,17 @@ export default function BranchesPage() {
                 <td className="p-12" style={{ color: "var(--ink-soft)" }}>{b.kind}</td>
                 <td className="p-12" style={{ color: "var(--ink-soft)" }}>{b.region_name ?? "—"}</td>
                 <td className="p-12" style={{ color: "var(--ink-soft)" }}>{b.district_name ?? "—"}</td>
-                <td className="p-12 text-right">
-                  <button type="button" className="underline" style={{ color: "var(--danger)" }} onClick={() => remove(b.id)}>Remove</button>
+                <td className="p-12" style={{ color: "var(--ink-soft)" }}>{b.ward ?? "—"}</td>
+                <td className="p-12 text-right whitespace-nowrap">
+                  <button type="button" className="underline mr-16" style={{ color: "var(--brand)" }}
+                    onClick={() => startEdit(b)}>Edit</button>
+                  <button type="button" className="underline" style={{ color: "var(--danger)" }}
+                    onClick={() => remove(b.id)}>Remove</button>
                 </td>
               </tr>
             ))}
             {branches.length === 0 && (
-              <tr><td colSpan={5} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>No branches yet.</td></tr>
+              <tr><td colSpan={6} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>No branches yet.</td></tr>
             )}
           </tbody>
         </table>
