@@ -36,8 +36,11 @@ const vesselSchema = z.object({
   branchId: z.string().uuid().nullable().optional(),
   imoNumber: z.string().max(30).optional(),
   homePort: z.string().max(80).optional(),
-  waterBody: z.enum(["lake_victoria","lake_tanganyika","lake_nyasa","indian_ocean","river"]).optional(),
-  status: z.enum(["on_route","standby","booked","in_garage","out_of_service"]).optional(),
+  waterBody: z.enum(["lake_victoria","lake_tanganyika","lake_nyasa","indian_ocean","river"]).optional()
+});
+
+const statusSchema = z.object({
+  status: z.enum(["on_route","standby","booked","in_garage","out_of_service"]),
   statusReason: z.string().max(200).optional()
 });
 
@@ -124,58 +127,76 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
     return reply.status(201).send({ id });
   });
 
-  // ---------- Update (incl. status with reason - spec 6.3) ----------
+  // ---------- Update (full-form save): STATIC SQL, every value bound ----------
   app.put("/vessels/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
-    const body = vesselSchema.partial().parse(req.body);
-    const statusReason = (req.body as any)?.statusReason as string | undefined;
+    const body = vesselSchema.parse(req.body);
 
     const prev = await withTenant(req.user.tid, (c) => c.query(
       "select status from vessels where id=$1 and tenant_id=$2 and deleted_at is null",
       [id, req.user.tid]));
     if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Vessel not found", 404);
 
-    const sets: string[] = [];
-    const vals: any[] = [id];
-    const map: Record<string, string> = {
-      name: "name", vesselType: "vessel_type", plateNumber: "plate_number",
-      chassisVin: "chassis_vin", engineNumber: "engine_number",
-      make: "make", model: "model", yearManufactured: "year_manufactured",
-      capacityTonnes: "capacity_tonnes", capacityM3: "capacity_m3",
-      capacityTeu: "capacity_teu", fuelType: "fuel_type", odometerKm: "odometer_km",
-      insurancePolicy: "insurance_policy", insuranceExpiry: "insurance_expiry",
-      inspectionExpiry: "inspection_expiry", roadLicenceExpiry: "road_licence_expiry",
-      branchId: "branch_id", imoNumber: "imo_number", homePort: "home_port",
-      waterBody: "water_body",
-      status: "status", statusReason: "status_reason"
-    };
-    for (const [k, col] of Object.entries(map)) {
-      if ((body as any)[k] !== undefined) {
-        vals.push((body as any)[k]);
-        sets.push(`${col} = $${vals.length}`);
-      }
+    await withTenant(req.user.tid, async (c) => {
+      await c.query(
+        `update vessels set
+           name = $2, vessel_type = $3, plate_number = $4, chassis_vin = $5,
+           engine_number = $6, make = $7, model = $8, year_manufactured = $9,
+           capacity_tonnes = $10, capacity_m3 = $11, capacity_teu = $12,
+           fuel_type = $13, odometer_km = $14, insurance_policy = $15,
+           insurance_expiry = $16, inspection_expiry = $17,
+           road_licence_expiry = $18, branch_id = $19, imo_number = $20,
+           home_port = $21, water_body = $22,
+           updated_by = $23, updated_at = now()
+         where id = $1 and tenant_id = $23 and deleted_at is null`,
+        [id,
+         body.name, body.vesselType, body.plateNumber,
+         body.chassisVin ?? null, body.engineNumber ?? null,
+         body.make ?? null, body.model ?? null, body.yearManufactured ?? null,
+         body.capacityTonnes ?? null, body.capacityM3 ?? null, body.capacityTeu ?? null,
+         body.fuelType, body.odometerKm,
+         body.insurancePolicy ?? null, body.insuranceExpiry ?? null,
+         body.inspectionExpiry ?? null, body.roadLicenceExpiry ?? null,
+         body.branchId ?? null, body.imoNumber ?? null, body.homePort ?? null,
+         body.waterBody ?? null,
+         req.user.sub]);
+      await writeAudit(c, {
+        tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
+        requestId: req.requestId, entity: "vessels", entityId: id,
+        action: "vessel.updated", after: { ...body }
+      });
+    });
+    return reply.send({ ok: true });
+  });
+
+  // ---------- Status change: DEDICATED endpoint (spec 6.3, static SQL) ----------
+  app.put("/vessels/:id/status", { preHandler: [requireAuth] }, async (req: any, reply) => {
+    const { id } = req.params as { id: string };
+    const body = statusSchema.parse(req.body);
+
+    const prev = await withTenant(req.user.tid, (c) => c.query(
+      "select status from vessels where id=$1 and tenant_id=$2 and deleted_at is null",
+      [id, req.user.tid]));
+    if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Vessel not found", 404);
+
+    if (body.status === prev.rows[0].status) {
+      return reply.send({ ok: true, unchanged: true });
     }
-    if (!sets.length) throw new ApiError("VALIDATION_FAILED", "Nothing to update", 400);
-    vals.push(req.user.sub);
-    sets.push(`updated_by = $${vals.length}`, `updated_at = now()`);
 
     await withTenant(req.user.tid, async (c) => {
-      await c.query(`update vessels set ${sets.join(", ")} where id = $1`, vals);
-      if (body.status && body.status !== prev.rows[0].status) {
-        await writeAudit(c, {
-          tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
-          requestId: req.requestId, entity: "vessels", entityId: id,
-          action: "vessel.status_changed",
-          before: { status: prev.rows[0].status },
-          after: { status: body.status, reason: statusReason ?? null }
-        });
-      } else {
-        await writeAudit(c, {
-          tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
-          requestId: req.requestId, entity: "vessels", entityId: id,
-          action: "vessel.updated", after: { ...body }
-        });
-      }
+      await c.query(
+        `update vessels set
+           status = $2, status_reason = $3, updated_by = $4, updated_at = now()
+         where id = $1 and tenant_id = $4 and deleted_at is null`,
+        [id, body.status, body.statusReason ?? null, req.user.sub]);
+      await writeAudit(c, {
+        tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+        requestId: req.requestId, entity: "vessels", entityId: id,
+        action: "vessel.status_changed",
+        before: { status: prev.rows[0].status },
+        after: { status: body.status, reason: body.statusReason ?? null }
+      });
     });
     return reply.send({ ok: true });
   });
