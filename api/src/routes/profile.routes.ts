@@ -31,6 +31,13 @@ const branchSchema = z.object({
   operatingHours: z.string().max(120).optional()
 });
 
+/** Resolve a wardId to its official name for persistence. */
+async function wardNameOf(wardId: number | null | undefined): Promise<string | null> {
+  if (!wardId) return null;
+  const w = await pool.query("select name from geo_wards where id = $1", [wardId]);
+  return w.rows[0]?.name ?? null;
+}
+
 export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- Geography cascades ----------
@@ -120,7 +127,7 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
   app.get("/branches", { preHandler: [requireAuth] }, async (req: any) => {
     const { rows } = await withTenant(req.user.tid, (c) => c.query(
       `select b.id, b.kind, b.name, b.region_id, b.district_id,
-              b.district_freetext, b.street, b.postal_address,
+              b.district_freetext, b.ward, b.street, b.postal_address,
               b.gps_lat, b.gps_lng, b.contact_person, b.email, b.operating_hours,
               r.name_en as region_name, d.name_en as district_name,
               (b.phone_search is not null) as has_phone
@@ -141,17 +148,19 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
         [req.user.tid]));
       if (hq.rowCount) throw new ApiError("CONFLICT", "An HQ branch already exists. Edit it instead.", 409);
     }
+    const wardName = await wardNameOf(body.wardId);
     const id = uuidv7();
     await withTenant(req.user.tid, async (c) => {
       await c.query(
         `insert into branches (id, tenant_id, kind, name, region_id, district_id,
-           district_freetext, street, postal_address, gps_lat, gps_lng,
+           district_freetext, ward, street, postal_address, gps_lat, gps_lng,
            contact_person, phone_encrypted, phone_search, email, operating_hours,
            created_by, updated_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)`,
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)`,
         [id, req.user.tid, body.kind, body.name,
          body.regionId ?? null, body.districtId ?? null,
          body.districtId ? null : (body.wardFreetext ?? null),
+         wardName ?? (body.districtId ? null : (body.wardFreetext ?? null)),
          body.street ?? null, body.postalAddress ?? null,
          body.gpsLat ?? null, body.gpsLng ?? null,
          body.contactPerson ?? null,
@@ -161,25 +170,28 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         requestId: req.requestId, entity: "branches", entityId: id,
-        action: "branch.created", after: { name: body.name, kind: body.kind }
+        action: "branch.created",
+        after: { name: body.name, kind: body.kind, ward: wardName }
       });
     });
-    return reply.status(201).send({ id });
+    return reply.status(201).send({ id, ward: wardName });
   });
 
   app.put("/branches/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
     const body = branchSchema.parse(req.body);
     const { id } = req.params as { id: string };
+    const wardName = await wardNameOf(body.wardId);
     const r = await withTenant(req.user.tid, async (c) => {
       const res = await c.query(
         `update branches set kind=$2, name=$3, region_id=$4, district_id=$5,
-           district_freetext=$6, street=$7, postal_address=$8, gps_lat=$9, gps_lng=$10,
-           contact_person=$11, phone_encrypted=$12, phone_search=$13, email=$14,
-           operating_hours=$15, updated_by=$16, updated_at=now()
-         where id=$1 and tenant_id=$16 and deleted_at is null
+           district_freetext=$6, ward=$7, street=$8, postal_address=$9, gps_lat=$10,
+           gps_lng=$11, contact_person=$12, phone_encrypted=$13, phone_search=$14,
+           email=$15, operating_hours=$16, updated_by=$17, updated_at=now()
+         where id=$1 and tenant_id=$17 and deleted_at is null
          returning id`, [id, body.kind, body.name,
           body.regionId ?? null, body.districtId ?? null,
           body.districtId ? null : (body.wardFreetext ?? null),
+          wardName ?? (body.districtId ? null : (body.wardFreetext ?? null)),
           body.street ?? null, body.postalAddress ?? null,
           body.gpsLat ?? null, body.gpsLng ?? null,
           body.contactPerson ?? null,
@@ -190,13 +202,13 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
           requestId: req.requestId, entity: "branches", entityId: id,
-          action: "branch.updated", after: { name: body.name, kind: body.kind }
+          action: "branch.updated", after: { name: body.name, kind: body.kind, ward: wardName }
         });
       }
       return res;
     });
     if (!r.rowCount) throw new ApiError("NOT_FOUND", "Branch not found", 404);
-    return reply.send({ ok: true });
+    return reply.send({ ok: true, ward: wardName });
   });
 
   app.delete("/branches/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
