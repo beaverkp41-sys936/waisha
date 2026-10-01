@@ -1,4 +1,4 @@
--- 020: Region centroid coordinates - enables haversine distance + map markers
+﻿-- 020: Region centroid coordinates - enables haversine distance + map markers
 begin;
 alter table geo_regions add column if not exists lat numeric(9,6);
 alter table geo_regions add column if not exists lng numeric(9,6);

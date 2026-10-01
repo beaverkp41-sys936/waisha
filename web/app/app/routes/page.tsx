@@ -1,8 +1,11 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api-client";
+import { MapContainer, TileLayer, Marker, Polyline, Popup } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
 
 interface Region { id: number; name_en: string; }
+interface RegionCoords { id: number; code: string; name_en: string; lat: number; lng: number; }
 interface District { id: number; name_en: string; }
 interface BorderPost { id: number; name: string; country_a: string; country_b: string; }
 interface Checkpoint { id: string; seq: number; kind: string; name: string; }
@@ -12,6 +15,8 @@ interface RouteRow {
   distance_km: number | null; rate_per_km: string | null; rate_per_tonne: string | null;
   rate_per_trip: string | null; border_post_name: string | null;
   checkpoint_count: number; is_active: boolean;
+  origin_lat: number | null; origin_lng: number | null;
+  dest_lat: number | null; dest_lng: number | null;
 }
 interface RouteForm {
   name: string; corridor: string;
@@ -37,9 +42,20 @@ function errorText(json: any, fallback: string): string {
   return (json?.error?.message ?? fallback) + extra;
 }
 
+function haversineKm(a: RegionCoords, b: RegionCoords): number {
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLng = (b.lng - a.lng) * Math.PI / 180;
+  const s = Math.sin(dLat / 2) ** 2 +
+    Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.sqrt(s)) * 1.25);
+}
+
 export default function RoutesPage() {
   const [routes, setRoutes] = useState<RouteRow[]>([]);
   const [regions, setRegions] = useState<Region[]>([]);
+  const [regionCoords, setRegionCoords] = useState<RegionCoords[]>([]);
   const [borderPosts, setBorderPosts] = useState<BorderPost[]>([]);
   const [originDistricts, setOriginDistricts] = useState<District[]>([]);
   const [destDistricts, setDestDistricts] = useState<District[]>([]);
@@ -69,6 +85,8 @@ export default function RoutesPage() {
       if (g.ok) setRegions(await g.json());
       const b = await apiFetch("/geo/border-posts");
       if (b.ok) setBorderPosts(await b.json());
+      const rc = await apiFetch("/geo/region-coords");
+      if (rc.ok) setRegionCoords(await rc.json());
       load();
     })();
   }, [load]);
@@ -84,6 +102,27 @@ export default function RoutesPage() {
       if (side === "origin") setOriginDistricts([]); else setDestDistricts([]);
     }
   }
+
+  // Auto-distance: fills when BOTH regions are picked; stays editable.
+  useEffect(() => {
+    if (!form.originRegionId || !form.destRegionId) return;
+    const a = regionCoords.find(r => r.id === Number(form.originRegionId));
+    const b = regionCoords.find(r => r.id === Number(form.destRegionId));
+    if (a && b) setForm(f => ({ ...f, distanceKm: String(haversineKm(a, b)) }));
+  }, [form.originRegionId, form.destRegionId, regionCoords]);
+
+  // Leaflet's default marker icons break under bundlers — fix them once
+  useEffect(() => {
+    import("leaflet").then((L) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (L.Icon.Default.prototype as any)._getIconUrl;
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+        iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+        shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png"
+      });
+    });
+  }, []);
 
   function resetForm() {
     setForm({ name: "", corridor: "", originRegionId: "", originDistrictId: "", originText: "",
@@ -157,6 +196,14 @@ export default function RoutesPage() {
     await apiFetch(`/routes/${detail.id}/checkpoints/${cpId}`, { method: "DELETE" });
     openDetail(detail);
   }
+
+  // Map coordinates for the currently-selected origin/destination in the form
+  const formMarkers = useMemo(() => {
+    const a = regionCoords.find(r => r.id === Number(form.originRegionId));
+    const b = regionCoords.find(r => r.id === Number(form.destRegionId));
+    if (!a || !b) return null;
+    return { a, b, center: [(a.lat + b.lat) / 2, (a.lng + b.lng) / 2] as [number, number] };
+  }, [form.originRegionId, form.destRegionId, regionCoords]);
 
   const inputCls = "w-full rounded-input border px-12 py-8 text-sm";
   const inputStyle = { borderColor: "var(--line)", background: "var(--milk)" };
@@ -248,7 +295,9 @@ export default function RoutesPage() {
               </select>
             </label>
             <label className="block">
-              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Distance (km)</span>
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>
+                Distance (km) {form.distanceKm && <span style={{ color: "var(--brand)" }}>— auto-estimated, editable</span>}
+              </span>
               <input type="number" min={0} value={form.distanceKm} onChange={e => setForm(f => ({ ...f, distanceKm: e.target.value }))}
                 className={inputCls} style={inputStyle} />
             </label>
@@ -263,6 +312,24 @@ export default function RoutesPage() {
                 placeholder="e.g. Tarmac trunk" className={inputCls} style={inputStyle} />
             </label>
           </div>
+
+          {formMarkers && (
+            <div className="rounded-card overflow-hidden" style={{ height: 280, border: "1px solid var(--line)" }}>
+              <MapContainer center={formMarkers.center} zoom={6} style={{ height: "100%", width: "100%" }}>
+                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                  attribution="&copy; OpenStreetMap contributors" />
+                <Marker position={[formMarkers.a.lat, formMarkers.a.lng]}>
+                  <Popup>Origin: {formMarkers.a.name_en}</Popup>
+                </Marker>
+                <Marker position={[formMarkers.b.lat, formMarkers.b.lng]}>
+                  <Popup>Destination: {formMarkers.b.name_en}</Popup>
+                </Marker>
+                <Polyline positions={[[formMarkers.a.lat, formMarkers.a.lng], [formMarkers.b.lat, formMarkers.b.lng]]}
+                  pathOptions={{ color: "#2E6F95", weight: 2, dashArray: "6 8" }} />
+              </MapContainer>
+            </div>
+          )}
+
           <div className="grid grid-cols-3 gap-12">
             <label className="block">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Rate per km (TZS)</span>

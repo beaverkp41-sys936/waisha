@@ -43,6 +43,13 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
     return rows;
   });
 
+  // ---------- Region coordinates (for distance calc + map) ----------
+  app.get("/geo/region-coords", { preHandler: [requireAuth] }, async () => {
+    const { rows } = await pool.query(
+      "select id, code, name_en, lat, lng from geo_regions where lat is not null and lng is not null");
+    return rows;
+  });
+
   // ---------- List routes ----------
   app.get("/routes", { preHandler: [requireAuth] }, async (req: any) => {
     const { rows } = await withTenant(req.user.tid, (c) => c.query(
@@ -52,10 +59,14 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
               r.rate_per_km, r.rate_per_tonne, r.rate_per_trip,
               r.is_active, r.created_at,
               bp.name as border_post_name,
+              ro.lat as origin_lat, ro.lng as origin_lng,
+              rd.lat as dest_lat, rd.lng as dest_lng,
               (select count(*)::int from route_checkpoints rc
                 where rc.route_id = r.id) as checkpoint_count
        from routes r
        left join geo_border_posts bp on bp.id = r.border_post_id
+       left join geo_regions ro on ro.id = r.origin_region_id
+       left join geo_regions rd on rd.id = r.dest_region_id
        where r.tenant_id = $1 and r.deleted_at is null
        order by r.created_at desc`, [req.user.tid]));
     return rows;
@@ -202,7 +213,6 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
         `delete from route_checkpoints where id=$1 and route_id=$2 and tenant_id=$3`,
         [cpId, id, req.user.tid]);
       if (del.rowCount) {
-        // renumber remaining checkpoints in order
         const rest = await c.query(
           "select id from route_checkpoints where route_id=$1 order by seq", [id]);
         for (let i = 0; i < rest.rows.length; i++) {
