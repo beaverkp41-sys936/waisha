@@ -36,6 +36,12 @@ const routeSchema = z.object({
   fuelSurchargePct: z.number().min(0).max(100).optional()
 });
 
+/** Road-routing cache: key = coords rounded to ~1km. Server-side OSRM proxy
+ *  (ledger 20-22): browser never touches third-party routing directly. */
+const roadCache = new Map<string, {
+  distanceKm: number; durationHours: number; geometry: [number, number][];
+}>();
+
 export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- Border posts picker (EAC reference data) ----------
@@ -50,6 +56,45 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
     const { rows } = await pool.query(
       "select id, code, name_en, lat, lng from geo_regions where lat is not null and lng is not null");
     return rows;
+  });
+
+  // ---------- Road routing proxy (OSRM + cache; falls back client-side) ----------
+  app.get("/geo/road-route", { preHandler: [requireAuth] }, async (req: any, reply) => {
+    const q = z.object({
+      oLat: z.number().min(-90).max(90),
+      oLng: z.number().min(-180).max(180),
+      dLat: z.number().min(-90).max(90),
+      dLng: z.number().min(-180).max(180)
+    }).parse(req.query);
+
+    const key = `${q.oLat.toFixed(2)},${q.oLng.toFixed(2)}|${q.dLat.toFixed(2)},${q.dLng.toFixed(2)}`;
+    const hit = roadCache.get(key);
+    if (hit) return reply.send({ ...hit, cached: true });
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(
+        `https://router.project-osrm.org/route/v1/driving/${q.oLng},${q.oLat};${q.dLng},${q.dLat}?overview=full&geometries=geojson`,
+        { signal: controller.signal });
+      if (!res.ok) throw new Error(`osrm ${res.status}`);
+      const j = await res.json();
+      const coords: [number, number][] = (j.route?.[0]?.geometry?.coordinates ?? [])
+        .map((c: [number, number]) => [c[1], c[0]] as [number, number]);
+      const distanceKm = Math.round((j.route?.[0]?.distance ?? 0) / 1000);
+      const durationHours = Math.round((j.route?.[0]?.duration ?? 0) / 3600);
+      if (coords.length < 2 || distanceKm <= 0) throw new Error("osrm empty");
+      const payload = { distanceKm, durationHours, geometry: coords };
+      if (roadCache.size > 500) roadCache.clear();
+      roadCache.set(key, payload);
+      return reply.send(payload);
+    } catch {
+      return reply.status(502).send({
+        error: { code: "ROUTING_UNAVAILABLE", message: "Road routing is temporarily unavailable." }
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
   // ---------- List routes ----------

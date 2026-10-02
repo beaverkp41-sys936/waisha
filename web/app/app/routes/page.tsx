@@ -144,7 +144,8 @@ export default function RoutesPage() {
     setForm(f => ({ ...f, distanceKm: String(haversineKm(aLat, aLng, bLat, bLng)) }));
   }, [form.originRegionId, form.destRegionId, regionCoords]);
 
-  // OSRM: the REAL road path + exact km. 8s timeout, visible status, retryable.
+  // OSRM via our API proxy: real road path + exact km, cached server-side.
+  // Falls back to the haversine estimate on failure (visible with Retry).
   useEffect(() => {
     if (!form.originRegionId || !form.destRegionId) { setRouteGeometry(null); setOsrmStatus("idle"); return; }
     const a = regionCoords.find(r => r.id === Number(form.originRegionId));
@@ -156,35 +157,24 @@ export default function RoutesPage() {
 
     let cancelled = false;
     setOsrmStatus("loading");
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-
     (async () => {
       try {
-        const res = await fetch(
-          `https://router.project-osrm.org/route/v1/driving/${aLng},${aLat};${bLng},${bLat}?overview=full&geometries=geojson`,
-          { signal: controller.signal });
-        if (!res.ok) throw new Error(`osrm ${res.status}`);
-        const j = await res.json();
+        const res = await apiFetch(`/geo/road-route?oLat=${aLat}&oLng=${aLng}&dLat=${bLat}&dLng=${bLng}`);
         if (cancelled) return;
-        const coords: [number, number][] = (j.route?.[0]?.geometry?.coordinates ?? [])
-          .map((c: [number, number]) => [c[1], c[0]] as [number, number]);
-        const km = Math.round((j.route?.[0]?.distance ?? 0) / 1000);
-        const hrs = Math.round((j.route?.[0]?.duration ?? 0) / 3600);
-        setRouteGeometry(coords.length > 1 ? coords : null);
-        setOsrmStatus(coords.length > 1 ? "road" : "failed");
-        if (km > 0) setForm(f => ({
+        if (!res.ok) { setOsrmStatus("failed"); return; }
+        const j = await res.json();
+        setRouteGeometry(j.geometry?.length > 1 ? j.geometry : null);
+        setOsrmStatus("road");
+        if (j.distanceKm > 0) setForm(f => ({
           ...f,
-          distanceKm: String(km),
-          expectedDurationHours: f.expectedDurationHours || String(hrs)
+          distanceKm: String(j.distanceKm),
+          expectedDurationHours: f.expectedDurationHours || String(j.durationHours)
         }));
-      } catch {
-        if (!cancelled) setOsrmStatus("failed");   // visible failure; haversine stays
-      } finally {
-        clearTimeout(timer);
+      } catch (e: any) {
+        if (!cancelled && e.message !== "session ended") setOsrmStatus("failed");
       }
     })();
-    return () => { cancelled = true; clearTimeout(timer); };
+    return () => { cancelled = true; };
   }, [form.originRegionId, form.destRegionId, regionCoords, osrmAttempt]);
 
   // Leaflet's default marker icons break under bundlers — fix them once, client-side
