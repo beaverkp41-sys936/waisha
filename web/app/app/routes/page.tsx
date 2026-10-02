@@ -11,6 +11,7 @@ const RouteMap = dynamic(() => import("./route-map"), {
 interface Region { id: number; name_en: string; }
 interface RegionCoords { id: number; code: string; name_en: string; lat: number; lng: number; }
 interface District { id: number; name_en: string; }
+interface Ward { id: number; name: string; }
 interface BorderPost { id: number; name: string; country_a: string; country_b: string; }
 interface Checkpoint { id: string; seq: number; kind: string; name: string; }
 interface RouteRow {
@@ -24,8 +25,8 @@ interface RouteRow {
 }
 interface RouteForm {
   name: string; corridor: string;
-  originRegionId: string; originDistrictId: string; originText: string;
-  destRegionId: string; destDistrictId: string; destText: string;
+  originRegionId: string; originDistrictId: string; originWardId: string; originText: string;
+  destRegionId: string; destDistrictId: string; destWardId: string; destText: string;
   borderPostId: string; distanceKm: string; expectedDurationHours: string;
   roadClass: string; riskNotes: string; seasonalNotes: string;
   ratePerKm: string; ratePerTonne: string; ratePerTrip: string;
@@ -46,10 +47,8 @@ function errorText(json: any, fallback: string): string {
   return (json?.error?.message ?? fallback) + extra;
 }
 
-function haversineKm(a: RegionCoords, b: RegionCoords): number {
+function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number): number {
   const R = 6371;
-  const aLat = Number(a.lat), aLng = Number(a.lng);
-  const bLat = Number(b.lat), bLng = Number(b.lng);
   const dLat = (bLat - aLat) * Math.PI / 180;
   const dLng = (bLng - aLng) * Math.PI / 180;
   const s = Math.sin(dLat / 2) ** 2 +
@@ -58,6 +57,15 @@ function haversineKm(a: RegionCoords, b: RegionCoords): number {
   return Math.round(2 * R * Math.asin(Math.sqrt(s)) * 1.25);
 }
 
+const EMPTY_FORM: RouteForm = {
+  name: "", corridor: "",
+  originRegionId: "", originDistrictId: "", originWardId: "", originText: "",
+  destRegionId: "", destDistrictId: "", destWardId: "", destText: "",
+  borderPostId: "", distanceKm: "", expectedDurationHours: "",
+  roadClass: "", riskNotes: "", seasonalNotes: "",
+  ratePerKm: "", ratePerTonne: "", ratePerTrip: ""
+};
+
 export default function RoutesPage() {
   const [routes, setRoutes] = useState<RouteRow[]>([]);
   const [regions, setRegions] = useState<Region[]>([]);
@@ -65,6 +73,9 @@ export default function RoutesPage() {
   const [borderPosts, setBorderPosts] = useState<BorderPost[]>([]);
   const [originDistricts, setOriginDistricts] = useState<District[]>([]);
   const [destDistricts, setDestDistricts] = useState<District[]>([]);
+  const [originWards, setOriginWards] = useState<Ward[]>([]);
+  const [destWards, setDestWards] = useState<Ward[]>([]);
+  const [routeGeometry, setRouteGeometry] = useState<[number, number][] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -72,13 +83,7 @@ export default function RoutesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<RouteDetail | null>(null);
   const [cp, setCp] = useState({ kind: "weighbridge" as Kind, name: "" });
-  const [form, setForm] = useState<RouteForm>({
-    name: "", corridor: "", originRegionId: "", originDistrictId: "", originText: "",
-    destRegionId: "", destDistrictId: "", destText: "",
-    borderPostId: "", distanceKm: "", expectedDurationHours: "",
-    roadClass: "", riskNotes: "", seasonalNotes: "",
-    ratePerKm: "", ratePerTonne: "", ratePerTrip: ""
-  });
+  const [form, setForm] = useState<RouteForm>(EMPTY_FORM);
 
   const load = useCallback(async () => {
     const res = await apiFetch("/routes");
@@ -98,23 +103,76 @@ export default function RoutesPage() {
   }, [load]);
 
   async function pickRegion(side: "origin" | "dest", v: string) {
-    setForm(f => ({ ...f, [side === "origin" ? "originRegionId" : "destRegionId"]: v,
-      [side === "origin" ? "originDistrictId" : "destDistrictId"]: "" }));
+    if (side === "origin") {
+      setForm(f => ({ ...f, originRegionId: v, originDistrictId: "", originWardId: "" }));
+      setOriginDistricts([]); setOriginWards([]);
+    } else {
+      setForm(f => ({ ...f, destRegionId: v, destDistrictId: "", destWardId: "" }));
+      setDestDistricts([]); setDestWards([]);
+    }
+    setRouteGeometry(null);
     if (v) {
       const d = await apiFetch(`/geo/districts/${v}`);
       if (side === "origin") { if (d.ok) setOriginDistricts(await d.json()); }
       else { if (d.ok) setDestDistricts(await d.json()); }
-    } else {
-      if (side === "origin") setOriginDistricts([]); else setDestDistricts([]);
     }
   }
 
-  // Auto-distance: fills when BOTH regions are picked; stays editable.
+  async function pickOriginDistrict(v: string) {
+    setForm(f => ({ ...f, originDistrictId: v, originWardId: "" }));
+    setOriginWards([]);
+    if (v) { const w = await apiFetch(`/geo/wards/${v}`); if (w.ok) setOriginWards(await w.json()); }
+  }
+  async function pickDestDistrict(v: string) {
+    setForm(f => ({ ...f, destDistrictId: v, destWardId: "" }));
+    setDestWards([]);
+    if (v) { const w = await apiFetch(`/geo/wards/${v}`); if (w.ok) setDestWards(await w.json()); }
+  }
+
+  // Haversine: instant estimate when both regions are picked...
   useEffect(() => {
-    if (!form.originRegionId || !form.destRegionId) return;
+    if (!form.originRegionId || !form.destRegionId) { setRouteGeometry(null); return; }
     const a = regionCoords.find(r => r.id === Number(form.originRegionId));
     const b = regionCoords.find(r => r.id === Number(form.destRegionId));
-    if (a && b) setForm(f => ({ ...f, distanceKm: String(haversineKm(a, b)) }));
+    if (!a || !b) { setRouteGeometry(null); return; }
+    const aLat = Number(a.lat), aLng = Number(a.lng);
+    const bLat = Number(b.lat), bLng = Number(b.lng);
+    if ([aLat, aLng, bLat, bLng].some(Number.isNaN)) { setRouteGeometry(null); return; }
+    setForm(f => ({ ...f, distanceKm: String(haversineKm(aLat, aLng, bLat, bLng)) }));
+  }, [form.originRegionId, form.destRegionId, regionCoords]);
+
+  // OSRM: the REAL road path + exact km. Falls back to the haversine estimate on failure.
+  useEffect(() => {
+    if (!form.originRegionId || !form.destRegionId) { setRouteGeometry(null); return; }
+    const a = regionCoords.find(r => r.id === Number(form.originRegionId));
+    const b = regionCoords.find(r => r.id === Number(form.destRegionId));
+    if (!a || !b) { setRouteGeometry(null); return; }
+    const aLat = Number(a.lat), aLng = Number(a.lng);
+    const bLat = Number(b.lat), bLng = Number(b.lng);
+    if ([aLat, aLng, bLat, bLng].some(Number.isNaN)) { setRouteGeometry(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `https://router.project-osrm.org/route/v1/driving/${aLng},${aLat};${bLng},${bLat}?overview=full&geometries=geojson`);
+        if (!res.ok) throw new Error("osrm");
+        const j = await res.json();
+        if (cancelled) return;
+        const coords: [number, number][] = (j.route?.[0]?.geometry?.coordinates ?? [])
+          .map((c: [number, number]) => [c[1], c[0]] as [number, number]);
+        const km = Math.round((j.route?.[0]?.distance ?? 0) / 1000);
+        const hrs = Math.round((j.route?.[0]?.duration ?? 0) / 3600);
+        setRouteGeometry(coords.length > 1 ? coords : null);
+        if (km > 0) setForm(f => ({
+          ...f,
+          distanceKm: String(km),
+          expectedDurationHours: f.expectedDurationHours || String(hrs)
+        }));
+      } catch {
+        if (!cancelled) setRouteGeometry(null); // keep the haversine estimate
+      }
+    })();
+    return () => { cancelled = true; };
   }, [form.originRegionId, form.destRegionId, regionCoords]);
 
   // Leaflet's default marker icons break under bundlers — fix them once, client-side
@@ -131,12 +189,10 @@ export default function RoutesPage() {
   }, []);
 
   function resetForm() {
-    setForm({ name: "", corridor: "", originRegionId: "", originDistrictId: "", originText: "",
-      destRegionId: "", destDistrictId: "", destText: "",
-      borderPostId: "", distanceKm: "", expectedDurationHours: "",
-      roadClass: "", riskNotes: "", seasonalNotes: "",
-      ratePerKm: "", ratePerTonne: "", ratePerTrip: "" });
+    setForm(EMPTY_FORM);
     setOriginDistricts([]); setDestDistricts([]);
+    setOriginWards([]); setDestWards([]);
+    setRouteGeometry(null);
     setEditingId(null);
   }
 
@@ -147,9 +203,11 @@ export default function RoutesPage() {
         name: form.name, corridor: form.corridor || undefined,
         originRegionId: form.originRegionId ? Number(form.originRegionId) : null,
         originDistrictId: form.originDistrictId ? Number(form.originDistrictId) : null,
+        originWardId: form.originWardId ? Number(form.originWardId) : null,
         originText: form.originText || undefined,
         destRegionId: form.destRegionId ? Number(form.destRegionId) : null,
         destDistrictId: form.destDistrictId ? Number(form.destDistrictId) : null,
+        destWardId: form.destWardId ? Number(form.destWardId) : null,
         destText: form.destText || undefined,
         borderPostId: form.borderPostId ? Number(form.borderPostId) : null,
         distanceKm: form.distanceKm ? Number(form.distanceKm) : undefined,
@@ -203,7 +261,7 @@ export default function RoutesPage() {
     openDetail(detail);
   }
 
-  // Map coordinates — coerce pg numeric strings to numbers, guard against NaN
+  // Map coordinates — coerce pg numeric strings, guard against NaN
   const formMarkers = useMemo(() => {
     const a = regionCoords.find(r => r.id === Number(form.originRegionId));
     const b = regionCoords.find(r => r.id === Number(form.destRegionId));
@@ -262,10 +320,18 @@ export default function RoutesPage() {
             </label>
             <label className="block">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Origin council</span>
-              <select value={form.originDistrictId} onChange={e => setForm(f => ({ ...f, originDistrictId: e.target.value }))}
+              <select value={form.originDistrictId} onChange={e => pickOriginDistrict(e.target.value)}
                 disabled={!form.originRegionId} className={inputCls} style={{ ...inputStyle, opacity: form.originRegionId ? 1 : 0.5 }}>
                 <option value="">{form.originRegionId ? "Select" : "Pick region"}</option>
                 {originDistricts.map(d => <option key={d.id} value={d.id}>{d.name_en}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Origin ward (Kata)</span>
+              <select value={form.originWardId} onChange={e => setForm(f => ({ ...f, originWardId: e.target.value }))}
+                disabled={!form.originDistrictId} className={inputCls} style={{ ...inputStyle, opacity: form.originDistrictId ? 1 : 0.5 }}>
+                <option value="">{form.originDistrictId ? "Select" : "Pick council"}</option>
+                {originWards.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
             </label>
             <label className="block">
@@ -284,10 +350,18 @@ export default function RoutesPage() {
             </label>
             <label className="block">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Destination council</span>
-              <select value={form.destDistrictId} onChange={e => setForm(f => ({ ...f, destDistrictId: e.target.value }))}
+              <select value={form.destDistrictId} onChange={e => pickDestDistrict(e.target.value)}
                 disabled={!form.destRegionId} className={inputCls} style={{ ...inputStyle, opacity: form.destRegionId ? 1 : 0.5 }}>
                 <option value="">{form.destRegionId ? "Select" : "Pick region"}</option>
                 {destDistricts.map(d => <option key={d.id} value={d.id}>{d.name_en}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Destination ward (Kata)</span>
+              <select value={form.destWardId} onChange={e => setForm(f => ({ ...f, destWardId: e.target.value }))}
+                disabled={!form.destDistrictId} className={inputCls} style={{ ...inputStyle, opacity: form.destDistrictId ? 1 : 0.5 }}>
+                <option value="">{form.destDistrictId ? "Select" : "Pick council"}</option>
+                {destWards.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
             </label>
             <label className="block">
@@ -306,7 +380,7 @@ export default function RoutesPage() {
             </label>
             <label className="block">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>
-                Distance (km) {form.distanceKm && <span style={{ color: "var(--brand)" }}>— auto-estimated, editable</span>}
+                Distance (km) {form.distanceKm && <span style={{ color: "var(--brand)" }}>— {routeGeometry ? "road distance (OSRM)" : "estimate"}, editable</span>}
               </span>
               <input type="number" min={0} value={form.distanceKm} onChange={e => setForm(f => ({ ...f, distanceKm: e.target.value }))}
                 className={inputCls} style={inputStyle} />
@@ -324,13 +398,21 @@ export default function RoutesPage() {
           </div>
 
           {formMarkers && (
-            <div className="rounded-card overflow-hidden" style={{ height: 280, border: "1px solid var(--line)" }}>
+            <div className="rounded-card overflow-hidden" style={{ height: 320, border: "1px solid var(--line)" }}>
               <RouteMap
                 a={{ lat: formMarkers.a.lat, lng: formMarkers.a.lng, name: formMarkers.a.name_en }}
                 b={{ lat: formMarkers.b.lat, lng: formMarkers.b.lng, name: formMarkers.b.name_en }}
                 center={formMarkers.center}
+                positions={routeGeometry ?? undefined}
               />
             </div>
+          )}
+          {formMarkers && (
+            <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+              {routeGeometry
+                ? "Solid line: the actual road route (OSRM)."
+                : "Dashed line: straight-line estimate. Real road routing loads in a moment."}
+            </p>
           )}
 
           <div className="grid grid-cols-3 gap-12">
@@ -393,11 +475,36 @@ export default function RoutesPage() {
                 <td className="p-12 text-right whitespace-nowrap">
                   <button type="button" className="underline mr-16" style={{ color: "var(--brand)" }} onClick={() => openDetail(r)}>Checkpoints</button>
                   <button type="button" className="underline mr-16" style={{ color: "var(--brand)" }}
-                    onClick={() => { setEditingId(r.id); setShowForm(true);
-                      setForm(f => ({ ...f, name: r.name, corridor: r.corridor ?? "", distanceKm: r.distance_km ? String(r.distance_km) : "",
-                        ratePerKm: r.rate_per_km ? String(r.rate_per_km) : "",
-                        ratePerTonne: r.rate_per_tonne ? String(r.rate_per_tonne) : "",
-                        ratePerTrip: r.rate_per_trip ? String(r.rate_per_trip) : "" }));
+                    onClick={async () => {
+                      setEditingId(r.id); setShowForm(true);
+                      setError(null); setNotice(null);
+                      const res = await apiFetch(`/routes/${r.id}`);
+                      if (res.ok) {
+                        const j = await res.json();
+                        setForm(f => ({ ...f,
+                          name: j.name, corridor: j.corridor ?? "",
+                          originRegionId: j.origin_region_id ? String(j.origin_region_id) : "",
+                          originDistrictId: j.origin_district_id ? String(j.origin_district_id) : "",
+                          originWardId: j.origin_ward_id ? String(j.origin_ward_id) : "",
+                          originText: j.origin_text ?? "",
+                          destRegionId: j.dest_region_id ? String(j.dest_region_id) : "",
+                          destDistrictId: j.dest_district_id ? String(j.dest_district_id) : "",
+                          destWardId: j.dest_ward_id ? String(j.dest_ward_id) : "",
+                          destText: j.dest_text ?? "",
+                          borderPostId: j.border_post_id ? String(j.border_post_id) : "",
+                          distanceKm: j.distance_km ? String(j.distance_km) : "",
+                          expectedDurationHours: j.expected_duration_hours ? String(j.expected_duration_hours) : "",
+                          roadClass: j.road_class ?? "", riskNotes: j.risk_notes ?? "",
+                          seasonalNotes: j.seasonal_notes ?? "",
+                          ratePerKm: j.rate_per_km ? String(j.rate_per_km) : "",
+                          ratePerTonne: j.rate_per_tonne ? String(j.rate_per_tonne) : "",
+                          ratePerTrip: j.rate_per_trip ? String(j.rate_per_trip) : ""
+                        }));
+                        if (j.origin_region_id) { const d = await apiFetch(`/geo/districts/${j.origin_region_id}`); if (d.ok) setOriginDistricts(await d.json()); }
+                        if (j.origin_district_id) { const w = await apiFetch(`/geo/wards/${j.origin_district_id}`); if (w.ok) setOriginWards(await w.json()); }
+                        if (j.dest_region_id) { const d = await apiFetch(`/geo/districts/${j.dest_region_id}`); if (d.ok) setDestDistricts(await d.json()); }
+                        if (j.dest_district_id) { const w = await apiFetch(`/geo/wards/${j.dest_district_id}`); if (w.ok) setDestWards(await w.json()); }
+                      }
                       window.scrollTo({ top: 0, behavior: "smooth" }); }}>Edit</button>
                   <button type="button" className="underline" style={{ color: "var(--danger)" }} onClick={() => removeRoute(r.id)}>Remove</button>
                 </td>

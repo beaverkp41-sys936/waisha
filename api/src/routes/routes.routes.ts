@@ -18,9 +18,11 @@ const routeSchema = z.object({
   corridor: z.string().max(120).optional(),
   originRegionId: z.number().int().positive().nullable().optional(),
   originDistrictId: z.number().int().positive().nullable().optional(),
+  originWardId: z.number().int().positive().nullable().optional(),
   originText: z.string().max(120).optional(),
   destRegionId: z.number().int().positive().nullable().optional(),
   destDistrictId: z.number().int().positive().nullable().optional(),
+  destWardId: z.number().int().positive().nullable().optional(),
   destText: z.string().max(120).optional(),
   borderPostId: z.number().int().positive().nullable().optional(),
   distanceKm: z.number().int().min(0).max(50000).optional(),
@@ -36,14 +38,14 @@ const routeSchema = z.object({
 
 export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
 
-  // ---------- Border posts picker (from the EAC reference data) ----------
+  // ---------- Border posts picker (EAC reference data) ----------
   app.get("/geo/border-posts", { preHandler: [requireAuth] }, async () => {
     const { rows } = await pool.query(
       "select id, country_a, country_b, name, kind from geo_border_posts order by name");
     return rows;
   });
 
-  // ---------- Region coordinates (for distance calc + map) ----------
+  // ---------- Region coordinates (distance calc + map) ----------
   app.get("/geo/region-coords", { preHandler: [requireAuth] }, async () => {
     const { rows } = await pool.query(
       "select id, code, name_en, lat, lng from geo_regions where lat is not null and lng is not null");
@@ -61,12 +63,15 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
               bp.name as border_post_name,
               ro.lat as origin_lat, ro.lng as origin_lng,
               rd.lat as dest_lat, rd.lng as dest_lng,
+              ow.name as origin_ward_name, dw.name as dest_ward_name,
               (select count(*)::int from route_checkpoints rc
                 where rc.route_id = r.id) as checkpoint_count
        from routes r
        left join geo_border_posts bp on bp.id = r.border_post_id
        left join geo_regions ro on ro.id = r.origin_region_id
        left join geo_regions rd on rd.id = r.dest_region_id
+       left join geo_wards ow on ow.id = r.origin_ward_id
+       left join geo_wards dw on dw.id = r.dest_ward_id
        where r.tenant_id = $1 and r.deleted_at is null
        order by r.created_at desc`, [req.user.tid]));
     return rows;
@@ -92,15 +97,17 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
     await withTenant(req.user.tid, async (c) => {
       await c.query(
         `insert into routes (id, tenant_id, name, corridor,
-           origin_region_id, origin_district_id, origin_text,
-           dest_region_id, dest_district_id, dest_text,
+           origin_region_id, origin_district_id, origin_ward_id, origin_text,
+           dest_region_id, dest_district_id, dest_ward_id, dest_text,
            border_post_id, distance_km, expected_duration_hours, road_class,
            risk_notes, seasonal_notes, rate_per_km, rate_per_tonne, rate_per_trip,
            fuel_surcharge_pct, created_by, updated_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$21)`,
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$23)`,
         [id, req.user.tid, body.name, body.corridor ?? null,
-         body.originRegionId ?? null, body.originDistrictId ?? null, body.originText ?? null,
-         body.destRegionId ?? null, body.destDistrictId ?? null, body.destText ?? null,
+         body.originRegionId ?? null, body.originDistrictId ?? null,
+         body.originWardId ?? null, body.originText ?? null,
+         body.destRegionId ?? null, body.destDistrictId ?? null,
+         body.destWardId ?? null, body.destText ?? null,
          body.borderPostId ?? null, body.distanceKm ?? null,
          body.expectedDurationHours ?? null, body.roadClass ?? null,
          body.riskNotes ?? null, body.seasonalNotes ?? null,
@@ -123,17 +130,19 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
     const r = await withTenant(req.user.tid, async (c) => {
       const res = await c.query(
         `update routes set name=$2, corridor=$3,
-           origin_region_id=$4, origin_district_id=$5, origin_text=$6,
-           dest_region_id=$7, dest_district_id=$8, dest_text=$9,
-           border_post_id=$10, distance_km=$11, expected_duration_hours=$12,
-           road_class=$13, risk_notes=$14, seasonal_notes=$15,
-           rate_per_km=$16, rate_per_tonne=$17, rate_per_trip=$18,
-           fuel_surcharge_pct=$19, updated_by=$20, updated_at=now()
-         where id=$1 and tenant_id=$20 and deleted_at is null
+           origin_region_id=$4, origin_district_id=$5, origin_ward_id=$6, origin_text=$7,
+           dest_region_id=$8, dest_district_id=$9, dest_ward_id=$10, dest_text=$11,
+           border_post_id=$12, distance_km=$13, expected_duration_hours=$14,
+           road_class=$15, risk_notes=$16, seasonal_notes=$17,
+           rate_per_km=$18, rate_per_tonne=$19, rate_per_trip=$20,
+           fuel_surcharge_pct=$21, updated_by=$22, updated_at=now()
+         where id=$1 and tenant_id=$22 and deleted_at is null
          returning id`,
         [id, body.name, body.corridor ?? null,
-         body.originRegionId ?? null, body.originDistrictId ?? null, body.originText ?? null,
-         body.destRegionId ?? null, body.destDistrictId ?? null, body.destText ?? null,
+         body.originRegionId ?? null, body.originDistrictId ?? null,
+         body.originWardId ?? null, body.originText ?? null,
+         body.destRegionId ?? null, body.destDistrictId ?? null,
+         body.destWardId ?? null, body.destText ?? null,
          body.borderPostId ?? null, body.distanceKm ?? null,
          body.expectedDurationHours ?? null, body.roadClass ?? null,
          body.riskNotes ?? null, body.seasonalNotes ?? null,
