@@ -78,7 +78,7 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
         `https://router.project-osrm.org/route/v1/driving/${q.oLng},${q.oLat};${q.dLng},${q.dLat}?overview=full&geometries=geojson`,
         { signal: controller.signal });
       if (!res.ok) throw new Error(`osrm ${res.status}`);
-      const j = await res.json();
+      const j: any = await res.json();
       const coords: [number, number][] = (j.route?.[0]?.geometry?.coordinates ?? [])
         .map((c: [number, number]) => [c[1], c[0]] as [number, number]);
       const distanceKm = Math.round((j.route?.[0]?.distance ?? 0) / 1000);
