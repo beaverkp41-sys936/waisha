@@ -76,6 +76,8 @@ export default function RoutesPage() {
   const [originWards, setOriginWards] = useState<Ward[]>([]);
   const [destWards, setDestWards] = useState<Ward[]>([]);
   const [routeGeometry, setRouteGeometry] = useState<[number, number][] | null>(null);
+  const [osrmStatus, setOsrmStatus] = useState<"idle" | "loading" | "road" | "failed">("idle");
+  const [osrmAttempt, setOsrmAttempt] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -111,6 +113,7 @@ export default function RoutesPage() {
       setDestDistricts([]); setDestWards([]);
     }
     setRouteGeometry(null);
+    setOsrmStatus("idle");
     if (v) {
       const d = await apiFetch(`/geo/districts/${v}`);
       if (side === "origin") { if (d.ok) setOriginDistricts(await d.json()); }
@@ -131,7 +134,7 @@ export default function RoutesPage() {
 
   // Haversine: instant estimate when both regions are picked...
   useEffect(() => {
-    if (!form.originRegionId || !form.destRegionId) { setRouteGeometry(null); return; }
+    if (!form.originRegionId || !form.destRegionId) { setRouteGeometry(null); setOsrmStatus("idle"); return; }
     const a = regionCoords.find(r => r.id === Number(form.originRegionId));
     const b = regionCoords.find(r => r.id === Number(form.destRegionId));
     if (!a || !b) { setRouteGeometry(null); return; }
@@ -141,21 +144,27 @@ export default function RoutesPage() {
     setForm(f => ({ ...f, distanceKm: String(haversineKm(aLat, aLng, bLat, bLng)) }));
   }, [form.originRegionId, form.destRegionId, regionCoords]);
 
-  // OSRM: the REAL road path + exact km. Falls back to the haversine estimate on failure.
+  // OSRM: the REAL road path + exact km. 8s timeout, visible status, retryable.
   useEffect(() => {
-    if (!form.originRegionId || !form.destRegionId) { setRouteGeometry(null); return; }
+    if (!form.originRegionId || !form.destRegionId) { setRouteGeometry(null); setOsrmStatus("idle"); return; }
     const a = regionCoords.find(r => r.id === Number(form.originRegionId));
     const b = regionCoords.find(r => r.id === Number(form.destRegionId));
-    if (!a || !b) { setRouteGeometry(null); return; }
+    if (!a || !b) { setRouteGeometry(null); setOsrmStatus("idle"); return; }
     const aLat = Number(a.lat), aLng = Number(a.lng);
     const bLat = Number(b.lat), bLng = Number(b.lng);
-    if ([aLat, aLng, bLat, bLng].some(Number.isNaN)) { setRouteGeometry(null); return; }
+    if ([aLat, aLng, bLat, bLng].some(Number.isNaN)) { setRouteGeometry(null); setOsrmStatus("idle"); return; }
+
     let cancelled = false;
+    setOsrmStatus("loading");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+
     (async () => {
       try {
         const res = await fetch(
-          `https://router.project-osrm.org/route/v1/driving/${aLng},${aLat};${bLng},${bLat}?overview=full&geometries=geojson`);
-        if (!res.ok) throw new Error("osrm");
+          `https://router.project-osrm.org/route/v1/driving/${aLng},${aLat};${bLng},${bLat}?overview=full&geometries=geojson`,
+          { signal: controller.signal });
+        if (!res.ok) throw new Error(`osrm ${res.status}`);
         const j = await res.json();
         if (cancelled) return;
         const coords: [number, number][] = (j.route?.[0]?.geometry?.coordinates ?? [])
@@ -163,17 +172,20 @@ export default function RoutesPage() {
         const km = Math.round((j.route?.[0]?.distance ?? 0) / 1000);
         const hrs = Math.round((j.route?.[0]?.duration ?? 0) / 3600);
         setRouteGeometry(coords.length > 1 ? coords : null);
+        setOsrmStatus(coords.length > 1 ? "road" : "failed");
         if (km > 0) setForm(f => ({
           ...f,
           distanceKm: String(km),
           expectedDurationHours: f.expectedDurationHours || String(hrs)
         }));
       } catch {
-        if (!cancelled) setRouteGeometry(null); // keep the haversine estimate
+        if (!cancelled) setOsrmStatus("failed");   // visible failure; haversine stays
+      } finally {
+        clearTimeout(timer);
       }
     })();
-    return () => { cancelled = true; };
-  }, [form.originRegionId, form.destRegionId, regionCoords]);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [form.originRegionId, form.destRegionId, regionCoords, osrmAttempt]);
 
   // Leaflet's default marker icons break under bundlers — fix them once, client-side
   useEffect(() => {
@@ -193,6 +205,7 @@ export default function RoutesPage() {
     setOriginDistricts([]); setDestDistricts([]);
     setOriginWards([]); setDestWards([]);
     setRouteGeometry(null);
+    setOsrmStatus("idle");
     setEditingId(null);
   }
 
@@ -261,7 +274,7 @@ export default function RoutesPage() {
     openDetail(detail);
   }
 
-  // Map coordinates — coerce pg numeric strings, guard against NaN
+  // Map coordinates — coerce pg numeric strings to numbers, guard against NaN
   const formMarkers = useMemo(() => {
     const a = regionCoords.find(r => r.id === Number(form.originRegionId));
     const b = regionCoords.find(r => r.id === Number(form.destRegionId));
@@ -409,9 +422,15 @@ export default function RoutesPage() {
           )}
           {formMarkers && (
             <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
-              {routeGeometry
-                ? "Solid line: the actual road route (OSRM)."
-                : "Dashed line: straight-line estimate. Real road routing loads in a moment."}
+              {osrmStatus === "loading" && "Loading real road routing…"}
+              {osrmStatus === "road" && "Solid line: the actual road route (OSRM)."}
+              {osrmStatus === "failed" && (
+                <>Road routing unavailable right now — showing the straight-line estimate ({form.distanceKm} km).{" "}
+                  <button type="button" className="underline" style={{ color: "var(--brand)" }}
+                    onClick={() => setOsrmAttempt(a => a + 1)}>Retry</button>
+                </>
+              )}
+              {osrmStatus === "idle" && "Pick origin and destination to calculate the route."}
             </p>
           )}
 
