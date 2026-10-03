@@ -7,7 +7,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         style={{ background: "var(--brand-deep)" }}>
         <div className="flex items-center gap-24">
           <span className="text-sm font-bold tracking-[0.08em] text-white">WAISHA</span>
-          <nav className="flex gap-16 text-xs font-semibold">
+          <nav className="flex gap-16 text-xs font-semibold">            
+            <Link href="/app/dashboard" className="underline" style={{ color: "var(--gold)" }}>Dashboard</Link>
             <Link href="/app/profile" className="underline" style={{ color: "var(--gold)" }}>Profile</Link>
             <Link href="/app/branches" className="underline" style={{ color: "var(--gold)" }}>Branches</Link>
             <Link href="/app/fleet" className="underline" style={{ color: "var(--gold)" }}>Fleet</Link>
