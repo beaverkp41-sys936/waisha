@@ -88,12 +88,24 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
          body.status ?? "available", body.address ?? null, body.nextOfKin ?? null,
          body.nextOfKinPhone ? encryptField(body.nextOfKinPhone) : null,
          body.notes ?? null, req.user.sub, req.user.sub]);
-      await writeAudit(c, {
-        tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
-        requestId: req.requestId, entity: "drivers", entityId: id,
-        action: "driver.created",
-        after: { name: body.fullName, licenceClass: body.licenceClass ?? null }
-      });
+      await c.query(
+        `insert into drivers (id, tenant_id, branch_id, full_name,
+           nida_encrypted, nida_search, phone_encrypted, phone_search,
+           date_of_birth, blood_group, licence_class, licence_number, licence_expiry,
+           defensive_driving_cert, dangerous_goods_cert, assigned_vessel_id,
+           status, address, next_of_kin, next_of_kin_phone_encrypted,
+           notes, created_by, updated_by)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+        [id, req.user.tid, body.branchId ?? null, body.fullName,
+         body.nida ? encryptField(body.nida) : null, nidaSearch,
+         encryptField(body.phone), searchHash(body.phone),
+         body.dateOfBirth ?? null, body.bloodGroup ?? null,
+         body.licenceClass ?? null, body.licenceNumber ?? null, body.licenceExpiry ?? null,
+         body.defensiveDrivingCert ?? false, body.dangerousGoodsCert ?? false,
+         body.assignedVesselId ?? null,
+         body.status ?? "available", body.address ?? null, body.nextOfKin ?? null,
+         body.nextOfKinPhone ? encryptField(body.nextOfKinPhone) : null,
+         body.notes ?? null, req.user.sub, req.user.sub]);
     });
     return reply.status(201).send({ id });
   });
