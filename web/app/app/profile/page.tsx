@@ -16,6 +16,8 @@ export default function ProfilePage() {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [isNew, setIsNew] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -33,6 +35,9 @@ export default function ProfilePage() {
   }, []);
 
   function set(k: string, v: any) { setForm((f: any) => ({ ...f, [k]: v })); }
+
+  function beginEdit() { setEditing(true); setConfirming(false); setError(null); }
+  function cancelEdit() { setEditing(false); setConfirming(false); setError(null); }
 
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); setError(null); setBusy(true);
@@ -64,6 +69,7 @@ export default function ProfilePage() {
       if (!res.ok) { setError(errorText(j, "Save failed")); return; }
       setIsNew(false);
       setSaved(true); setTimeout(() => setSaved(false), 2500);
+      setEditing(false); setConfirming(false);
     } catch (e: any) {
       if (e.message !== "session ended") setError(e.message);
     } finally { setBusy(false); }
@@ -73,15 +79,26 @@ export default function ProfilePage() {
 
   const inputCls = "w-full rounded-input border px-12 py-8 text-sm";
   const inputStyle = { borderColor: "var(--line)", background: "var(--milk)" };
+  const disabledStyle = { ...inputStyle, opacity: 0.7, cursor: "not-allowed" };
   const labelCls = "mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]";
   const F = (k: string) => form[k] ?? "";
 
   return (
     <div className="mx-auto max-w-[760px] px-16 py-32">
-      <h1 className="mb-8 text-xl font-bold" style={{ color: "var(--ink)" }}>Company profile</h1>
-      <p className="mb-24 text-sm" style={{ color: "var(--ink-soft)" }}>
-        This is what shippers and the platform see about your company.
-      </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Company profile</h1>
+          <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+            This is what shippers and the platform see about your company.
+          </p>
+        </div>
+        {!editing && (
+          <button type="button" onClick={beginEdit}
+            className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">
+            Edit profile
+          </button>
+        )}
+      </div>
       {error && <div role="alert" className="mb-16 px-12 py-8 text-sm"
         style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>{error}</div>}
       {saved && <div role="status" className="mb-16 px-12 py-8 text-sm"
@@ -90,56 +107,84 @@ export default function ProfilePage() {
       <form onSubmit={save} className="space-y-12 rounded-card border bg-surface p-24" style={{ borderColor: "var(--line)" }}>
         <label className="block">
           <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Company name *</span>
-          <input required value={F("company_name")} onChange={e => set("company_name", e.target.value)}
-            className={inputCls} style={inputStyle} />
+          <input required disabled={!editing} value={F("company_name")} onChange={e => set("company_name", e.target.value)}
+            className={inputCls} style={editing ? inputStyle : disabledStyle} />
         </label>
         <div className="grid grid-cols-2 gap-12">
           <label className="block">
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>BRELA number</span>
-            <input value={F("brela_number")} onChange={e => set("brela_number", e.target.value)} className={inputCls} style={inputStyle} />
+            <input disabled={!editing} value={F("brela_number")} onChange={e => set("brela_number", e.target.value)}
+              className={inputCls} style={editing ? inputStyle : disabledStyle} />
           </label>
           <label className="block">
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>VAT number</span>
-            <input value={F("vat_number")} onChange={e => set("vat_number", e.target.value)} className={inputCls} style={inputStyle} />
+            <input disabled={!editing} value={F("vat_number")} onChange={e => set("vat_number", e.target.value)}
+              className={inputCls} style={editing ? inputStyle : disabledStyle} />
           </label>
           <label className="block">
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Transport licence no.</span>
-            <input value={F("transport_licence_no")} onChange={e => set("transport_licence_no", e.target.value)} className={inputCls} style={inputStyle} />
+            <input disabled={!editing} value={F("transport_licence_no")} onChange={e => set("transport_licence_no", e.target.value)}
+              className={inputCls} style={editing ? inputStyle : disabledStyle} />
           </label>
           <label className="block">
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Transport licence expiry</span>
-            <input type="date" value={F("transport_licence_expiry")?.slice(0, 10) ?? ""} onChange={e => set("transport_licence_expiry", e.target.value)} className={inputCls} style={inputStyle} />
+            <input type="date" disabled={!editing} value={F("transport_licence_expiry")?.slice(0, 10) ?? ""} onChange={e => set("transport_licence_expiry", e.target.value)}
+              className={inputCls} style={editing ? inputStyle : disabledStyle} />
           </label>
           <label className="block">
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Year established</span>
-            <input type="number" min={1900} max={2100} value={F("year_established")} onChange={e => set("year_established", e.target.value)} className={inputCls} style={inputStyle} />
+            <input type="number" min={1900} max={2100} disabled={!editing} value={F("year_established")} onChange={e => set("year_established", e.target.value)}
+              className={inputCls} style={editing ? inputStyle : disabledStyle} />
           </label>
           <label className="block">
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Fleet size (declared)</span>
-            <input type="number" min={0} value={F("fleet_size_declared")} onChange={e => set("fleet_size_declared", e.target.value)} className={inputCls} style={inputStyle} />
+            <input type="number" min={0} disabled={!editing} value={F("fleet_size_declared")} onChange={e => set("fleet_size_declared", e.target.value)}
+              className={inputCls} style={editing ? inputStyle : disabledStyle} />
           </label>
         </div>
         <label className="block">
           <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Services offered</span>
-          <input value={F("services_offered")} onChange={e => set("services_offered", e.target.value)}
-            placeholder="e.g. General cargo, Refrigerated, Fuel tanker" className={inputCls} style={inputStyle} />
+          <input disabled={!editing} value={F("services_offered")} onChange={e => set("services_offered", e.target.value)}
+            placeholder="e.g. General cargo, Refrigerated, Fuel tanker"
+            className={inputCls} style={editing ? inputStyle : disabledStyle} />
         </label>
         <label className="block">
           <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Corridors served</span>
-          <input value={F("corridors_served")} onChange={e => set("corridors_served", e.target.value)}
-            placeholder="e.g. Dar es Salaam - Kigali, Central Corridor" className={inputCls} style={inputStyle} />
+          <input disabled={!editing} value={F("corridors_served")} onChange={e => set("corridors_served", e.target.value)}
+            placeholder="e.g. Dar es Salaam - Kigali, Central Corridor"
+            className={inputCls} style={editing ? inputStyle : disabledStyle} />
         </label>
         <label className="block">
           <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Description</span>
-          <textarea rows={4} value={F("description")} onChange={e => set("description", e.target.value)} className={inputCls} style={inputStyle} />
+          <textarea rows={4} disabled={!editing} value={F("description")} onChange={e => set("description", e.target.value)}
+            className={inputCls} style={editing ? inputStyle : disabledStyle} />
         </label>
         <label className="block">
           <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Website</span>
-          <input value={F("website")} onChange={e => set("website", e.target.value)} placeholder="wema.com" className={inputCls} style={inputStyle} />
+          <input disabled={!editing} value={F("website")} onChange={e => set("website", e.target.value)} placeholder="wema.com"
+            className={inputCls} style={editing ? inputStyle : disabledStyle} />
         </label>
-        <button type="submit" disabled={busy} className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">
-          {busy ? "Saving" : saved ? "Saved" : isNew ? "Save profile" : "Update profile"}
-        </button>
+
+        {editing && (
+          <div className="space-y-12 border-t pt-16" style={{ borderColor: "var(--line)" }}>
+            {confirming && (
+              <div role="status" className="rounded-input px-12 py-8 text-sm"
+                style={{ background: "color-mix(in srgb, var(--gold) 15%, transparent)", borderLeft: "4px solid var(--gold)" }}>
+                Review your changes above, then confirm. This updates what shippers and the platform see.
+              </div>
+            )}
+            <div className="flex gap-8">
+              <button type="submit" disabled={busy}
+                className="waisha-btn flex-1 rounded-input py-12 text-sm font-semibold disabled:opacity-60">
+                {busy ? "Saving" : confirming ? "Confirm update" : "Review changes"}
+              </button>
+              <button type="button" onClick={cancelEdit}
+                className="rounded-input border px-16 py-12 text-sm font-semibold" style={{ borderColor: "var(--line)" }}>
+                {confirming ? "Discard" : "Cancel"}
+              </button>
+            </div>
+          </div>
+        )}
       </form>
     </div>
   );
