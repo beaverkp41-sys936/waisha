@@ -75,7 +75,31 @@ export default function ProfilePage() {
     } finally { setBusy(false); }
   }
 
-  if (!form) return <p className="p-32 text-sm" style={{ color: "var(--ink-soft)" }}>Loading profile</p>;
+  // Skeleton mirrors the final layout — the page shell appears instantly
+  if (!form) return (
+    <div className="mx-auto max-w-[760px] px-16 py-32">
+      <div className="flex items-start justify-between">
+        <div>
+          <div className="h-6 w-52 animate-pulse rounded" style={{ background: "var(--milk-deep)" }} />
+          <div className="mt-8 h-4 w-80 animate-pulse rounded" style={{ background: "var(--milk-deep)" }} />
+        </div>
+        <div className="h-8 w-28 animate-pulse rounded-input" style={{ background: "var(--milk-deep)" }} />
+      </div>
+      <div className="mt-24 space-y-12 rounded-card border bg-surface p-24" style={{ borderColor: "var(--line)" }}>
+        <div className="h-10 w-full animate-pulse rounded-input" style={{ background: "var(--milk-deep)" }} />
+        <div className="grid grid-cols-2 gap-12">
+          {[1, 2, 3, 4, 5, 6].map(n => (
+            <div key={n} className="h-10 w-full animate-pulse rounded-input" style={{ background: "var(--milk-deep)" }} />
+          ))}
+        </div>
+        <div className="h-10 w-full animate-pulse rounded-input" style={{ background: "var(--milk-deep)" }} />
+        <div className="h-10 w-full animate-pulse rounded-input" style={{ background: "var(--milk-deep)" }} />
+        <div className="h-24 w-full animate-pulse rounded-input" style={{ background: "var(--milk-deep)" }} />
+        <div className="h-10 w-full animate-pulse rounded-input" style={{ background: "var(--milk-deep)" }} />
+        <div className="h-12 w-full animate-pulse rounded-input" style={{ background: "var(--milk-deep)" }} />
+      </div>
+    </div>
+  );
 
   const inputCls = "w-full rounded-input border px-12 py-8 text-sm";
   const inputStyle = { borderColor: "var(--line)", background: "var(--milk)" };
