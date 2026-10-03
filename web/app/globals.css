@@ -38,6 +38,11 @@ body {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
+.page-enter { animation: pageIn 220ms var(--ease) both; }
+@keyframes pageIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .waisha-input { transition: border-color 180ms var(--ease), box-shadow 180ms var(--ease); }
 .waisha-input:focus:not(:focus-visible) { outline: none; }
 .waisha-input:focus { border-color: var(--brand); box-shadow: inset 3px 0 0 0 var(--brand); }
@@ -52,5 +57,5 @@ body {
 .waisha-btn:disabled { opacity: 0.6; }
 
 @media (prefers-reduced-motion: reduce) {
-  .panel-enter, .underline-slide, .sheet-in { animation: none; transition: none; }
+  .panel-enter, .underline-slide, .sheet-in, .page-enter { animation: none; transition: none; }
 }

@@ -204,7 +204,7 @@ export default function LoginPage() {
       }
       if (!r.ok) { setError(errorText(r.json, "Sign in failed")); return; }
       sessionStorage.setItem("waisha_access", r.json.accessToken);
-      window.location.href = "/app/profile";
+      window.location.href = "/app/dashboard";
     } finally { setBusy(false); }
   }
 
