@@ -153,7 +153,7 @@ export default function DashboardPage() {
       </section>
 
       <p className="mt-24 text-xs" style={{ color: "var(--ink-soft)" }}>
-        <Link href="/post-login" className="underline">Account settings</Link> · sessions, devices and sign out
+      <Link href="/app/account" className="underline">Account settings</Link> · sessions, devices and sign out
       </p>
     </div>
   );
