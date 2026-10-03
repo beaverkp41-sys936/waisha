@@ -8,7 +8,7 @@ const NAV = [
   { href: "/app/branches", label: "Branches", accent: "var(--brand)" },
   { href: "/app/fleet", label: "Fleet", accent: "var(--gold-green)" },
   { href: "/app/routes", label: "Routes", accent: "var(--gold)" },
-  { href: "/post-login", label: "Account", accent: "rgba(255,255,255,0.7)" }
+  { href: "/app/account", label: "Account", accent: "rgba(255,255,255,0.7)" }
 ];
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
