@@ -77,7 +77,7 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
            defensive_driving_cert, dangerous_goods_cert, assigned_vessel_id,
            status, address, next_of_kin, next_of_kin_phone_encrypted,
            notes, created_by, updated_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$22)`,
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
         [id, req.user.tid, body.branchId ?? null, body.fullName,
          body.nida ? encryptField(body.nida) : null, nidaSearch,
          encryptField(body.phone), searchHash(body.phone),
