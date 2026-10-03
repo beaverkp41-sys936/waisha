@@ -88,24 +88,6 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
          body.status ?? "available", body.address ?? null, body.nextOfKin ?? null,
          body.nextOfKinPhone ? encryptField(body.nextOfKinPhone) : null,
          body.notes ?? null, req.user.sub, req.user.sub]);
-      await c.query(
-        `insert into drivers (id, tenant_id, branch_id, full_name,
-           nida_encrypted, nida_search, phone_encrypted, phone_search,
-           date_of_birth, blood_group, licence_class, licence_number, licence_expiry,
-           defensive_driving_cert, dangerous_goods_cert, assigned_vessel_id,
-           status, address, next_of_kin, next_of_kin_phone_encrypted,
-           notes, created_by, updated_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
-        [id, req.user.tid, body.branchId ?? null, body.fullName,
-         body.nida ? encryptField(body.nida) : null, nidaSearch,
-         encryptField(body.phone), searchHash(body.phone),
-         body.dateOfBirth ?? null, body.bloodGroup ?? null,
-         body.licenceClass ?? null, body.licenceNumber ?? null, body.licenceExpiry ?? null,
-         body.defensiveDrivingCert ?? false, body.dangerousGoodsCert ?? false,
-         body.assignedVesselId ?? null,
-         body.status ?? "available", body.address ?? null, body.nextOfKin ?? null,
-         body.nextOfKinPhone ? encryptField(body.nextOfKinPhone) : null,
-         body.notes ?? null, req.user.sub, req.user.sub]);
     });
     return reply.status(201).send({ id });
   });
@@ -143,7 +125,7 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
            next_of_kin_phone_encrypted = case when $20::text is not null then $21 else next_of_kin_phone_encrypted end,
            notes = coalesce($22, notes),
            updated_by = $23, updated_at = now()
-         where id = $1 and tenant_id = $23 and deleted_at is null`,
+         where id = $1 and tenant_id = $24 and deleted_at is null`,
         [id,
          body.fullName ?? null,
          body.nida ?? null, body.nida ? encryptField(body.nida) : null,
@@ -157,7 +139,7 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
          body.status ?? null, body.address ?? null, body.nextOfKin ?? null,
          body.nextOfKinPhone ?? null,
          body.nextOfKinPhone ? encryptField(body.nextOfKinPhone) : null,
-         body.notes ?? null, req.user.sub]);
+         body.notes ?? null, req.user.sub, req.user.tid]);
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         requestId: req.requestId, entity: "drivers", entityId: id,
@@ -173,8 +155,8 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
     const r = await withTenant(req.user.tid, async (c) => {
       const res = await c.query(
         `update drivers set deleted_at = now(), updated_by = $2
-         where id = $1 and tenant_id = $2 and deleted_at is null`,
-        [id, req.user.sub]);
+         where id = $1 and tenant_id = $3 and deleted_at is null`,
+        [id, req.user.sub, req.user.tid]);
       if (res.rowCount) {
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
