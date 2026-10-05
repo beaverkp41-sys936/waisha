@@ -109,6 +109,20 @@ async function main() {
   for (const [l, s, p] of inserts) await check(l, s, p);
   for (const [l, s, p] of updates) await check(l, s, p);
   await check("ward columns", "select r.origin_ward_id, r.dest_ward_id from routes r limit 1", []);
+await check("sync: reserve vessel", `update vessels set status = $2, updated_at = now()
+  where id = $1 and tenant_id = $3 and deleted_at is null and status = any($4::text[])`,
+  [FAKE_ID, "booked", FAKE_TENANT, ["standby"]]);
+await check("sync: driver on_trip", `update drivers set status = $2, updated_at = now()
+  where id = $1 and tenant_id = $3 and deleted_at is null and status = any($4::text[])`,
+  [FAKE_ID, "on_trip", FAKE_TENANT, ["available"]]);
+await check("sync: other active trip check", `select 1 from trips
+  where tenant_id = $1 and vessel_id = $2 and status in ('planned','in_transit')
+  and deleted_at is null limit 1`, [FAKE_TENANT, FAKE_ID]);
+await check("sync: drivers list active trip", `select d.id,
+  (select t.reference from trips t where t.driver_id = d.id
+   and t.status in ('planned','in_transit') and t.deleted_at is null
+   order by t.created_at desc limit 1) as active_trip_reference
+  from drivers d where d.tenant_id = $1 limit 1`, [FAKE_TENANT]);
 
   await pool.end();
   if (failed) { console.log(`${failed} FAILED`); process.exit(1); }

@@ -9,7 +9,8 @@ import { writeAudit } from "../audit/audit.js";
 import {
   TRIP_STATUSES,
   tripCanTransition,
-  tripStampsFor
+  tripStampsFor,
+  type TripStatus
 } from "../operations/trip-status.js";
 
 async function requireAuth(req: any) {
@@ -79,6 +80,49 @@ async function findResourceConflict(
      limit 1`,
     [tid, resourceId, excludeTripId]);
   return r.rows[0]?.label ?? null;
+}
+
+// ---- Resource status sync -------------------------------------------------
+// A trip drives the statuses its vessel and driver show elsewhere in the
+// portal. Manual states that carry meaning (in_garage, on_leave, suspended)
+// are never overwritten; a resource is only freed when no other active trip
+// still claims it.
+
+const VESSEL_STATUS_FOR_TRIP: Record<TripStatus, string | null> = {
+  planned: "booked", in_transit: "on_route", arrived: "on_route",
+  completed: "standby", cancelled: "standby"
+};
+const DRIVER_STATUS_FOR_TRIP: Record<TripStatus, string | null> = {
+  planned: null, in_transit: "on_trip", arrived: "on_trip",
+  completed: "available", cancelled: "available"
+};
+const VESSEL_SYNCABLE_FROM = ["standby", "booked", "on_route"];
+const DRIVER_SYNCABLE_FROM = ["available", "on_trip"];
+
+/** Returns true when the resource's status was actually moved. */
+async function syncTripResource(
+  c: any,
+  tid: string,
+  table: "vessels" | "drivers",
+  col: "vessel_id" | "driver_id",
+  resourceId: string,
+  target: string | null
+): Promise<boolean> {
+  if (!resourceId || !target) return false;
+  if (target === "standby" || target === "available") {
+    // Freed only when no other active trip still claims the resource.
+    const other = await c.query(
+      `select 1 from trips where tenant_id = $1 and ${col} = $2
+       and status in ('planned','in_transit') and deleted_at is null limit 1`,
+      [tid, resourceId]);
+    if (other.rowCount) return false;
+  }
+  const from = table === "vessels" ? VESSEL_SYNCABLE_FROM : DRIVER_SYNCABLE_FROM;
+  const r = await c.query(
+    `update ${table} set status = $2, updated_at = now()
+     where id = $1 and tenant_id = $3 and deleted_at is null and status = any($4::text[])`,
+    [resourceId, target, tid, from]);
+  return !!r.rowCount;
 }
 
 async function ownedOrNull(c: any, table: string, id: string, tid: string) {
@@ -179,6 +223,11 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
         after: { reference: body.reference ?? null, routeId: body.routeId,
                  status: "planned" }
       });
+      // A planned trip reserves its vessel (drivers stay available until departure).
+      if (body.vesselId) {
+        await syncTripResource(c, req.user.tid, "vessels", "vessel_id",
+          body.vesselId, VESSEL_STATUS_FOR_TRIP.planned);
+      }
     });
     return reply.status(201).send({ id });
   });
@@ -241,7 +290,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
 
     await withTenant(req.user.tid, async (c) => {
       const prev = await c.query(
-        "select status, route_id from trips where id=$1 and tenant_id=$2 and deleted_at is null",
+        "select status, route_id, vessel_id from trips where id=$1 and tenant_id=$2 and deleted_at is null",
         [id, req.user.tid]);
       if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Trip not found", 404);
       const status = prev.rows[0].status;
@@ -300,6 +349,17 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
            where id = $1 and tenant_id = $3 and deleted_at is null`,
           params);
       }
+      // Vessel swap on a planned trip: free the old vessel, reserve the new one.
+      if ("vesselId" in body && prev.rows[0].vessel_id !== (body.vesselId ?? null)) {
+        if (prev.rows[0].vessel_id) {
+          await syncTripResource(c, req.user.tid, "vessels", "vessel_id",
+            prev.rows[0].vessel_id, "standby");
+        }
+        if (body.vesselId) {
+          await syncTripResource(c, req.user.tid, "vessels", "vessel_id",
+            body.vesselId, "booked");
+        }
+      }
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         requestId: req.requestId, entity: "trips", entityId: id,
@@ -349,13 +409,25 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
            updated_by = $3, updated_at = now()
          where id = $1 and tenant_id = $4 and deleted_at is null`,
         [id, body.status, req.user.sub, req.user.tid]);
+
+      // Ride the vessel/driver statuses along with the lifecycle.
+      const synced: Record<string, boolean> = {};
+      if (prev.rows[0].vessel_id) {
+        synced.vessel = await syncTripResource(c, req.user.tid, "vessels", "vessel_id",
+          prev.rows[0].vessel_id, VESSEL_STATUS_FOR_TRIP[body.status]);
+      }
+      if (prev.rows[0].driver_id) {
+        synced.driver = await syncTripResource(c, req.user.tid, "drivers", "driver_id",
+          prev.rows[0].driver_id, DRIVER_STATUS_FOR_TRIP[body.status]);
+      }
+
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         userAgent: req.headers["user-agent"] ?? null,
         requestId: req.requestId, entity: "trips", entityId: id,
         action: "trip.status_changed",
         before: { status: from },
-        after: { status: body.status }
+        after: { status: body.status, synced }
       });
     });
     return reply.send({ ok: true });
@@ -366,7 +438,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
     const { id } = req.params as { id: string };
     const r = await withTenant(req.user.tid, async (c) => {
       const prev = await c.query(
-        "select status from trips where id=$1 and tenant_id=$2 and deleted_at is null",
+        "select status, vessel_id from trips where id=$1 and tenant_id=$2 and deleted_at is null",
         [id, req.user.tid]);
       if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Trip not found", 404);
       if (prev.rows[0].status === "in_transit")
@@ -376,6 +448,11 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
          where id = $1 and tenant_id = $3 and deleted_at is null`,
         [id, req.user.sub, req.user.tid]);
       if (res.rowCount) {
+        // A removed planned trip releases its vessel reservation.
+        if (prev.rows[0].vessel_id) {
+          await syncTripResource(c, req.user.tid, "vessels", "vessel_id",
+            prev.rows[0].vessel_id, "standby");
+        }
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
           requestId: req.requestId, entity: "trips", entityId: id,
