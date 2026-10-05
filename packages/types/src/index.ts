@@ -1,4 +1,6 @@
 export const VESSEL_STATUSES = ["on_route", "standby", "booked", "in_garage", "out_of_service"] as const;
+export const TRIP_STATUSES = ["planned", "in_transit", "arrived", "completed", "cancelled"] as const;
+export type TripStatus = (typeof TRIP_STATUSES)[number];
 export const TENANT_STATUSES = ["pending_verification", "trial", "active", "grace", "expired", "suspended"] as const;
 export const USER_STATUSES = ["pending_verification", "active", "suspended", "deactivated"] as const;
 export const LOCALES = ["en", "sw"] as const;
