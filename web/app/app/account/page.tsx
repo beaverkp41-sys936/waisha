@@ -21,6 +21,9 @@ export default function PostLogin() {
   const [me, setMe] = useState<any>(null);
   const [sessions, setSessions] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [profile, setProfile] = useState({ fullName: "", phone: "", jobTitle: "" });
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileNotice, setProfileNotice] = useState<string | null>(null);
   const { licence, loading, reload } = useLicence();
   const [gateOpen, setGateOpen] = useState(false);
 
@@ -58,6 +61,32 @@ export default function PostLogin() {
   }, [api]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Prefill the self-service profile once identity is known.
+  useEffect(() => {
+    if (me) setProfile(p => ({ ...p, fullName: me.full_name ?? "" }));
+  }, [me]);
+
+  async function saveProfile(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setProfileBusy(true); setError(null); setProfileNotice(null);
+    try {
+      const r = await api("/users/me/profile", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName: profile.fullName,
+          // blank phone keeps the stored (encrypted) value
+          phone: profile.phone || undefined,
+          jobTitle: profile.jobTitle || null
+        })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setError(j?.error?.message ?? "Could not save profile"); return; }
+      setProfileNotice("Profile saved.");
+      setProfile(p => ({ ...p, phone: "" }));
+      load();
+    } finally { setProfileBusy(false); }
+  }
 
   async function revoke(id: string) {
     await api(`/auth/sessions/${id}`, { method: "DELETE" });
@@ -103,6 +132,51 @@ export default function PostLogin() {
               Plan: <strong>{licence.plan}</strong> · Status: {licence.subscription_status ?? licence.tenant_status}
             </p>
           )}
+        </section>
+      )}
+
+      {me && (
+        <section className="mb-32 rounded-card border bg-surface p-24" style={{ borderColor: "var(--line)" }}>
+          <h2 className="mb-16 text-sm font-semibold">Your profile</h2>
+          {profileNotice && (
+            <div role="status" className="mb-16 rounded-input px-12 py-8 text-sm"
+              style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>
+              {profileNotice}
+            </div>
+          )}
+          <form onSubmit={saveProfile} className="space-y-12">
+            <div className="grid grid-cols-2 gap-12">
+              <label className="block">
+                <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Full name</span>
+                <input value={profile.fullName} required
+                  onChange={e => setProfile(p => ({ ...p, fullName: e.target.value }))}
+                  className="w-full rounded-input border px-12 py-8 text-sm"
+                  style={{ borderColor: "var(--line)", background: "var(--milk)" }} />
+              </label>
+              <label className="block">
+                <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+                  Phone — blank keeps current
+                </span>
+                <input value={profile.phone} placeholder="+255712345678"
+                  onChange={e => setProfile(p => ({ ...p, phone: e.target.value }))}
+                  className="w-full rounded-input border px-12 py-8 text-sm"
+                  style={{ borderColor: "var(--line)", background: "var(--milk)" }} />
+              </label>
+              <label className="block col-span-2">
+                <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+                  Job title / rank
+                </span>
+                <input value={profile.jobTitle} placeholder="e.g. Dispatcher"
+                  onChange={e => setProfile(p => ({ ...p, jobTitle: e.target.value }))}
+                  className="w-full rounded-input border px-12 py-8 text-sm"
+                  style={{ borderColor: "var(--line)", background: "var(--milk)" }} />
+              </label>
+            </div>
+            <button type="submit" disabled={profileBusy}
+              className="waisha-btn rounded-input px-24 py-8 text-xs font-semibold disabled:opacity-60">
+              {profileBusy ? "Saving…" : "Save profile"}
+            </button>
+          </form>
         </section>
       )}
 

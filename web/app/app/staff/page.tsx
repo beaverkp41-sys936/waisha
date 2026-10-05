@@ -12,7 +12,8 @@ function errorText(json: any, fallback: string): string {
 
 interface Member {
   id: string; full_name: string | null; email: string | null;
-  status: string; user_type: string; last_login_at: string | null;
+  status: string; user_type: string; job_title: string | null;
+  last_login_at: string | null;
   created_at: string; roles: { key: string; name: string }[];
 }
 interface Role { key: string; name: string; }
@@ -27,9 +28,9 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 interface StaffForm {
-  fullName: string; email: string; phone: string; roleKeys: string[];
+  fullName: string; email: string; phone: string; jobTitle: string; roleKeys: string[];
 }
-const EMPTY: StaffForm = { fullName: "", email: "", phone: "", roleKeys: [] };
+const EMPTY: StaffForm = { fullName: "", email: "", phone: "", jobTitle: "", roleKeys: [] };
 
 export default function StaffPage() {
   const [members, setMembers] = useState<Member[]>([]);
@@ -71,10 +72,17 @@ export default function StaffPage() {
       const res = await apiFetch(editing ? `/users/${editingId}` : "/users", {
         method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(editing
-          ? { fullName: form.fullName, roleKeys: form.roleKeys }
+          ? {
+              fullName: form.fullName,
+              // blank phone keeps the stored (encrypted) value
+              phone: form.phone || undefined,
+              jobTitle: form.jobTitle || null,
+              roleKeys: form.roleKeys
+            }
           : {
               fullName: form.fullName, email: form.email,
-              phone: form.phone || null, roleKeys: form.roleKeys
+              phone: form.phone || null, jobTitle: form.jobTitle || null,
+              roleKeys: form.roleKeys
             })
       });
       const j = await res.json().catch(() => ({}));
@@ -94,6 +102,7 @@ export default function StaffPage() {
     setEditingId(m.id);
     setForm({
       fullName: m.full_name ?? "", email: m.email ?? "", phone: "",
+      jobTitle: m.job_title ?? "",
       roleKeys: (m.roles ?? []).map(r => r.key)
     });
     setError(null); setNotice(null); setInviteUrl(null); setShowForm(true);
@@ -183,21 +192,27 @@ export default function StaffPage() {
                 className={inputCls} style={inputStyle} />
             </label>
             {editingId === null && (
-              <>
-                <label className="block">
-                  <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Work email *</span>
-                  <input type="email" required value={form.email}
-                    onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
-                    placeholder="name@company.co.tz" className={inputCls} style={inputStyle} />
-                </label>
-                <label className="block">
-                  <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Phone (optional)</span>
-                  <input value={form.phone}
-                    onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-                    placeholder="+255712345678" className={inputCls} style={inputStyle} />
-                </label>
-              </>
+              <label className="block">
+                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Work email *</span>
+                <input type="email" required value={form.email}
+                  onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                  placeholder="name@company.co.tz" className={inputCls} style={inputStyle} />
+              </label>
             )}
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>
+                Phone{editingId ? " — blank keeps current" : " (optional)"}
+              </span>
+              <input value={form.phone}
+                onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
+                placeholder="+255712345678" className={inputCls} style={inputStyle} />
+            </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Job title / rank</span>
+              <input value={form.jobTitle}
+                onChange={e => setForm(f => ({ ...f, jobTitle: e.target.value }))}
+                placeholder="e.g. Operations Manager" className={inputCls} style={inputStyle} />
+            </label>
           </div>
           <div>
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Roles * (pick at least one)</span>
@@ -241,6 +256,9 @@ export default function StaffPage() {
                     <span className="ml-8 text-[10px] font-bold uppercase" style={{ color: "var(--gold)" }}>Director</span>
                   )}
                   <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>{m.email ?? ""}</span>
+                  {m.job_title && (
+                    <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>{m.job_title}</span>
+                  )}
                 </td>
                 <td className="p-12">
                   {(m.roles ?? []).length === 0 ? <span style={{ color: "var(--ink-soft)" }}>—</span> : (

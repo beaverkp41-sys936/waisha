@@ -30,7 +30,16 @@ const inviteSchema = z.object({
 
 const editSchema = z.object({
   fullName: z.string().trim().min(2).max(120).optional(),
+  phone: e164.nullable().optional(),
+  jobTitle: z.string().trim().max(80).nullable().optional(),
   roleKeys: z.array(z.string().trim().min(1).max(40)).min(1).max(5).optional()
+});
+
+// Self-service: a member maintains their own profile, never their roles.
+const profileSchema = z.object({
+  fullName: z.string().trim().min(2).max(120).optional(),
+  phone: e164.nullable().optional(),
+  jobTitle: z.string().trim().max(80).nullable().optional()
 });
 
 const statusSchema = z.object({
@@ -89,7 +98,7 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
   app.get("/users", { preHandler: [requireAuth, requirePermission("users.view")] },
     async (req: any) => {
       const { rows } = await withTenant(req.user.tid, (c) => c.query(
-        `select u.id, u.full_name, u.email, u.status, u.user_type,
+        `select u.id, u.full_name, u.email, u.status, u.user_type, u.job_title,
                 u.last_login_at, u.created_at,
                 coalesce((select json_agg(json_build_object('key', r.key, 'name', r.name)
                             order by r.name)
@@ -201,6 +210,44 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
       return reply.status(201).send({ id, inviteUrl });
     });
 
+  // ---------- Self-service profile (no roles, no permission needed) ----------
+  app.put("/users/me/profile", { preHandler: [requireAuth] }, async (req: any, reply) => {
+    const body = profileSchema.parse(req.body);
+    const uid = req.user.sub;
+
+    await withTenant(req.user.tid, async (c) => {
+      if (body.fullName) {
+        await c.query(
+          `update users set full_name = $2, updated_by = $2, updated_at = now()
+           where id = $1 and tenant_id = $3 and deleted_at is null`,
+          [uid, body.fullName, req.user.tid]);
+      }
+      if ("phone" in body) {
+        await c.query(
+          `update users set phone_encrypted = $2, phone_search = $3,
+             updated_by = $1, updated_at = now()
+           where id = $1 and tenant_id = $4 and deleted_at is null`,
+          [uid,
+           body.phone != null ? encryptField(body.phone) : null,
+           body.phone != null ? searchHash(body.phone) : null,
+           req.user.tid]);
+      }
+      if ("jobTitle" in body) {
+        await c.query(
+          `update users set job_title = $2, updated_by = $1, updated_at = now()
+           where id = $1 and tenant_id = $3 and deleted_at is null`,
+          [uid, body.jobTitle ?? null, req.user.tid]);
+      }
+      await writeAudit(c, {
+        tenantId: req.user.tid, actorUserId: uid, ip: req.ip,
+        requestId: req.requestId, entity: "users", entityId: uid,
+        action: "profile.updated",
+        after: { fullName: body.fullName ?? null, jobTitle: body.jobTitle ?? null }
+      });
+    });
+    return reply.send({ ok: true });
+  });
+
   // ---------- Edit (name and role set) ----------
   app.put("/users/:id", { preHandler: [requireAuth, requirePermission("users.edit")] },
     async (req: any, reply) => {
@@ -224,6 +271,22 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
             `update users set full_name = $2, updated_by = $3, updated_at = now()
              where id = $1 and tenant_id = $3 and deleted_at is null`,
             [id, body.fullName, req.user.sub]);
+        }
+        if ("phone" in body) {
+          await c.query(
+            `update users set phone_encrypted = $2, phone_search = $3,
+               updated_by = $4, updated_at = now()
+             where id = $1 and tenant_id = $4 and deleted_at is null`,
+            [id,
+             body.phone != null ? encryptField(body.phone) : null,
+             body.phone != null ? searchHash(body.phone) : null,
+             req.user.sub]);
+        }
+        if ("jobTitle" in body) {
+          await c.query(
+            `update users set job_title = $2, updated_by = $3, updated_at = now()
+             where id = $1 and tenant_id = $3 and deleted_at is null`,
+            [id, body.jobTitle ?? null, req.user.sub]);
         }
 
         if (body.roleKeys) {

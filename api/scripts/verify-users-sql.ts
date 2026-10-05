@@ -11,7 +11,7 @@ const FAKE_TENANT = "00000000-0000-7000-8000-000000000000";
 const FAKE_USER = "11111111-1111-7111-8111-111111111111";
 
 const listSql = `
-  select u.id, u.full_name, u.email, u.status, u.user_type,
+  select u.id, u.full_name, u.email, u.status, u.user_type, u.job_title,
          u.last_login_at, u.created_at,
          coalesce((select json_agg(json_build_object('key', r.key, 'name', r.name)
                      order by r.name)
@@ -71,7 +71,26 @@ const checks: [string, string, unknown[]][] = [
   ["reinvite: burn tokens", `update password_resets set used_at = now()
    where user_id = $1 and used_at is null`, [FAKE_USER]],
   ["reset: promote invitee", `update users set password_hash=$2, status='active' where id=$1`,
-    [FAKE_USER, "h"]]
+    [FAKE_USER, "h"]],
+  ["edit: phone", `update users set phone_encrypted = $2, phone_search = $3,
+     updated_by = $4, updated_at = now()
+   where id = $1 and tenant_id = $4 and deleted_at is null`,
+    [FAKE_USER, null, null, FAKE_USER]],
+  ["edit: job title", `update users set job_title = $2, updated_by = $3, updated_at = now()
+   where id = $1 and tenant_id = $3 and deleted_at is null`,
+    [FAKE_USER, "Dispatcher", FAKE_USER]],
+  ["fleet: dims insert", `insert into vessels (id, tenant_id, name, vessel_type, plate_number,
+     gross_weight_kg, length_m, width_m, height_m, fuel_type, status)
+   values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'diesel','standby')`,
+    [FAKE_USER, FAKE_TENANT, "V", "truck_head", "T 1 ABC", 1, 2, 3, 4]],
+  ["fleet: dims update", `update vessels set gross_weight_kg = $2, length_m = $3,
+     width_m = $4, height_m = $5, updated_by = $6, updated_at = now()
+   where id = $1 and tenant_id = $7 and deleted_at is null`,
+    [FAKE_USER, 1, 2, 3, 4, FAKE_USER, FAKE_TENANT]],
+  ["vessels: active trip ref", `select v.*, (select t.reference from trips t
+     where t.vessel_id = v.id and t.status in ('planned','in_transit')
+       and t.deleted_at is null order by t.created_at desc limit 1) as active_trip_reference
+   from vessels v where v.tenant_id = $1 limit 1`, [FAKE_TENANT]]
 ];
 
 async function main() {
