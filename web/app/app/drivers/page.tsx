@@ -6,8 +6,10 @@ interface Driver {
   id: string; full_name: string; licence_class: string | null;
   licence_number: string | null; licence_expiry: string | null;
   status: string; blood_group: string | null; vessel_name: string | null;
-  branch_name: string | null; licence_status: string;
-  assigned_vessel_id: string | null;
+  branch_name: string | null; branch_id: string | null; licence_status: string;
+  assigned_vessel_id: string | null; address: string | null;
+  next_of_kin: string | null; notes: string | null;
+  defensive_driving_cert: boolean | null; dangerous_goods_cert: boolean | null;
 }
 interface Vessel { id: string; name: string; }
 interface Branch { id: string; name: string; }
@@ -40,6 +42,7 @@ export default function DriversPage() {
   const [vessels, setVessels] = useState<Vessel[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<DriverForm>(EMPTY);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -58,31 +61,57 @@ export default function DriversPage() {
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); setError(null); setNotice(null); setBusy(true);
+    const editing = editingId !== null;
     try {
-      const res = await apiFetch("/drivers", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      // On edit, blank NIDA/phone are sent as undefined so the backend keeps the
+      // stored (encrypted) values — they are never returned by the API.
+      const res = await apiFetch(editing ? `/drivers/${editingId}` : "/drivers", {
+        method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          fullName: form.fullName, nida: form.nida || undefined, phone: form.phone,
-          licenceClass: form.licenceClass || undefined,
-          licenceNumber: form.licenceNumber || undefined,
-          licenceExpiry: form.licenceExpiry || undefined,
-          bloodGroup: form.bloodGroup || undefined,
+          fullName: form.fullName,
+          // blank keeps the stored (encrypted) values — the API never returns them
+          nida: form.nida || undefined,
+          phone: form.phone || undefined,
+          nextOfKinPhone: form.nextOfKinPhone || undefined,
+          // blank clears the stored value
+          licenceClass: form.licenceClass || null,
+          licenceNumber: form.licenceNumber || null,
+          licenceExpiry: form.licenceExpiry || null,
+          bloodGroup: form.bloodGroup || null,
+          address: form.address || null,
+          nextOfKin: form.nextOfKin || null,
+          notes: form.notes || null,
           assignedVesselId: form.assignedVesselId || null,
           branchId: form.branchId || null,
-          address: form.address || undefined,
-          nextOfKin: form.nextOfKin || undefined,
-          nextOfKinPhone: form.nextOfKinPhone || undefined,
+          status: form.status || undefined,
           defensiveDrivingCert: form.defensiveDrivingCert,
-          dangerousGoodsCert: form.dangerousGoodsCert,
-          notes: form.notes || undefined
+          dangerousGoodsCert: form.dangerousGoodsCert
         })
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setError(j?.error?.message ?? "Failed"); return; }
-      setNotice(`Driver "${form.fullName}" registered.`);
-      setForm(EMPTY); setShowForm(false);
+      setNotice(editing ? `Driver "${form.fullName}" updated.` : `Driver "${form.fullName}" registered.`);
+      setForm(EMPTY); setEditingId(null); setShowForm(false);
       load();
     } finally { setBusy(false); }
+  }
+
+  function startEdit(d: Driver) {
+    setEditingId(d.id);
+    setForm({
+      fullName: d.full_name ?? "", nida: "", phone: "",
+      licenceClass: d.licence_class ?? "", licenceNumber: d.licence_number ?? "",
+      licenceExpiry: d.licence_expiry ? d.licence_expiry.slice(0, 10) : "",
+      bloodGroup: d.blood_group ?? "",
+      assignedVesselId: d.assigned_vessel_id ?? "",
+      branchId: d.branch_id ?? "", status: d.status ?? "available",
+      address: d.address ?? "", nextOfKin: d.next_of_kin ?? "", nextOfKinPhone: "",
+      defensiveDrivingCert: !!d.defensive_driving_cert,
+      dangerousGoodsCert: !!d.dangerous_goods_cert,
+      notes: d.notes ?? ""
+    });
+    setError(null); setNotice(null); setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function remove(id: string) {
@@ -103,7 +132,7 @@ export default function DriversPage() {
             Licences, certifications and vessel assignments.
           </p>
         </div>
-        <button type="button" onClick={() => setShowForm(s => !s)}
+        <button type="button" onClick={() => { setForm(EMPTY); setEditingId(null); setShowForm(s => !s); }}
           className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">
           {showForm ? "Close form" : "+ Add driver"}
         </button>
@@ -122,14 +151,19 @@ export default function DriversPage() {
                 className={inputCls} style={inputStyle} />
             </label>
             <label className="block">
-              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>NIDA (20 digits)</span>
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>
+                NIDA (20 digits){editingId ? " — blank keeps current" : ""}
+              </span>
               <input inputMode="numeric" maxLength={20} value={form.nida}
                 onChange={e => setForm(f => ({ ...f, nida: e.target.value }))}
                 className={inputCls} style={inputStyle} />
             </label>
             <label className="block">
-              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Phone *</span>
-              <input required value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>
+                Phone {editingId ? "— blank keeps current" : "*"}
+              </span>
+              <input required={editingId === null} value={form.phone}
+                onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
                 placeholder="+255712345678" className={inputCls} style={inputStyle} />
             </label>
             <label className="block">
@@ -171,6 +205,13 @@ export default function DriversPage() {
                 {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
               </select>
             </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Status</span>
+              <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
+                className={inputCls} style={inputStyle}>
+                {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </label>
           </div>
           <div className="grid grid-cols-2 gap-12">
             <label className="block">
@@ -204,7 +245,7 @@ export default function DriversPage() {
             </label>
           </div>
           <button type="submit" disabled={busy} className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">
-            {busy ? "Registering" : "Register driver"}
+            {busy ? (editingId ? "Saving…" : "Registering…") : (editingId ? "Save changes" : "Register driver")}
           </button>
         </form>
       )}
@@ -237,7 +278,9 @@ export default function DriversPage() {
                     {STATUS_LABELS[d.status] ?? d.status}
                   </span>
                 </td>
-                <td className="p-12 text-right">
+                <td className="p-12 text-right whitespace-nowrap">
+                  <button type="button" className="mr-12 underline" style={{ color: "var(--ink-soft)" }}
+                    onClick={() => startEdit(d)}>Edit</button>
                   <button type="button" className="underline" style={{ color: "var(--danger)" }}
                     onClick={() => remove(d.id)}>Remove</button>
                 </td>
