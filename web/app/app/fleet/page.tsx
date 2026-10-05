@@ -8,6 +8,9 @@ interface Vessel {
   capacity_tonnes: string | null; fuel_type: string; odometer_km: number;
   status: string; branch_name: string | null; document_status: string;
   imo_number: string | null; home_port: string | null; water_body: string | null;
+  gross_weight_kg: string | null; length_m: string | null;
+  width_m: string | null; height_m: string | null;
+  active_trip_reference: string | null;
 }
 interface Branch { id: string; name: string; }
 
@@ -45,9 +48,11 @@ export default function FleetPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<Record<string, any>>({
     name: "", vesselType: "truck_head", plateNumber: "", make: "", model: "",
     yearManufactured: "", capacityTonnes: "", fuelType: "diesel",
+    grossWeightKg: "", lengthM: "", widthM: "", heightM: "",
     branchId: "", insuranceExpiry: "", inspectionExpiry: "", roadLicenceExpiry: "",
     imoNumber: "", homePort: "", waterBody: ""
   });
@@ -72,30 +77,57 @@ export default function FleetPage() {
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); setError(null); setNotice(null); setBusy(true);
     try {
-      const res = await apiFetch("/vessels", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: form.name, vesselType: form.vesselType, plateNumber: form.plateNumber,
-          make: form.make || undefined, model: form.model || undefined,
-          yearManufactured: form.yearManufactured ? Number(form.yearManufactured) : undefined,
-          capacityTonnes: form.capacityTonnes ? Number(form.capacityTonnes) : undefined,
-          fuelType: form.fuelType,
-          branchId: form.branchId || null,
-          insuranceExpiry: form.insuranceExpiry || undefined,
-          inspectionExpiry: form.inspectionExpiry || undefined,
-          roadLicenceExpiry: form.roadLicenceExpiry || undefined,
-          imoNumber: isWater ? (form.imoNumber || undefined) : undefined,
-          homePort: isWater ? (form.homePort || undefined) : undefined,
-          waterBody: isWater ? (form.waterBody || undefined) : undefined
-        })
+      // Presence-based PUT: an empty field clears the stored value.
+      const payload = {
+        name: form.name, vesselType: form.vesselType, plateNumber: form.plateNumber,
+        make: form.make || null, model: form.model || null,
+        yearManufactured: form.yearManufactured ? Number(form.yearManufactured) : null,
+        capacityTonnes: form.capacityTonnes ? Number(form.capacityTonnes) : null,
+        grossWeightKg: form.grossWeightKg ? Number(form.grossWeightKg) : null,
+        lengthM: form.lengthM ? Number(form.lengthM) : null,
+        widthM: form.widthM ? Number(form.widthM) : null,
+        heightM: form.heightM ? Number(form.heightM) : null,
+        fuelType: form.fuelType,
+        branchId: form.branchId || null,
+        insuranceExpiry: form.insuranceExpiry || null,
+        inspectionExpiry: form.inspectionExpiry || null,
+        roadLicenceExpiry: form.roadLicenceExpiry || null,
+        imoNumber: isWater ? (form.imoNumber || null) : null,
+        homePort: isWater ? (form.homePort || null) : null,
+        waterBody: isWater ? (form.waterBody || null) : null
+      };
+      const res = await apiFetch(editingId ? `/vessels/${editingId}` : "/vessels", {
+        method: editingId ? "PUT" : "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setError(j?.error?.message ?? "Failed"); return; }
-      setNotice(`Vessel "${form.name}" registered.`);
+      setNotice(editingId ? `Vessel "${form.name}" updated.` : `Vessel "${form.name}" registered.`);
       setShowForm(false);
+      setEditingId(null);
       setForm(f => ({ ...f, name: "", plateNumber: "", make: "", model: "", yearManufactured: "", capacityTonnes: "" }));
       load();
     } finally { setBusy(false); }
+  }
+
+  function startEdit(v: Vessel) {
+    setEditingId(v.id);
+    setForm(f => ({
+      ...f,
+      name: v.name ?? "", vesselType: v.vessel_type ?? "truck_head",
+      plateNumber: v.plate_number ?? "", make: v.make ?? "", model: v.model ?? "",
+      yearManufactured: v.year_manufactured ? String(v.year_manufactured) : "",
+      capacityTonnes: v.capacity_tonnes ?? "",
+      grossWeightKg: v.gross_weight_kg ?? "", lengthM: v.length_m ?? "",
+      widthM: v.width_m ?? "", heightM: v.height_m ?? "",
+      insuranceExpiry: (v as any).insurance_expiry ? String((v as any).insurance_expiry).slice(0, 10) : "",
+      inspectionExpiry: (v as any).inspection_expiry ? String((v as any).inspection_expiry).slice(0, 10) : "",
+      roadLicenceExpiry: (v as any).road_licence_expiry ? String((v as any).road_licence_expiry).slice(0, 10) : "",
+      branchId: (v as any).branch_id ?? "",
+      imoNumber: v.imo_number ?? "", homePort: v.home_port ?? "", waterBody: v.water_body ?? ""
+    }));
+    setError(null); setNotice(null); setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function changeStatus(v: Vessel, status: string) {
@@ -127,7 +159,7 @@ export default function FleetPage() {
             Vessels and marine units — road, lake and sea.
           </p>
         </div>
-        <button type="button" onClick={() => setShowForm(s => !s)}
+        <button type="button" onClick={() => { setEditingId(null); setShowForm(s => !s); }}
           className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">
           {showForm ? "Close form" : "+ Add vessel"}
         </button>
@@ -211,6 +243,26 @@ export default function FleetPage() {
                 onChange={e => setForm(f => ({ ...f, capacityTonnes: e.target.value }))} className={inputCls} style={inputStyle} />
             </label>
             <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Gross weight (kg)</span>
+              <input type="number" step="0.01" min={0} value={form.grossWeightKg}
+                onChange={e => setForm(f => ({ ...f, grossWeightKg: e.target.value }))} className={inputCls} style={inputStyle} />
+            </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Length (m)</span>
+              <input type="number" step="0.01" min={0} value={form.lengthM}
+                onChange={e => setForm(f => ({ ...f, lengthM: e.target.value }))} className={inputCls} style={inputStyle} />
+            </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Width (m)</span>
+              <input type="number" step="0.01" min={0} value={form.widthM}
+                onChange={e => setForm(f => ({ ...f, widthM: e.target.value }))} className={inputCls} style={inputStyle} />
+            </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Height (m)</span>
+              <input type="number" step="0.01" min={0} value={form.heightM}
+                onChange={e => setForm(f => ({ ...f, heightM: e.target.value }))} className={inputCls} style={inputStyle} />
+            </label>
+            <label className="block">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Fuel</span>
               <select value={form.fuelType} onChange={e => setForm(f => ({ ...f, fuelType: e.target.value }))} className={inputCls} style={inputStyle}>
                 {Object.entries(FUELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
@@ -240,7 +292,7 @@ export default function FleetPage() {
           </div>
           <button type="submit" disabled={trialBlocked || busy}
             className="waisha-btn w-full rounded-input py-12 text-sm font-semibold disabled:opacity-60">
-            {busy ? "Registering" : "Register vessel"}
+            {busy ? "Saving" : (editingId ? "Save changes" : "Register vessel")}
           </button>
         </form>
       )}
@@ -263,12 +315,23 @@ export default function FleetPage() {
                 <td className="p-12 tabular-nums" style={{ color: "var(--ink-soft)" }}>{v.plate_number}</td>
                 <td className="p-12 tabular-nums" style={{ color: "var(--ink-soft)" }}>
                   {v.capacity_tonnes ? `${Number(v.capacity_tonnes).toLocaleString()} t` : "—"}
+                  {(v.length_m || v.width_m || v.height_m) && (
+                    <span className="block text-xs">
+                      {[v.length_m, v.width_m, v.height_m].filter(Boolean).map(n => Number(n)).join(" × ")} m
+                    </span>
+                  )}
+                  {v.gross_weight_kg && <span className="block text-xs">{Number(v.gross_weight_kg).toLocaleString()} kg GVW</span>}
                 </td>
                 <td className="p-12">
                   <span className="px-8 py-4 text-[10px] font-bold uppercase"
                     style={{ borderLeft: `4px solid ${STATUS_COLORS[v.status] ?? "var(--ink-soft)"}`, color: "var(--ink)" }}>
                     {STATUS_LABELS[v.status] ?? v.status}
                   </span>
+                  {v.active_trip_reference && (
+                    <span className="mt-4 block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                      Trip {v.active_trip_reference}
+                    </span>
+                  )}
                 </td>
                 <td className="p-12" style={{ color: "var(--ink-soft)" }}>{v.branch_name ?? "—"}</td>
                 <td className="p-12">
@@ -281,6 +344,8 @@ export default function FleetPage() {
                   {v.document_status === "ok" && <span style={{ color: "var(--ink-soft)" }}>OK</span>}
                 </td>
                 <td className="p-12 text-right whitespace-nowrap">
+                  <button type="button" className="mr-12 underline" style={{ color: "var(--ink-soft)" }}
+                    onClick={() => startEdit(v)}>Edit</button>
                   <select defaultValue="" onChange={e => { if (e.target.value) changeStatus(v, e.target.value); e.target.value = ""; }}
                     className="rounded-input border px-8 py-4 text-xs mr-8"
                     style={{ borderColor: "var(--line)", background: "var(--milk)", color: "var(--ink)" }}>

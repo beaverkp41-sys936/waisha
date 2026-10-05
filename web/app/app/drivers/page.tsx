@@ -10,6 +10,7 @@ interface Driver {
   assigned_vessel_id: string | null; address: string | null;
   next_of_kin: string | null; notes: string | null;
   defensive_driving_cert: boolean | null; dangerous_goods_cert: boolean | null;
+  active_trip_reference: string | null;
 }
 interface Vessel { id: string; name: string; }
 interface Branch { id: string; name: string; }
@@ -277,6 +278,11 @@ export default function DriversPage() {
                     style={{ borderLeft: `4px solid ${STATUS_COLORS[d.status] ?? "var(--ink-soft)"}`, color: "var(--ink)" }}>
                     {STATUS_LABELS[d.status] ?? d.status}
                   </span>
+                  {d.active_trip_reference && (
+                    <span className="mt-4 block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                      Trip {d.active_trip_reference}
+                    </span>
+                  )}
                 </td>
                 <td className="p-12 text-right whitespace-nowrap">
                   <button type="button" className="mr-12 underline" style={{ color: "var(--ink-soft)" }}

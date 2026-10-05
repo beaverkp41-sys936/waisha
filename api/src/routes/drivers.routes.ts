@@ -47,13 +47,16 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
                 when d.licence_expiry is not null and d.licence_expiry < current_date then 'expired'
                 when d.licence_expiry is not null and d.licence_expiry < current_date + 30 then 'expiring'
                 else 'ok'
-              end as licence_status
+              end as licence_status,
+              (select t.reference from trips t
+                where t.driver_id = d.id and t.status in ('planned','in_transit')
+                  and t.deleted_at is null
+                order by t.created_at desc limit 1) as active_trip_reference
        from drivers d
        left join vessels v on v.id = d.assigned_vessel_id
        left join branches b on b.id = d.branch_id
        where d.tenant_id = $1 and d.deleted_at is null
-       order by d.full_name`, [req.user.tid]));
-    return rows;
+       order by d.full_name`, [req.user.tid]));    return rows;
   });
 
   // ---------- Create ----------

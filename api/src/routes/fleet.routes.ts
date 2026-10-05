@@ -27,6 +27,10 @@ const vesselSchema = z.object({
   capacityTonnes: z.number().nonnegative().optional(),
   capacityM3: z.number().nonnegative().optional(),
   capacityTeu: z.number().int().nonnegative().optional(),
+  grossWeightKg: z.number().nonnegative().optional(),
+  lengthM: z.number().nonnegative().optional(),
+  widthM: z.number().nonnegative().optional(),
+  heightM: z.number().nonnegative().optional(),
   fuelType: z.enum(["diesel","petrol","cng","lng","electric","hydrogen","hybrid"]).default("diesel"),
   odometerKm: z.number().int().nonnegative().default(0),
   insurancePolicy: z.string().max(60).optional(),
@@ -50,6 +54,10 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
   app.get("/vessels", { preHandler: [requireAuth] }, async (req: any) => {
     const { rows } = await withTenant(req.user.tid, (c) => c.query(
       `select v.*, b.name as branch_name,
+              (select t.reference from trips t
+                where t.vessel_id = v.id and t.status in ('planned','in_transit')
+                  and t.deleted_at is null
+                order by t.created_at desc limit 1) as active_trip_reference,
               case
                 when v.insurance_expiry is not null and v.insurance_expiry < current_date + 30 then 'expiring'
                 when v.inspection_expiry is not null and v.inspection_expiry < current_date + 30 then 'expiring'
@@ -104,9 +112,10 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
            capacity_tonnes, capacity_m3, capacity_teu, fuel_type, odometer_km,
            insurance_policy, insurance_expiry, inspection_expiry, road_licence_expiry,
            imo_number, home_port, water_body,
+           gross_weight_kg, length_m, width_m, height_m,
            status, created_by, updated_by)
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-           $21,$22,$23,'standby',$24,$24)`,
+           $21,$22,$23,$25,$26,$27,$28,'standby',$24,$24)`,
         [id, req.user.tid, body.branchId ?? null, body.name, body.vesselType,
          body.plateNumber, body.chassisVin ?? null, body.engineNumber ?? null,
          body.make ?? null, body.model ?? null, body.yearManufactured ?? null,
@@ -115,7 +124,9 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
          body.insurancePolicy ?? null, body.insuranceExpiry ?? null,
          body.inspectionExpiry ?? null, body.roadLicenceExpiry ?? null,
          body.imoNumber ?? null, body.homePort ?? null, body.waterBody ?? null,
-         req.user.sub]);
+         req.user.sub,
+         body.grossWeightKg ?? null, body.lengthM ?? null,
+         body.widthM ?? null, body.heightM ?? null]);
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         requestId: req.requestId, entity: "vessels", entityId: id,
@@ -127,39 +138,56 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
     return reply.status(201).send({ id });
   });
 
-  // ---------- Update (full-form save): STATIC SQL, every value bound ----------
+  // ---------- Update (presence-based): absent key keeps, explicit null clears ----------
   app.put("/vessels/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
-    const body = vesselSchema.parse(req.body);
+    const body = vesselSchema.partial().parse(req.body);
 
     const prev = await withTenant(req.user.tid, (c) => c.query(
       "select status from vessels where id=$1 and tenant_id=$2 and deleted_at is null",
       [id, req.user.tid]));
     if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Vessel not found", 404);
 
+    const sets: string[] = [];
+    const params: unknown[] = [id, req.user.sub, req.user.tid]; // $1 id, $2 updated_by, $3 tenant_id
+    const set = (col: string, val: unknown) => {
+      params.push(val);
+      sets.push(`${col} = $${params.length}`);
+    };
+
+    if ("name" in body) set("name", body.name);
+    if ("vesselType" in body) set("vessel_type", body.vesselType);
+    if ("plateNumber" in body) set("plate_number", body.plateNumber);
+    if ("chassisVin" in body) set("chassis_vin", body.chassisVin ?? null);
+    if ("engineNumber" in body) set("engine_number", body.engineNumber ?? null);
+    if ("make" in body) set("make", body.make ?? null);
+    if ("model" in body) set("model", body.model ?? null);
+    if ("yearManufactured" in body) set("year_manufactured", body.yearManufactured ?? null);
+    if ("capacityTonnes" in body) set("capacity_tonnes", body.capacityTonnes ?? null);
+    if ("capacityM3" in body) set("capacity_m3", body.capacityM3 ?? null);
+    if ("capacityTeu" in body) set("capacity_teu", body.capacityTeu ?? null);
+    if ("fuelType" in body) set("fuel_type", body.fuelType);
+    if ("odometerKm" in body) set("odometer_km", body.odometerKm ?? 0);
+    if ("insurancePolicy" in body) set("insurance_policy", body.insurancePolicy ?? null);
+    if ("insuranceExpiry" in body) set("insurance_expiry", body.insuranceExpiry ?? null);
+    if ("inspectionExpiry" in body) set("inspection_expiry", body.inspectionExpiry ?? null);
+    if ("roadLicenceExpiry" in body) set("road_licence_expiry", body.roadLicenceExpiry ?? null);
+    if ("branchId" in body) set("branch_id", body.branchId ?? null);
+    if ("imoNumber" in body) set("imo_number", body.imoNumber ?? null);
+    if ("homePort" in body) set("home_port", body.homePort ?? null);
+    if ("waterBody" in body) set("water_body", body.waterBody ?? null);
+    if ("grossWeightKg" in body) set("gross_weight_kg", body.grossWeightKg ?? null);
+    if ("lengthM" in body) set("length_m", body.lengthM ?? null);
+    if ("widthM" in body) set("width_m", body.widthM ?? null);
+    if ("heightM" in body) set("height_m", body.heightM ?? null);
+
     await withTenant(req.user.tid, async (c) => {
-      await c.query(
-        `update vessels set
-           name = $2, vessel_type = $3, plate_number = $4, chassis_vin = $5,
-           engine_number = $6, make = $7, model = $8, year_manufactured = $9,
-           capacity_tonnes = $10, capacity_m3 = $11, capacity_teu = $12,
-           fuel_type = $13, odometer_km = $14, insurance_policy = $15,
-           insurance_expiry = $16, inspection_expiry = $17,
-           road_licence_expiry = $18, branch_id = $19, imo_number = $20,
-           home_port = $21, water_body = $22,
-           updated_by = $23, updated_at = now()
-         where id = $1 and tenant_id = $23 and deleted_at is null`,
-        [id,
-         body.name, body.vesselType, body.plateNumber,
-         body.chassisVin ?? null, body.engineNumber ?? null,
-         body.make ?? null, body.model ?? null, body.yearManufactured ?? null,
-         body.capacityTonnes ?? null, body.capacityM3 ?? null, body.capacityTeu ?? null,
-         body.fuelType, body.odometerKm,
-         body.insurancePolicy ?? null, body.insuranceExpiry ?? null,
-         body.inspectionExpiry ?? null, body.roadLicenceExpiry ?? null,
-         body.branchId ?? null, body.imoNumber ?? null, body.homePort ?? null,
-         body.waterBody ?? null,
-         req.user.sub]);
+      if (sets.length) {
+        await c.query(
+          `update vessels set ${["updated_by = $2", "updated_at = now()", ...sets].join(", ")}
+           where id = $1 and tenant_id = $3 and deleted_at is null`,
+          params);
+      }
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         requestId: req.requestId, entity: "vessels", entityId: id,
