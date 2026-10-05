@@ -9,6 +9,7 @@ const NAV = [
   { href: "/app/fleet", label: "Fleet", accent: "var(--gold-green)" },
   { href: "/app/routes", label: "Routes", accent: "var(--gold)" },
   { href: "/app/drivers", label: "Drivers", accent: "var(--success)" },
+  { href: "/app/trips", label: "Trips", accent: "var(--gold)" },
   { href: "/app/account", label: "Account", accent: "rgba(255,255,255,0.7)" }
 ];
 

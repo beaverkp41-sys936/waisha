@@ -29,6 +29,7 @@ export default function DashboardPage() {
   const [fleet, setFleet] = useState<{ vessels: any[]; fleetLimit: number | null; fleetUsed: number } | null>(null);
   const [branches, setBranches] = useState<any[]>([]);
   const [routes, setRoutes] = useState<any[]>([]);
+  const [trips, setTrips] = useState<any[]>([]);
   const [licence, setLicence] = useState<any>(null);
   const [ready, setReady] = useState(false);
 
@@ -40,14 +41,15 @@ export default function DashboardPage() {
         const m = await apiFetch("/auth/me");
         if (!m.ok) { window.location.href = "/login"; return; }
         setMe(await m.json());
-        const [p, v, b, r, l] = await Promise.all([
+        const [p, v, b, r, t, l] = await Promise.all([
           apiFetch("/profile"), apiFetch("/vessels"), apiFetch("/branches"),
-          apiFetch("/routes"), apiFetch("/licence")
+          apiFetch("/routes"), apiFetch("/trips"), apiFetch("/licence")
         ]);
         if (p.ok) setProfile(await p.json());
         if (v.ok) setFleet(await v.json());
         if (b.ok) setBranches(await b.json());
         if (r.ok) setRoutes(await r.json());
+        if (t.ok) { const j = await t.json(); setTrips(j.trips ?? []); }
         if (l.ok) setLicence(await l.json());
       } catch (e: any) {
         if (e.message !== "session ended") { /* show nothing */ }
@@ -69,7 +71,9 @@ export default function DashboardPage() {
     { label: "Register your vessels", href: "/app/fleet",
       done: (fleet?.vessels.length ?? 0) > 0, hint: "Trucks, trailers, ships" },
     { label: "Create your first route", href: "/app/routes",
-      done: routes.length > 0, hint: "The corridors you run" }
+      done: routes.length > 0, hint: "The corridors you run" },
+    { label: "Plan your first trip", href: "/app/trips",
+      done: trips.length > 0, hint: "Put fleet and drivers to work" }
   ];
   const remaining = nextActions.filter(a => !a.done);
 
@@ -131,7 +135,7 @@ export default function DashboardPage() {
       </section>
 
       {/* Summary counts */}
-      <section className="mt-24 grid grid-cols-3 gap-16">
+      <section className="mt-24 grid grid-cols-2 gap-16 lg:grid-cols-4">
         <Link href="/app/fleet" className={`${card} block`} style={cardStyle}>
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Fleet</p>
           <p className={`${count} mt-8`} style={{ color: "var(--ink)" }}>{fleet?.fleetUsed ?? 0}</p>
@@ -149,6 +153,13 @@ export default function DashboardPage() {
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Routes</p>
           <p className={`${count} mt-8`} style={{ color: "var(--ink)" }}>{routes.length}</p>
           <p className="text-xs" style={{ color: "var(--ink-soft)" }}>corridors</p>
+        </Link>
+        <Link href="/app/trips" className={`${card} block`} style={cardStyle}>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Trips</p>
+          <p className={`${count} mt-8`} style={{ color: "var(--ink)" }}>
+            {trips.filter(t => t.status === "planned" || t.status === "in_transit").length}
+          </p>
+          <p className="text-xs" style={{ color: "var(--ink-soft)" }}>active of {trips.length}</p>
         </Link>
       </section>
 
