@@ -187,8 +187,8 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
       await c.query(
         `update vessels set
            status = $2, status_reason = $3, updated_by = $4, updated_at = now()
-         where id = $1 and tenant_id = $4 and deleted_at is null`,
-        [id, body.status, body.statusReason ?? null, req.user.sub]);
+         where id = $1 and tenant_id = $5 and deleted_at is null`,
+        [id, body.status, body.statusReason ?? null, req.user.sub, req.user.tid]);
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         userAgent: req.headers["user-agent"] ?? null,
@@ -206,8 +206,8 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
     const r = await withTenant(req.user.tid, async (c) => {
       const res = await c.query(
         `update vessels set deleted_at = now(), updated_by = $2
-         where id = $1 and tenant_id = $2 and deleted_at is null`,
-        [id, req.user.sub]);
+         where id = $1 and tenant_id = $3 and deleted_at is null`,
+        [id, req.user.sub, req.user.tid]);
       if (res.rowCount) {
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
