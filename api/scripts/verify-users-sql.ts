@@ -90,7 +90,31 @@ const checks: [string, string, unknown[]][] = [
   ["vessels: active trip ref", `select v.*, (select t.reference from trips t
      where t.vessel_id = v.id and t.status in ('planned','in_transit')
        and t.deleted_at is null order by t.created_at desc limit 1) as active_trip_reference
-   from vessels v where v.tenant_id = $1 limit 1`, [FAKE_TENANT]]
+   from vessels v where v.tenant_id = $1 limit 1`, [FAKE_TENANT]],
+  ["documents: ownership check", `select id from users where id = $1 and tenant_id = $2 and deleted_at is null`,
+    [FAKE_USER, FAKE_TENANT]],
+  ["documents: insert", `insert into documents (id, tenant_id, entity_type, entity_id, kind,
+     file_name, mime_type, size_bytes, storage_path, uploaded_by, created_by, updated_by)
+   values ($1,$2,'user',$3,'avatar','a.png','image/png',1,'p',$4,$4,$4)`,
+    [FAKE_USER, FAKE_TENANT, FAKE_USER, FAKE_USER]],
+  ["documents: replace avatar", `update documents set deleted_at = now()
+   where tenant_id = $1 and entity_type = 'user' and entity_id = $2 and kind = 'avatar' and deleted_at is null`,
+    [FAKE_TENANT, FAKE_USER]],
+  ["documents: list", `select id, kind, file_name, mime_type, size_bytes, created_at from documents
+   where tenant_id = $1 and entity_type = $2 and entity_id = $3 and deleted_at is null
+     and ($4::text is null or kind = $4) order by created_at desc`,
+    [FAKE_TENANT, "user", FAKE_USER, null]],
+  ["documents: logo select", `select id, storage_path from documents
+   where tenant_id = $1 and entity_type = 'tenant' and entity_id = $1
+     and kind = 'logo' and deleted_at is null order by created_at desc limit 1`,
+    [FAKE_TENANT]],
+  ["documents: avatar join", `select (select d.id from documents d
+     where d.entity_type = 'user' and d.entity_id = u.id and d.kind = 'avatar'
+       and d.deleted_at is null order by d.created_at desc limit 1) as avatar_document_id
+   from users u where u.tenant_id = $1 limit 1`, [FAKE_TENANT]],
+  ["documents: soft delete", `update documents set deleted_at = now(), updated_by = $2
+   where id = $1 and tenant_id = $3 and deleted_at is null`,
+    [FAKE_USER, FAKE_USER, FAKE_TENANT]]
 ];
 
 async function main() {

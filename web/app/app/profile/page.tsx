@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "../api-client";
 
 function errorText(json: any, fallback: string): string {
@@ -18,6 +18,14 @@ export default function ProfilePage() {
   const [isNew, setIsNew] = useState(true);
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [logoBusy, setLogoBusy] = useState(false);
+
+  const loadLogo = useCallback(async () => {
+    const res = await apiFetch("/documents/tenant-logo/url");
+    if (res.ok) { const j = await res.json(); setLogoUrl(j.url); }
+    else setLogoUrl(null);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -32,7 +40,23 @@ export default function ProfilePage() {
         if (e.message !== "session ended") setError(e.message);
       }
     })();
-  }, []);
+    loadLogo();
+  }, [loadLogo]);
+
+  async function uploadLogo(file: File) {
+    setError(null); setLogoBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("entityType", "tenant");
+      fd.append("kind", "logo");
+      fd.append("file", file);
+      const res = await apiFetch("/documents", { method: "POST", body: fd });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(errorText(j, "Logo upload failed")); return; }
+      setSaved(false);
+      await loadLogo();
+    } finally { setLogoBusy(false); }
+  }
 
   function set(k: string, v: any) { setForm((f: any) => ({ ...f, [k]: v })); }
 
@@ -127,6 +151,28 @@ export default function ProfilePage() {
         style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>{error}</div>}
       {saved && <div role="status" className="mb-16 px-12 py-8 text-sm"
         style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>Profile saved.</div>}
+
+      {/* Company logo — the invoice letterhead */}
+      <section className="mb-16 rounded-card border bg-surface p-24" style={{ borderColor: "var(--line)" }}>
+        <div className="flex items-center gap-16">
+          <div className="flex h-64 w-64 shrink-0 items-center justify-center overflow-hidden rounded-card border"
+            style={{ borderColor: "var(--line)", background: "var(--milk)" }}>
+            {logoUrl
+              ? <img src={logoUrl} alt="Company logo" className="max-h-64 max-w-64 object-contain" />
+              : <span className="text-xs" style={{ color: "var(--ink-soft)" }}>No logo</span>}
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold" style={{ color: "var(--ink)" }}>Company logo</p>
+            <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+              JPEG, PNG or WebP. Appears on your invoices and documents.
+            </p>
+            <input type="file" accept="image/jpeg,image/png,image/webp" disabled={logoBusy}
+              className="mt-8 text-xs"
+              onChange={e => { const f = e.target.files?.[0]; if (f) uploadLogo(f); e.target.value = ""; }} />
+            {logoBusy && <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>Uploading…</p>}
+          </div>
+        </div>
+      </section>
 
       <form onSubmit={save} className="space-y-12 rounded-card border bg-surface p-24" style={{ borderColor: "var(--line)" }}>
         <label className="block">

@@ -100,6 +100,10 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
       const { rows } = await withTenant(req.user.tid, (c) => c.query(
         `select u.id, u.full_name, u.email, u.status, u.user_type, u.job_title,
                 u.last_login_at, u.created_at,
+                (select d.id from documents d
+                  where d.entity_type = 'user' and d.entity_id = u.id
+                    and d.kind = 'avatar' and d.deleted_at is null
+                  order by d.created_at desc limit 1) as avatar_document_id,
                 coalesce((select json_agg(json_build_object('key', r.key, 'name', r.name)
                             order by r.name)
                           from user_roles ur join roles r on r.id = ur.role_id

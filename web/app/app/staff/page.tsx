@@ -13,6 +13,7 @@ function errorText(json: any, fallback: string): string {
 interface Member {
   id: string; full_name: string | null; email: string | null;
   status: string; user_type: string; job_title: string | null;
+  avatar_document_id: string | null;
   last_login_at: string | null;
   created_at: string; roles: { key: string; name: string }[];
 }
@@ -29,8 +30,9 @@ const STATUS_COLORS: Record<string, string> = {
 
 interface StaffForm {
   fullName: string; email: string; phone: string; jobTitle: string; roleKeys: string[];
+  photo: File | null;
 }
-const EMPTY: StaffForm = { fullName: "", email: "", phone: "", jobTitle: "", roleKeys: [] };
+const EMPTY: StaffForm = { fullName: "", email: "", phone: "", jobTitle: "", roleKeys: [], photo: null };
 
 export default function StaffPage() {
   const [members, setMembers] = useState<Member[]>([]);
@@ -44,6 +46,7 @@ export default function StaffPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [avatarUrls, setAvatarUrls] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     const u = await apiFetch("/users");
@@ -55,6 +58,25 @@ export default function StaffPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Resolve signed URLs for avatars (img tags cannot send Bearer headers).
+  useEffect(() => {
+    const missing = members.filter(m => m.avatar_document_id && !avatarUrls[m.avatar_document_id]);
+    if (missing.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(missing.map(async m => {
+        const res = await apiFetch(`/documents/${m.avatar_document_id}/url`);
+        if (!res.ok) return null;
+        const j = await res.json();
+        return [m.avatar_document_id as string, j.url] as const;
+      }));
+      if (!cancelled) {
+        setAvatarUrls(prev => ({ ...prev, ...Object.fromEntries(entries.filter(Boolean) as any) }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [members]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function toggleRole(key: string) {
     setForm(f => ({
@@ -69,6 +91,16 @@ export default function StaffPage() {
     e.preventDefault(); setError(null); setNotice(null); setInviteUrl(null); setBusy(true);
     try {
       const editing = editingId !== null;
+      if (editing && form.photo) {
+        const fd = new FormData();
+        fd.append("entityType", "user");
+        fd.append("entityId", editingId);
+        fd.append("kind", "avatar");
+        fd.append("file", form.photo);
+        const up = await apiFetch("/documents", { method: "POST", body: fd });
+        const uj = await up.json().catch(() => ({}));
+        if (!up.ok) { setError(errorText(uj, "Photo upload failed")); return; }
+      }
       const res = await apiFetch(editing ? `/users/${editingId}` : "/users", {
         method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(editing
@@ -103,7 +135,8 @@ export default function StaffPage() {
     setForm({
       fullName: m.full_name ?? "", email: m.email ?? "", phone: "",
       jobTitle: m.job_title ?? "",
-      roleKeys: (m.roles ?? []).map(r => r.key)
+      roleKeys: (m.roles ?? []).map(r => r.key),
+      photo: null
     });
     setError(null); setNotice(null); setInviteUrl(null); setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -213,6 +246,14 @@ export default function StaffPage() {
                 onChange={e => setForm(f => ({ ...f, jobTitle: e.target.value }))}
                 placeholder="e.g. Operations Manager" className={inputCls} style={inputStyle} />
             </label>
+            {editingId !== null && (
+              <label className="block">
+                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Photo (replaces current avatar)</span>
+                <input type="file" accept="image/jpeg,image/png,image/webp"
+                  onChange={e => setForm(f => ({ ...f, photo: e.target.files?.[0] ?? null }))}
+                  className="text-xs" />
+              </label>
+            )}
           </div>
           <div>
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Roles * (pick at least one)</span>
@@ -251,14 +292,24 @@ export default function StaffPage() {
             {members.map((m, i) => (
               <tr key={m.id} style={{ background: i % 2 ? "var(--milk-deep)" : "transparent" }}>
                 <td className="p-12" style={{ color: "var(--ink)" }}>
-                  <span className="font-semibold">{m.full_name ?? "—"}</span>
-                  {m.user_type === "director" && (
-                    <span className="ml-8 text-[10px] font-bold uppercase" style={{ color: "var(--gold)" }}>Director</span>
-                  )}
-                  <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>{m.email ?? ""}</span>
-                  {m.job_title && (
-                    <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>{m.job_title}</span>
-                  )}
+                  <div className="flex items-center gap-12">
+                    <div className="flex h-40 w-40 shrink-0 items-center justify-center overflow-hidden rounded-full border text-xs font-bold"
+                      style={{ borderColor: "var(--line)", background: "var(--milk)", color: "var(--ink-soft)" }}>
+                      {m.avatar_document_id && avatarUrls[m.avatar_document_id]
+                        ? <img src={avatarUrls[m.avatar_document_id]} alt="" className="h-40 w-40 object-cover" />
+                        : (m.full_name ?? "?").slice(0, 1).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <span className="font-semibold">{m.full_name ?? "—"}</span>
+                      {m.user_type === "director" && (
+                        <span className="ml-8 text-[10px] font-bold uppercase" style={{ color: "var(--gold)" }}>Director</span>
+                      )}
+                      <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>{m.email ?? ""}</span>
+                      {m.job_title && (
+                        <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>{m.job_title}</span>
+                      )}
+                    </div>
+                  </div>
                 </td>
                 <td className="p-12">
                   {(m.roles ?? []).length === 0 ? <span style={{ color: "var(--ink-soft)" }}>—</span> : (

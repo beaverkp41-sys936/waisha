@@ -18,7 +18,10 @@ const schema = z.object({
   AZAMPAY_BASE_URL: z.string().optional().default(""),
   AZAMPAY_CLIENT_ID: z.string().optional().default(""),
   AZAMPAY_CLIENT_SECRET: z.string().optional().default(""),
-  AZAMPAY_WEBHOOK_SECRET: z.string().optional().default("")
+  AZAMPAY_WEBHOOK_SECRET: z.string().optional().default(""),
+  SUPABASE_URL: z.string().optional().default(""),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().optional().default(""),
+  DOCUMENTS_BUCKET: z.string().default("waisha-documents")
 });
 
 const parsed = schema.safeParse(process.env);

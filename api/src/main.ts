@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import helmet from "@fastify/helmet";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
+import multipart from "@fastify/multipart";
 import { env } from "./env.js";
 import { registerErrorHandling } from "./plugins/errors.js";
 import { authRoutes } from "./routes/auth.routes.js";
@@ -15,18 +16,22 @@ import { driversRoutes } from "./routes/drivers.routes.js";
 import { fleetRoutes } from "./routes/fleet.routes.js";
 import { tripsRoutes } from "./routes/trips.routes.js";
 import { usersRoutes } from "./routes/users.routes.js";
+import { documentsRoutes } from "./routes/documents.routes.js";
 
 async function main() {
   const app = Fastify({
     logger: true,
     trustProxy: true,
     pluginTimeout: 60000, // slow first boots on Windows: Defender scans native modules
-    bodyLimit: 3 * 1024 * 1024 // 3MB hard limit (spec 6.18)
+    bodyLimit: 12 * 1024 * 1024 // 12MB — document uploads (8MB file cap enforced per file)
   });
 
   await app.register(helmet);
   await app.register(cors, { origin: [env.WEB_ORIGIN], credentials: true });
   await app.register(cookie);
+  await app.register(multipart, {
+    limits: { fileSize: 8 * 1024 * 1024, files: 1 }
+  });
   registerErrorHandling(app);
 
   app.get("/api/v1/health", async () => ({ status: "ok", time: new Date().toISOString() }));
@@ -41,6 +46,7 @@ async function main() {
   await app.register(driversRoutes, { prefix: "/api/v1" });
   await app.register(tripsRoutes, { prefix: "/api/v1" });
   await app.register(usersRoutes, { prefix: "/api/v1" });
+  await app.register(documentsRoutes, { prefix: "/api/v1" });
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
 }
 
