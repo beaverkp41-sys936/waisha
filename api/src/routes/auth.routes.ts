@@ -515,7 +515,14 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
     }
 
     await withTenant(rec.tenant_id, async (c) => {
-      await c.query("update users set password_hash=$2 where id=$1",
+      const cur = await c.query("select status, user_type from users where id=$1", [rec.user_id]);
+      // Invited staff verify their email by possessing this link, so accepting
+      // the invite completes verification. Directors/shippers must still pass
+      // the phone OTP flow — don't let a reset bypass it.
+      const invited = cur.rows[0]?.status === "pending_verification" &&
+        cur.rows[0]?.user_type === "staff";
+      await c.query(
+        `update users set password_hash=$2${invited ? ", status='active'" : ""} where id=$1`,
         [rec.user_id, await hashPassword(password)]);
       await c.query(
         `update sessions set revoked_at = now(), revoked_reason = 'password_reset'
@@ -525,6 +532,14 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
         requestId: req.requestId,
         entity: "users", entityId: rec.user_id, action: "password.reset"
       });
+      if (invited) {
+        await writeAudit(c, {
+          tenantId: rec.tenant_id, actorUserId: rec.user_id, ip: req.ip,
+          requestId: req.requestId,
+          entity: "users", entityId: rec.user_id, action: "staff.invite_accepted",
+          after: { status: "active" }
+        });
+      }
     });
     return reply.send({ ok: true });
   });
