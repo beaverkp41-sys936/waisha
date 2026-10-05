@@ -16,13 +16,42 @@ const NAV = [
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+
+  const area =
+    pathname.startsWith("/app/cfa") ? "cfa" :
+    pathname.startsWith("/app/office") ? "office" : "transporter";
+
   return (
     <div className="min-h-screen" style={{ background: "var(--milk)" }}>
-      <header className="flex items-center justify-between px-24 py-12"
-        style={{ background: "var(--brand-deep)" }}>
-        <div className="flex items-center gap-24">
+      <header style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--gold)" }}>
+        <div className="flex items-center justify-between px-24 pt-12">
           <span className="text-sm font-bold tracking-[0.08em] text-white">WAISHA</span>
-          <nav className="flex gap-24 text-xs font-semibold">
+          <nav className="flex gap-16 text-[11px] font-bold uppercase tracking-[0.12em]">
+            <Link href="/app/dashboard"
+              className="px-8 pb-8 transition-colors duration-200"
+              style={{ color: area === "transporter" ? "var(--gold)" : "rgba(255,255,255,0.55)",
+                       borderBottom: area === "transporter" ? "2px solid var(--gold)" : "2px solid transparent" }}>
+              Transporter
+            </Link>
+            <Link href="/app/cfa"
+              className="px-8 pb-8 transition-colors duration-200"
+              style={{ color: area === "cfa" ? "var(--gold)" : "rgba(255,255,255,0.55)",
+                       borderBottom: area === "cfa" ? "2px solid var(--gold)" : "2px solid transparent" }}>
+              CFA Management
+            </Link>
+            <Link href="/app/office"
+              className="px-8 pb-8 transition-colors duration-200"
+              style={{ color: area === "office" ? "var(--gold)" : "rgba(255,255,255,0.55)",
+                       borderBottom: area === "office" ? "2px solid var(--gold)" : "2px solid transparent" }}>
+              Office Management
+            </Link>
+          </nav>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "rgba(255,255,255,0.6)" }}>
+            Transporter portal
+          </span>
+        </div>
+        {area === "transporter" && (
+          <nav className="flex gap-24 px-24 pb-12 pt-4 text-xs font-semibold">
             {NAV.map(n => {
               const active = pathname === n.href || pathname.startsWith(n.href + "/");
               return (
@@ -38,10 +67,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               );
             })}
           </nav>
-        </div>
-        <span className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "rgba(255,255,255,0.6)" }}>
-          Transporter portal
-        </span>
+        )}
       </header>
       <main>{children}</main>
     </div>

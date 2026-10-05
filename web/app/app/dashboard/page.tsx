@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { apiFetch } from "../api-client";
+import { AREAS, areaUnlocked } from "../areas";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
@@ -132,6 +133,33 @@ export default function DashboardPage() {
             <div className="h-8 rounded-full" style={{ width: `${completion}%`, background: "var(--gold-green)" }} />
           </div>
         </div>
+      </section>
+
+      {/* Workspaces — the portal's areas */}
+      <section className="mt-24 grid grid-cols-1 gap-16 md:grid-cols-3">
+        {AREAS.map(a => {
+          const unlocked = areaUnlocked(a, licence);
+          return (
+            <Link key={a.key} href={a.href} className={`${card} block`} style={cardStyle}>
+              <div className="flex items-start justify-between gap-8">
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink)" }}>
+                  {a.label}
+                </p>
+                <span className="px-8 py-2 text-[9px] font-bold uppercase whitespace-nowrap"
+                  style={{ borderLeft: `4px solid ${unlocked ? "var(--success)" : "var(--gold)"}`, color: "var(--ink-soft)" }}>
+                  {unlocked ? "Included" : a.planLabel}
+                </span>
+              </div>
+              <p className="mt-8 text-xs leading-relaxed" style={{ color: "var(--ink-soft)" }}>
+                {a.description}
+              </p>
+              <p className="mt-12 text-[10px] font-bold uppercase tracking-[0.14em]"
+                style={{ color: unlocked ? "var(--brand)" : "var(--gold)" }}>
+                {unlocked && a.key !== "transporter" ? "Open workspace" : a.key === "transporter" ? "You are here" : "Preview"}
+              </p>
+            </Link>
+          );
+        })}
       </section>
 
       {/* Summary counts */}

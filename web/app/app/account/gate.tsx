@@ -12,6 +12,7 @@ interface LicenceInfo {
   seats_licensed?: number | null;
   subscription_status?: string | null;
   operational?: boolean;
+  modules?: string[] | null;
 }
 
 export function useLicence() {
