@@ -20,6 +20,12 @@ function requireConfig(): { base: string; key: string } {
   return { base: env.SUPABASE_URL.replace(/\/$/, ""), key: env.SUPABASE_SERVICE_ROLE_KEY };
 }
 
+/** Headers for every storage call — Supabase's new sb_ keys need the
+ *  apikey header alongside Bearer, legacy JWT keys tolerate it. */
+function authHeaders(key: string, extra: Record<string, string> = {}): Record<string, string> {
+  return { Authorization: `Bearer ${key}`, apikey: key, ...extra };
+}
+
 export class StorageUnavailableError extends Error {
   constructor() {
     super("Storage is not configured");
@@ -30,12 +36,14 @@ async function ensureBucketOnce(): Promise<void> {
   const { base, key } = requireConfig();
   const res = await fetch(`${base}/storage/v1/bucket`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    headers: authHeaders(key, { "Content-Type": "application/json" }),
     body: JSON.stringify({ name: BUCKET, public: false })
   });
-  // 409 (or Supabase's duplicate error) simply means it already exists.
-  if (!res.ok && res.status !== 400 && res.status !== 409) {
-    throw new Error(`Bucket create failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    // 400/409 with an "already exists" body is the bucket being there.
+    if ((res.status === 400 || res.status === 409) && /exist/i.test(body)) return;
+    throw new Error(`Bucket create failed: ${res.status} ${body}`);
   }
 }
 
@@ -51,11 +59,7 @@ export async function putObject(path: string, bytes: Buffer, mimeType: string): 
   const { base, key } = requireConfig();
   const res = await fetch(`${base}/storage/v1/object/${BUCKET}/${encodeURI(path)}`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": mimeType,
-      "x-upsert": "false"
-    },
+    headers: authHeaders(key, { "Content-Type": mimeType, "x-upsert": "false" }),
     body: new Uint8Array(bytes)
   });
   if (!res.ok) {
@@ -67,7 +71,7 @@ export async function putObject(path: string, bytes: Buffer, mimeType: string): 
 export async function getObject(path: string): Promise<{ bytes: Buffer; contentType: string | null }> {
   const { base, key } = requireConfig();
   const res = await fetch(`${base}/storage/v1/object/${BUCKET}/${encodeURI(path)}`, {
-    headers: { Authorization: `Bearer ${key}` }
+    headers: authHeaders(key)
   });
   if (!res.ok) {
     throw new Error(`Storage download failed: ${res.status}`);
@@ -80,7 +84,7 @@ export async function deleteObject(path: string): Promise<void> {
   const { base, key } = requireConfig();
   await fetch(`${base}/storage/v1/object/${BUCKET}/${encodeURI(path)}`, {
     method: "DELETE",
-    headers: { Authorization: `Bearer ${key}` }
+    headers: authHeaders(key)
   });
   // Best effort: a missing object is not an error for the caller.
 }
@@ -90,7 +94,7 @@ export async function signObject(path: string, expiresInSeconds: number): Promis
   const { base, key } = requireConfig();
   const res = await fetch(`${base}/storage/v1/object/sign/${BUCKET}/${encodeURI(path)}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    headers: authHeaders(key, { "Content-Type": "application/json" }),
     body: JSON.stringify({ expiresIn: expiresInSeconds })
   });
   if (!res.ok) {

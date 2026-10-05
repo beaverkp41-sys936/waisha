@@ -93,6 +93,7 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
       await putObject(storagePath, bytes, mime);
     } catch (e) {
       if (e instanceof StorageUnavailableError) throw e;
+      req.log.error(e, "storage upload failed");
       throw new ApiError("INTERNAL", "The file could not be stored. Try again.", 502);
     }
 
@@ -161,7 +162,8 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
     if (!row.rowCount) throw new ApiError("NOT_FOUND", "No logo uploaded yet.", 404);
     try {
       return { id: row.rows[0].id, url: await signObject(row.rows[0].storage_path, 3600) };
-    } catch {
+    } catch (e) {
+      req.log.error(e, "storage sign failed (tenant logo)");
       throw new ApiError("INTERNAL", "Could not open the file.", 502);
     }
   });
@@ -175,7 +177,8 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
     if (!row.rowCount) throw new ApiError("NOT_FOUND", "Document not found", 404);
     try {
       return { url: await signObject(row.rows[0].storage_path, 3600) };
-    } catch {
+    } catch (e) {
+      req.log.error(e, "storage sign failed");
       throw new ApiError("INTERNAL", "Could not open the file.", 502);
     }
   });
@@ -192,7 +195,8 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
       return reply.header("Content-Type", contentType ?? row.rows[0].mime_type)
         .header("Content-Disposition", `inline; filename="${sanitizeFileName(row.rows[0].file_name)}"`)
         .send(bytes);
-    } catch {
+    } catch (e) {
+      req.log.error(e, "storage download failed");
       throw new ApiError("INTERNAL", "Could not read the file.", 502);
     }
   });
