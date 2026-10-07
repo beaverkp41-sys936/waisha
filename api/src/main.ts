@@ -24,6 +24,8 @@ import { fuelRoutes } from "./routes/fuel.routes.js";
 import { inventoryRoutes } from "./routes/inventory.routes.js";
 import { incidentsRoutes } from "./routes/incidents.routes.js";
 import { clientsRoutes } from "./routes/clients.routes.js";
+import { notificationsRoutes } from "./routes/notifications.routes.js";
+import { reportsRoutes } from "./routes/reports.routes.js";
 
 async function main() {
   const app = Fastify({
@@ -61,6 +63,8 @@ async function main() {
   await app.register(inventoryRoutes, { prefix: "/api/v1" });
   await app.register(incidentsRoutes, { prefix: "/api/v1" });
   await app.register(clientsRoutes, { prefix: "/api/v1" });
+  await app.register(notificationsRoutes, { prefix: "/api/v1" });
+  await app.register(reportsRoutes, { prefix: "/api/v1" });
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
 }
 

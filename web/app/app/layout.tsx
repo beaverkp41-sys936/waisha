@@ -1,6 +1,8 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { apiFetch } from "./api-client";
 
 const NAV = [
   { href: "/app/dashboard", label: "Dashboard", accent: "var(--gold)" },
@@ -14,6 +16,8 @@ const NAV = [
   { href: "/app/inventory", label: "Inventory", accent: "var(--brand)" },
   { href: "/app/incidents", label: "Incidents", accent: "var(--danger)" },
   { href: "/app/clients", label: "Clients", accent: "var(--gold-green)" },
+  { href: "/app/compliance", label: "Compliance", accent: "var(--success)" },
+  { href: "/app/reports", label: "Reports", accent: "var(--gold)" },
   { href: "/app/staff", label: "Staff", accent: "var(--brand)" },
   { href: "/app/account", label: "Account", accent: "rgba(255,255,255,0.7)" }
 ];
@@ -24,6 +28,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const area =
     pathname.startsWith("/app/cfa") ? "cfa" :
     pathname.startsWith("/app/office") ? "office" : "transporter";
+
+  // Header alert count — computed live from overdue/expiring/low-stock signals.
+  const [alertCount, setAlertCount] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("/notifications").then(async res => {
+      if (!res.ok || cancelled) return;
+      const j = await res.json();
+      if (!cancelled) setAlertCount((j.counts?.critical ?? 0) + (j.counts?.warning ?? 0));
+    }).catch(() => { });
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div className="min-h-screen" style={{ background: "var(--milk)" }}>
@@ -50,6 +66,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               Office Management
             </Link>
           </nav>
+          <Link href="/app/notifications"
+            className="relative pb-4 pt-4 text-[11px] font-bold uppercase tracking-[0.12em] transition-colors duration-200"
+            style={{ color: alertCount && alertCount > 0 ? "var(--gold)" : "rgba(255,255,255,0.55)" }}>
+            Alerts{alertCount !== null && alertCount > 0 ? ` (${alertCount})` : ""}
+          </Link>
           <span className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "rgba(255,255,255,0.6)" }}>
             Transporter portal
           </span>
