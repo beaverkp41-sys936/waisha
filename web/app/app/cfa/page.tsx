@@ -23,7 +23,8 @@ const MODULES = [
   },
   {
     name: "Duty Calculator",
-    description: "Enter an HS code and CIF value — import duty, excise, railway levy, VAT and total landed cost computed against TRA rates.",
+    href: "/app/cfa/duty",
+    description: "Enter an HS code or band with CIF value — import duty, excise, railway levy, VAT and total landed cost computed against the TRA rate tables.",
     plan: "Business"
   },
   {

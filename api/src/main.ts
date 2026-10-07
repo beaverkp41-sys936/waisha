@@ -19,6 +19,7 @@ import { usersRoutes } from "./routes/users.routes.js";
 import { documentsRoutes } from "./routes/documents.routes.js";
 import { invoicesRoutes } from "./routes/invoices.routes.js";
 import { ledgerRoutes } from "./routes/ledger.routes.js";
+import { dutyRoutes } from "./routes/duty.routes.js";
 
 async function main() {
   const app = Fastify({
@@ -51,6 +52,7 @@ async function main() {
   await app.register(documentsRoutes, { prefix: "/api/v1" });
   await app.register(invoicesRoutes, { prefix: "/api/v1" });
   await app.register(ledgerRoutes, { prefix: "/api/v1" });
+  await app.register(dutyRoutes, { prefix: "/api/v1" });
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
 }
 
