@@ -86,7 +86,11 @@ export default function ProfilePage() {
             ? (form.website.startsWith("http://") || form.website.startsWith("https://")
                 ? form.website
                 : `https://${form.website}`)
-            : undefined
+            : undefined,
+          payBankName: form.pay_bank_name || null,
+          payBankAccount: form.pay_bank_account || null,
+          payAccountName: form.pay_account_name || null,
+          payMobileMoney: form.pay_mobile_money || null
         })
       });
       const j = await res.json().catch(() => ({}));
@@ -234,6 +238,36 @@ export default function ProfilePage() {
           <input disabled={!editing} value={F("website")} onChange={e => set("website", e.target.value)} placeholder="wema.com"
             className={inputCls} style={editing ? inputStyle : disabledStyle} />
         </label>
+
+        {/* Where-to-pay — printed on every invoice */}
+        <div className="space-y-12 border-t pt-16" style={{ borderColor: "var(--line)" }}>
+          <p className="text-sm font-bold" style={{ color: "var(--ink)" }}>Where to pay</p>
+          <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+            Bank and mobile-money details printed on all your invoices. Leave blank if unused.
+          </p>
+          <div className="grid grid-cols-2 gap-12">
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Bank name</span>
+              <input disabled={!editing} value={F("pay_bank_name")} onChange={e => set("pay_bank_name", e.target.value)}
+                placeholder="e.g. CRDB Bank" className={inputCls} style={editing ? inputStyle : disabledStyle} />
+            </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Account number</span>
+              <input disabled={!editing} value={F("pay_bank_account")} onChange={e => set("pay_bank_account", e.target.value)}
+                className={inputCls} style={editing ? inputStyle : disabledStyle} />
+            </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Account name</span>
+              <input disabled={!editing} value={F("pay_account_name")} onChange={e => set("pay_account_name", e.target.value)}
+                className={inputCls} style={editing ? inputStyle : disabledStyle} />
+            </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Mobile money</span>
+              <input disabled={!editing} value={F("pay_mobile_money")} onChange={e => set("pay_mobile_money", e.target.value)}
+                placeholder="e.g. M-Pesa +255712345678" className={inputCls} style={editing ? inputStyle : disabledStyle} />
+            </label>
+          </div>
+        </div>
 
         {editing && (
           <div className="space-y-12 border-t pt-16" style={{ borderColor: "var(--line)" }}>

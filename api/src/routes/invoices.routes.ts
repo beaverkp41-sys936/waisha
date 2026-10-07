@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import QRCode from "qrcode";
 import { pool, withTenant } from "../db/pool.js";
 import { ApiError } from "../util/errors.js";
 import { uuidv7 } from "../util/uuid.js";
@@ -21,6 +22,7 @@ const e164 = z.string().regex(/^\+[1-9]\d{7,14}$/);
 const itemSchema = z.object({
   description: z.string().trim().min(2).max(300),
   quantity: z.number().positive().max(1_000_000),
+  unit: z.string().trim().max(30).nullable().optional(),
   unitPrice: z.number().nonnegative().max(1_000_000_000)
 });
 
@@ -33,6 +35,8 @@ const invoiceCreateSchema = z.object({
   issueDate: dateOnly.optional(),
   dueDate: dateOnly.nullable().optional(),
   paymentTerms: z.string().trim().max(120).nullable().optional(),
+  currency: z.string().trim().min(3).max(8).optional(),
+  paymentInstructions: z.string().trim().max(600).nullable().optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
   vatRate: z.number().min(0).max(100).optional(),
   relatedTripId: z.string().uuid().nullable().optional(),
@@ -71,6 +75,21 @@ function computeTotals(items: { quantity: number; unitPrice: number }[], vatRate
   return { lines, subtotal, vatAmount, total: money(subtotal + vatAmount) };
 }
 
+/** Compose the "where to pay" text from the transporter's profile defaults. */
+function composePaymentInstructions(pay: {
+  pay_bank_name: string | null; pay_bank_account: string | null;
+  pay_account_name: string | null; pay_mobile_money: string | null;
+} | null): string | null {
+  const lines: string[] = [];
+  if (pay?.pay_bank_name) {
+    lines.push(`Bank: ${pay.pay_bank_name}`);
+    if (pay.pay_bank_account) lines.push(`Account no: ${pay.pay_bank_account}`);
+    if (pay.pay_account_name) lines.push(`Account name: ${pay.pay_account_name}`);
+  }
+  if (pay?.pay_mobile_money) lines.push(`Mobile money: ${pay.pay_mobile_money}`);
+  return lines.length ? lines.join("\n") : null;
+}
+
 export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- Register + KPIs ----------
@@ -103,6 +122,7 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
     async (req: any, reply) => {
       const body = invoiceCreateSchema.parse(req.body);
       const vatRate = body.vatRate ?? 18;
+      const currency = body.currency ?? "TZS";
       const { lines, subtotal, vatAmount, total } = computeTotals(body.items, vatRate);
       const id = uuidv7();
 
@@ -114,40 +134,48 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
             [req.user.tid]);
           const invoiceNumber = `INV-${String(seq.rows[0].next).padStart(4, "0")}`;
 
+          // Where-to-pay: explicit per-invoice text wins; else profile defaults.
+          let instructions = body.paymentInstructions ?? null;
+          if (instructions === null) {
+            const pay = await c.query(
+              `select pay_bank_name, pay_bank_account, pay_account_name, pay_mobile_money
+               from company_profiles where tenant_id = $1`, [req.user.tid]);
+            instructions = composePaymentInstructions(pay.rows[0] ?? null);
+          }
+
           await c.query(
             `insert into freight_invoices (id, tenant_id, invoice_number, customer_name,
                customer_phone_encrypted, customer_phone_search, customer_email,
                customer_tin, customer_address, issue_date, due_date, payment_terms,
-               vat_rate, subtotal, vat_amount, total, related_trip_id, notes,
-               status, created_by, updated_by)
+               currency, vat_rate, subtotal, vat_amount, total, related_trip_id,
+               payment_instructions, notes, status, created_by, updated_by)
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9,
                coalesce($10, current_date), $11, $12, $13, $14, $15, $16, $17, $18,
-               'draft', $19, $19)`,
+               $19, $20, 'draft', $21, $21)`,
             [id, req.user.tid, invoiceNumber, body.customerName,
              body.customerPhone ? encryptField(body.customerPhone) : null,
              body.customerPhone ? searchHash(body.customerPhone) : null,
              body.customerEmail ?? null, body.customerTin ?? null,
              body.customerAddress ?? null, body.issueDate ?? null,
              body.dueDate ?? null, body.paymentTerms ?? null,
-             vatRate, subtotal, vatAmount, total,
-             body.relatedTripId ?? null, body.notes ?? null, req.user.sub]);
+             currency, vatRate, subtotal, vatAmount, total,
+             body.relatedTripId ?? null, instructions, body.notes ?? null, req.user.sub]);
 
           for (let n = 0; n < body.items.length; n++) {
             await c.query(
-              `insert into freight_invoice_items (id, tenant_id, invoice_id, seq, description, quantity, unit_price, amount)
-               values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+              `insert into freight_invoice_items (id, tenant_id, invoice_id, seq, description, quantity, unit, unit_price, amount)
+               values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
               [uuidv7(), req.user.tid, id, n + 1, body.items[n].description,
-               body.items[n].quantity, body.items[n].unitPrice, lines[n]]);
+               body.items[n].quantity, body.items[n].unit ?? null,
+               body.items[n].unitPrice, lines[n]]);
           }
 
           await writeAudit(c, {
             tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
             requestId: req.requestId, entity: "freight_invoices", entityId: id,
             action: "invoice.created",
-            after: { invoiceNumber, customer: body.customerName, total }
+            after: { invoiceNumber, customer: body.customerName, currency, total }
           });
-
-          return invoiceNumber;
         });
       } catch (e: any) {
         if (e.code === "23505") {
@@ -172,7 +200,7 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
 
         const [items, payments, letterhead] = await Promise.all([
           c.query(
-            `select id, seq, description, quantity, unit_price, amount
+            `select id, seq, description, quantity, unit, unit_price, amount
              from freight_invoice_items where invoice_id = $1 and tenant_id = $2 order by seq`,
             [id, req.user.tid]),
           c.query(
@@ -197,6 +225,15 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
           ? decryptField(row.customer_phone_encrypted)
           : null;
 
+        // Verification-style QR: invoice number, amount and TIN, scannable text.
+        const qrPayload = [
+          `WAISHA-INVOICE:${row.invoice_number}`,
+          `AMT:${row.currency} ${Number(row.total).toFixed(2)}`,
+          row.due_date ? `DUE:${String(row.due_date).slice(0, 10)}` : null,
+          letterhead.rows[0]?.tin_display ? `TIN:${letterhead.rows[0].tin_display}` : null
+        ].filter(Boolean).join("|");
+        const qrDataUrl = await QRCode.toDataURL(qrPayload, { width: 240, margin: 1 });
+
         return {
           ...row,
           customer_phone: phone,
@@ -204,7 +241,8 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
           customer_phone_search: undefined,
           items: items.rows,
           payments: payments.rows,
-          letterhead: letterhead.rows[0] ?? null
+          letterhead: letterhead.rows[0] ?? null,
+          qr_data_url: qrDataUrl
         };
       });
     });
@@ -252,6 +290,8 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
         if ("issueDate" in body && body.issueDate) set("issue_date", body.issueDate);
         if ("dueDate" in body) set("due_date", body.dueDate ?? null);
         if ("paymentTerms" in body) set("payment_terms", body.paymentTerms ?? null);
+        if ("currency" in body) set("currency", body.currency!);
+        if ("paymentInstructions" in body) set("payment_instructions", body.paymentInstructions ?? null);
         if ("notes" in body) set("notes", body.notes ?? null);
         if ("vatRate" in body || body.items) set("vat_rate", vatRate);
         if (totals) {

@@ -41,13 +41,15 @@ const checks: [string, string, unknown[]][] = [
     [FAKE_TENANT]],
   ["create invoice", `insert into freight_invoices (id, tenant_id, invoice_number, customer_name,
      customer_phone_encrypted, customer_phone_search, customer_email, customer_tin,
-     customer_address, issue_date, due_date, payment_terms, vat_rate, subtotal,
-     vat_amount, total, related_trip_id, notes, status, created_by, updated_by)
-   values ($1,$2,$3,$4,$5,$6,$7,$8,$9, coalesce($10, current_date), $11,$12,$13,$14,$15,$16,$17,$18,'draft',$19,$19)`,
-    [FAKE_ID, FAKE_TENANT, "INV-0001", "C", null, null, null, null, null, null, null, null, 18, 0, 0, 0, null, null, FAKE_ID]],
-  ["create item", `insert into freight_invoice_items (id, tenant_id, invoice_id, seq, description, quantity, unit_price, amount)
-   values ($1,$2,$3,$4,$5,$6,$7,$8)`,
-    [FAKE_ID, FAKE_TENANT, FAKE_ID, 1, "Freight", 1, 0, 0]],
+     customer_address, issue_date, due_date, payment_terms, currency, vat_rate, subtotal,
+     vat_amount, total, related_trip_id, payment_instructions, notes, status, created_by, updated_by)
+   values ($1,$2,$3,$4,$5,$6,$7,$8,$9, coalesce($10, current_date), $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'draft',$21,$21)`,
+    [FAKE_ID, FAKE_TENANT, "INV-0001", "C", null, null, null, null, null, null, null, null, "TZS", 18, 0, 0, 0, null, null, null, FAKE_ID]],
+  ["create item", `insert into freight_invoice_items (id, tenant_id, invoice_id, seq, description, quantity, unit, unit_price, amount)
+   values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [FAKE_ID, FAKE_TENANT, FAKE_ID, 1, "Freight", 1, "tonnes", 0, 0]],
+  ["profile pay defaults", `select pay_bank_name, pay_bank_account, pay_account_name, pay_mobile_money
+     from company_profiles where tenant_id = $1`, [FAKE_TENANT]],
   ["detail", `select i.*, ${EFFECTIVE} as effective_status from freight_invoices i
      where i.id = $1 and i.tenant_id = $2 and i.deleted_at is null`,
     [FAKE_ID, FAKE_TENANT]],

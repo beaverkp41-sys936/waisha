@@ -19,14 +19,15 @@ interface InvoiceDetail {
   issue_date: string; due_date: string | null; payment_terms: string | null;
   currency: string; vat_rate: string; subtotal: string; vat_amount: string;
   total: string; amount_paid: string; status: string; effective_status: string;
-  notes: string | null; created_at: string;
-  items: { id: string; seq: number; description: string; quantity: string; unit_price: string; amount: string }[];
+  notes: string | null; payment_instructions: string | null; created_at: string;
+  items: { id: string; seq: number; description: string; quantity: string; unit: string | null; unit_price: string; amount: string }[];
   payments: { id: string; amount: string; method: string; reference: string | null; paid_at: string; notes: string | null }[];
   letterhead: {
     company_name: string | null; tin_display: string | null; brela_number: string | null;
     vat_number: string | null; website: string | null; postal_address: string | null;
     street: string | null; branch_email: string | null; logo_document_id: string | null;
   } | null;
+  qr_data_url: string | null;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -44,6 +45,7 @@ export default function InvoiceDetailPage() {
   const id = params.id;
   const [inv, setInv] = useState<InvoiceDetail | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [receiptMode, setReceiptMode] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -130,9 +132,13 @@ export default function InvoiceDetailPage() {
             <button type="button" disabled={busy} onClick={() => action("sent")}
               className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">Mark as sent</button>
           )}
-          <button type="button" onClick={() => window.print()}
+          <button type="button" onClick={() => setReceiptMode(m => !m)}
             className="rounded-input border px-16 py-8 text-xs font-semibold"
-            style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Print / Save PDF</button>
+            style={{ borderColor: "var(--line)", color: "var(--ink)" }}>
+            {receiptMode ? "Invoice view" : "EFD-style receipt"}
+          </button>
+          <button type="button" onClick={() => window.print()}
+            className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">Print / Save PDF</button>
           {inv.status !== "cancelled" && Number(inv.amount_paid) === 0 && (
             <button type="button" disabled={busy} onClick={() => action("cancelled")}
               className="rounded-input border px-16 py-8 text-xs font-semibold"
@@ -146,6 +152,7 @@ export default function InvoiceDetailPage() {
         style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>{notice}</div>}
 
       {/* The invoice sheet — everything inside prints */}
+      {!receiptMode && (
       <div className="mt-24 rounded-card border bg-surface p-32" style={{ borderColor: "var(--line)" }}>
         {/* Letterhead */}
         <div className="flex items-start justify-between gap-24 border-b pb-24" style={{ borderColor: "var(--ink)" }}>
@@ -196,7 +203,7 @@ export default function InvoiceDetailPage() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left" style={{ borderColor: "var(--ink)", background: "var(--milk)" }}>
-              <th className="p-12">#</th>
+              <th className="p-12">Code</th>
               <th className="p-12">Description</th>
               <th className="p-12 text-right">Qty</th>
               <th className="p-12 text-right">Unit price</th>
@@ -206,9 +213,11 @@ export default function InvoiceDetailPage() {
           <tbody>
             {inv.items.map(it => (
               <tr key={it.id} className="border-b" style={{ borderColor: "var(--line)" }}>
-                <td className="p-12 tabular-nums" style={{ color: "var(--ink-soft)" }}>{it.seq}</td>
+                <td className="p-12 tabular-nums" style={{ color: "var(--ink-soft)" }}>{String(it.seq).padStart(2, "0")}</td>
                 <td className="p-12" style={{ color: "var(--ink)" }}>{it.description}</td>
-                <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink)" }}>{fmt(Number(it.quantity))}</td>
+                <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink)" }}>
+                  {fmt(Number(it.quantity))}{it.unit ? ` ${it.unit}` : ""}
+                </td>
                 <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink)" }}>{fmt(Number(it.unit_price))}</td>
                 <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink)" }}>{fmt(Number(it.amount))}</td>
               </tr>
@@ -235,6 +244,24 @@ export default function InvoiceDetailPage() {
           </div>
         </div>
 
+        {/* Where to pay + verification QR */}
+        {(inv.payment_instructions || inv.qr_data_url) && (
+          <div className="mt-24 flex items-start justify-between gap-24 border-t pt-16" style={{ borderColor: "var(--line)" }}>
+            <div className="min-w-0">
+              <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Where to pay</p>
+              {inv.payment_instructions
+                ? <p className="whitespace-pre-line text-xs" style={{ color: "var(--ink)" }}>{inv.payment_instructions}</p>
+                : <p className="text-xs" style={{ color: "var(--ink-soft)" }}>Contact our office for payment details.</p>}
+            </div>
+            {inv.qr_data_url && (
+              <div className="shrink-0 text-center">
+                <img src={inv.qr_data_url} alt="Invoice verification QR" className="h-28 w-28" />
+                <p className="mt-4 text-[9px]" style={{ color: "var(--ink-soft)" }}>Scan to verify</p>
+              </div>
+            )}
+          </div>
+        )}
+
         {inv.notes && (
           <div className="mt-24 border-t pt-16" style={{ borderColor: "var(--line)" }}>
             <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Notes</p>
@@ -245,6 +272,72 @@ export default function InvoiceDetailPage() {
           Payment terms: {inv.payment_terms ?? "As agreed"} · Please quote the invoice number with your payment.
         </p>
       </div>
+      )}
+
+      {/* EFD-style receipt — narrow thermal-roll format */}
+      {receiptMode && (
+        <div className="mx-auto mt-24 max-w-[320px] border bg-surface p-16 text-xs"
+          style={{ borderColor: "var(--ink)" }}>
+          <div className="text-center">
+            <p className="font-bold" style={{ color: "var(--ink)" }}>{lh?.company_name ?? "Your company"}</p>
+            {lh?.postal_address && <p style={{ color: "var(--ink-soft)" }}>{lh.postal_address}{lh.street ? `, ${lh.street}` : ""}</p>}
+            {lh?.tin_display && <p style={{ color: "var(--ink-soft)" }}>TIN: {lh.tin_display}</p>}
+            {lh?.vat_number && <p style={{ color: "var(--ink-soft)" }}>VAT: {lh.vat_number}</p>}
+            {lh?.branch_email && <p style={{ color: "var(--ink-soft)" }}>{lh.branch_email}</p>}
+            <p className="mt-8 font-bold tracking-[0.2em]" style={{ color: "var(--ink)" }}>TAX INVOICE</p>
+            <p className="text-[9px]" style={{ color: "var(--ink-soft)" }}>
+              EFD-style print — not a fiscal document. Fiscal receipts require a TRA-licensed EFD/VFD.
+            </p>
+          </div>
+          <div className="mt-8 border-t border-b py-8" style={{ borderColor: "var(--ink)" }}>
+            <div className="flex justify-between"><span>No:</span><span className="tabular-nums font-bold">{inv.invoice_number}</span></div>
+            <div className="flex justify-between"><span>Date:</span><span>{new Date(inv.issue_date).toLocaleDateString()}</span></div>
+            {inv.due_date && <div className="flex justify-between"><span>Due:</span><span>{new Date(inv.due_date).toLocaleDateString()}</span></div>}
+            <div className="mt-4"><span style={{ color: "var(--ink-soft)" }}>Customer: </span>{inv.customer_name}</div>
+            {inv.customer_tin && <div><span style={{ color: "var(--ink-soft)" }}>TIN: </span>{inv.customer_tin}</div>}
+          </div>
+          <table className="mt-8 w-full">
+            <thead>
+              <tr className="border-b" style={{ borderColor: "var(--ink)" }}>
+                <th className="py-4 text-left font-semibold">Item</th>
+                <th className="py-4 text-right font-semibold">Qty</th>
+                <th className="py-4 text-right font-semibold">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {inv.items.map(it => (
+                <tr key={it.id} className="align-top">
+                  <td className="py-4" style={{ color: "var(--ink)" }}>{it.description}</td>
+                  <td className="py-4 text-right tabular-nums" style={{ color: "var(--ink)" }}>
+                    {fmt(Number(it.quantity))}{it.unit ? ` ${it.unit}` : ""}
+                  </td>
+                  <td className="py-4 text-right tabular-nums" style={{ color: "var(--ink)" }}>{fmt(Number(it.amount))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="mt-8 space-y-2 border-t pt-8" style={{ borderColor: "var(--ink)" }}>
+            <div className="flex justify-between"><span>Subtotal</span><span className="tabular-nums">{fmt(Number(inv.subtotal))}</span></div>
+            <div className="flex justify-between"><span>VAT {Number(inv.vat_rate)}%</span><span className="tabular-nums">{fmt(Number(inv.vat_amount))}</span></div>
+            <div className="flex justify-between font-bold" style={{ color: "var(--ink)" }}>
+              <span>TOTAL {inv.currency}</span><span className="tabular-nums">{fmt(Number(inv.total))}</span>
+            </div>
+            <div className="flex justify-between"><span>Paid</span><span className="tabular-nums">{fmt(Number(inv.amount_paid))}</span></div>
+            <div className="flex justify-between font-bold" style={{ color: "var(--ink)" }}>
+              <span>Balance</span><span className="tabular-nums">{fmt(balance)}</span>
+            </div>
+          </div>
+          {inv.qr_data_url && (
+            <div className="mt-8 flex justify-center"><img src={inv.qr_data_url} alt="Invoice QR" className="h-28 w-28" /></div>
+          )}
+          {inv.payment_instructions && (
+            <div className="mt-8 whitespace-pre-line text-center" style={{ color: "var(--ink)" }}>{inv.payment_instructions}</div>
+          )}
+          <p className="mt-8 text-center text-[10px]" style={{ color: "var(--ink-soft)" }}>
+            Thank you — quote invoice {inv.invoice_number} with your payment.
+          </p>
+        </div>
+      )}
 
       {/* Payments — not printed */}
       <section className="no-print mt-24 rounded-card border bg-surface p-24" style={{ borderColor: "var(--line)" }}>
@@ -277,7 +370,7 @@ export default function InvoiceDetailPage() {
           <form onSubmit={recordPayment} className="mt-16 space-y-12 border-t pt-16" style={{ borderColor: "var(--line)" }}>
             <div className="grid grid-cols-2 gap-12">
               <label className="block">
-                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Amount (TZS) *</span>
+                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Amount ({inv.currency}) *</span>
                 <input type="number" required min={0.01} step="0.01" max={balance} value={pay.amount}
                   onChange={e => setPay(p => ({ ...p, amount: e.target.value }))}
                   className={inputCls} style={inputStyle} />

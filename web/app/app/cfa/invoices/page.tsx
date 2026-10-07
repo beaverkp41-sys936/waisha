@@ -21,17 +21,29 @@ interface Invoice {
 }
 interface Kpis { invoiced: number; received: number; outstanding: number; overdue: number; }
 
-interface ItemRow { description: string; quantity: string; unitPrice: string; }
+interface ItemRow { description: string; quantity: string; unit: string; unitPrice: string; }
 interface InvoiceForm {
   customerName: string; customerPhone: string; customerEmail: string;
   customerTin: string; customerAddress: string;
   issueDate: string; dueDate: string; paymentTerms: string; notes: string;
-  vatRate: string; items: ItemRow[];
+  vatRate: string; currency: string; customCurrency: string;
+  paymentInstructions: string; items: ItemRow[];
 }
+const CURRENCIES = [
+  { code: "TZS", label: "TZS — Tanzanian Shilling" },
+  { code: "USD", label: "USD — US Dollar" },
+  { code: "EUR", label: "EUR — Euro" },
+  { code: "GBP", label: "GBP — Pound Sterling" },
+  { code: "CNY", label: "CNY — Chinese Yuan" },
+  { code: "RUB", label: "RUB — Russian Ruble" },
+  { code: "JPY", label: "JPY — Japanese Yen" },
+  { code: "other", label: "Other (specify)" }
+];
 const EMPTY: InvoiceForm = {
   customerName: "", customerPhone: "", customerEmail: "", customerTin: "",
   customerAddress: "", issueDate: "", dueDate: "", paymentTerms: "Net 30",
-  notes: "", vatRate: "18", items: [{ description: "", quantity: "1", unitPrice: "" }]
+  notes: "", vatRate: "18", currency: "TZS", customCurrency: "",
+  paymentInstructions: "", items: [{ description: "", quantity: "1", unit: "", unitPrice: "" }]
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -73,7 +85,9 @@ export default function InvoicesPage() {
   function setItem(idx: number, patch: Partial<ItemRow>) {
     setForm(f => ({ ...f, items: f.items.map((it, n) => n === idx ? { ...it, ...patch } : it) }));
   }
-  function addItem() { setForm(f => ({ ...f, items: [...f.items, { description: "", quantity: "1", unitPrice: "" }] })); }
+  function addItem() {
+    setForm(f => ({ ...f, items: [...f.items, { description: "", quantity: "1", unit: "", unitPrice: "" }] }));
+  }
   function removeItem(idx: number) {
     setForm(f => ({ ...f, items: f.items.filter((_, n) => n !== idx) }));
   }
@@ -93,13 +107,17 @@ export default function InvoicesPage() {
           issueDate: form.issueDate || undefined,
           dueDate: form.dueDate || null,
           paymentTerms: form.paymentTerms || null,
-          notes: form.notes || null,
+          currency: form.currency === "other"
+            ? (form.customCurrency.trim().toUpperCase() || "TZS")
+            : form.currency,
+          paymentInstructions: form.paymentInstructions || null,
           vatRate: Number(form.vatRate) || 0,
           items: form.items
             .filter(i => i.description.trim() && Number(i.unitPrice) >= 0)
             .map(i => ({
               description: i.description,
               quantity: Number(i.quantity) || 1,
+              unit: i.unit || null,
               unitPrice: Number(i.unitPrice) || 0
             }))
         })
@@ -127,12 +145,15 @@ export default function InvoicesPage() {
         dueDate: j.due_date ? String(j.due_date).slice(0, 10) : "",
         paymentTerms: j.payment_terms ?? "", notes: j.notes ?? "",
         vatRate: String(Number(j.vat_rate ?? 18)),
+        currency: CURRENCIES.some(c => c.code === j.currency) ? j.currency : "other",
+        customCurrency: CURRENCIES.some(c => c.code === j.currency) ? "" : (j.currency ?? ""),
+        paymentInstructions: j.payment_instructions ?? "",
         items: (j.items ?? []).length
           ? (j.items as any[]).map(it => ({
               description: it.description, quantity: String(Number(it.quantity)),
-              unitPrice: String(Number(it.unit_price))
+              unit: it.unit ?? "", unitPrice: String(Number(it.unit_price))
             }))
-          : [{ description: "", quantity: "1", unitPrice: "" }]
+          : [{ description: "", quantity: "1", unit: "", unitPrice: "" }]
       });
       setShowForm(true);
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -178,7 +199,7 @@ export default function InvoicesPage() {
   const kpi = (label: string, value: number, color: string) => (
     <div className={`${card}`} style={cardStyle}>
       <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>{label}</p>
-      <p className="mt-8 text-xl font-bold tabular-nums" style={{ color }}>TZS {fmt(value)}</p>
+      <p className="mt-8 text-xl font-bold tabular-nums" style={{ color }}>{fmt(value)}</p>
     </div>
   );
 
@@ -202,11 +223,16 @@ export default function InvoicesPage() {
         style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>{notice}</div>}
 
       {kpis && (
-        <section className="mt-24 grid grid-cols-2 gap-16 lg:grid-cols-4">
-          {kpi("Invoiced", kpis.invoiced, "var(--ink)")}
-          {kpi("Received", kpis.received, "var(--success)")}
-          {kpi("Outstanding", kpis.outstanding, "var(--gold)")}
-          {kpi("Overdue invoices", kpis.overdue, kpis.overdue > 0 ? "var(--danger)" : "var(--ink)")}
+        <section className="mt-24">
+          <div className="grid grid-cols-2 gap-16 lg:grid-cols-4">
+            {kpi("Invoiced", kpis.invoiced, "var(--ink)")}
+            {kpi("Received", kpis.received, "var(--success)")}
+            {kpi("Outstanding", kpis.outstanding, "var(--gold)")}
+            {kpi("Overdue invoices", kpis.overdue, kpis.overdue > 0 ? "var(--danger)" : "var(--ink)")}
+          </div>
+          <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+            Combined totals across all invoice currencies.
+          </p>
         </section>
       )}
 
@@ -270,6 +296,22 @@ export default function InvoicesPage() {
                 onChange={e => setForm(f => ({ ...f, vatRate: e.target.value }))}
                 className={inputCls} style={inputStyle} />
             </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Currency</span>
+              <select value={form.currency}
+                onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}
+                className={inputCls} style={inputStyle}>
+                {CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+              </select>
+            </label>
+            {form.currency === "other" && (
+              <label className="block">
+                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Specify currency</span>
+                <input required value={form.customCurrency}
+                  onChange={e => setForm(f => ({ ...f, customCurrency: e.target.value }))}
+                  placeholder="e.g. KES" className={inputCls} style={inputStyle} />
+              </label>
+            )}
           </div>
 
           <div className="border-t pt-16" style={{ borderColor: "var(--line)" }}>
@@ -281,12 +323,12 @@ export default function InvoicesPage() {
             </div>
             <div className="space-y-8">
               {form.items.map((it, idx) => (
-                <div key={idx} className="grid grid-cols-[1fr_90px_130px_130px_32px] items-end gap-8">
+                <div key={idx} className="grid grid-cols-[1fr_70px_90px_120px_110px_28px] items-end gap-8">
                   <label className="block">
                     {idx === 0 && <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Description</span>}
                     <input required value={it.description}
                       onChange={e => setItem(idx, { description: e.target.value })}
-                      placeholder="e.g. Freight — Dar es Salaam to Mwanza, 25 t"
+                      placeholder="e.g. Freight — Dar es Salaam to Mwanza"
                       className={inputCls} style={inputStyle} />
                   </label>
                   <label className="block">
@@ -294,6 +336,11 @@ export default function InvoicesPage() {
                     <input type="number" min={0} step="0.01" value={it.quantity}
                       onChange={e => setItem(idx, { quantity: e.target.value })}
                       className={inputCls} style={inputStyle} />
+                  </label>
+                  <label className="block">
+                    {idx === 0 && <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Unit</span>}
+                    <input value={it.unit} onChange={e => setItem(idx, { unit: e.target.value })}
+                      placeholder="tonnes" className={inputCls} style={inputStyle} />
                   </label>
                   <label className="block">
                     {idx === 0 && <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Unit price</span>}
@@ -330,6 +377,14 @@ export default function InvoicesPage() {
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Notes</span>
             <textarea rows={2} value={form.notes}
               onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+              className={inputCls} style={inputStyle} />
+          </label>
+
+          <label className="block">
+            <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Where to pay (printed on the invoice)</span>
+            <textarea rows={3} value={form.paymentInstructions}
+              onChange={e => setForm(f => ({ ...f, paymentInstructions: e.target.value }))}
+              placeholder="Leave blank to use your profile's bank and mobile-money details"
               className={inputCls} style={inputStyle} />
           </label>
 

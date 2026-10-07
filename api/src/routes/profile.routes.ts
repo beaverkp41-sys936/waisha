@@ -85,7 +85,11 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
       servicesOffered: z.string().max(500).optional(),
       corridorsServed: z.string().max(300).optional(),
       description: z.string().max(2000).optional(),
-      website: z.string().url().max(200).optional()
+      website: z.string().url().max(200).optional(),
+      payBankName: z.string().max(120).nullable().optional(),
+      payBankAccount: z.string().max(60).nullable().optional(),
+      payAccountName: z.string().max(120).nullable().optional(),
+      payMobileMoney: z.string().max(160).nullable().optional()
     }).parse(req.body);
 
     await withTenant(req.user.tid, async (c) => {
@@ -93,8 +97,9 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
         `insert into company_profiles (tenant_id, company_name, brela_number, vat_number,
            transport_licence_no, transport_licence_expiry, year_established,
            fleet_size_declared, services_offered, corridors_served, description,
-           website, updated_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+           website, pay_bank_name, pay_bank_account, pay_account_name, pay_mobile_money,
+           updated_by)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          on conflict (tenant_id) do update set
            company_name = excluded.company_name,
            brela_number = excluded.brela_number,
@@ -107,13 +112,19 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
            corridors_served = excluded.corridors_served,
            description = excluded.description,
            website = excluded.website,
+           pay_bank_name = excluded.pay_bank_name,
+           pay_bank_account = excluded.pay_bank_account,
+           pay_account_name = excluded.pay_account_name,
+           pay_mobile_money = excluded.pay_mobile_money,
            updated_by = excluded.updated_by,
            updated_at = now()`,
         [req.user.tid, body.companyName, body.brelaNumber ?? null, body.vatNumber ?? null,
          body.transportLicenceNo ?? null, body.transportLicenceExpiry ?? null,
          body.yearEstablished ?? null, body.fleetSizeDeclared ?? null,
          body.servicesOffered ?? null, body.corridorsServed ?? null,
-         body.description ?? null, body.website ?? null, req.user.sub]);
+         body.description ?? null, body.website ?? null,
+         body.payBankName ?? null, body.payBankAccount ?? null,
+         body.payAccountName ?? null, body.payMobileMoney ?? null, req.user.sub]);
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         requestId: req.requestId, entity: "company_profiles",
