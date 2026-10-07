@@ -12,6 +12,7 @@ const MODULES = [
   },
   {
     name: "Financial Ledger",
+    href: "/app/cfa/ledger",
     description: "Accounts receivable and payable, profit-and-loss summary cards and a monthly revenue-versus-expenses view of cash flow.",
     plan: "Business"
   },
