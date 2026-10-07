@@ -59,3 +59,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .panel-enter, .underline-slide, .sheet-in, .page-enter { animation: none; transition: none; }
 }
+/* Print-ready invoices: only the invoice sheet prints. */
+@media print {
+  header { display: none !important; }
+  .no-print { display: none !important; }
+  body { background: #ffffff !important; }
+}

@@ -6,6 +6,7 @@ import { AREAS, areaUnlocked } from "../areas";
 const MODULES = [
   {
     name: "Invoices & Billing",
+    href: "/app/cfa/invoices",
     description: "Shipping-grade invoices on your letterhead — line items with a live 18% VAT calculator, payment tracking (Paid / Partial / Overdue), record payments and print-ready output.",
     plan: "Business"
   },
@@ -67,21 +68,25 @@ export default function CfaAreaPage() {
       )}
 
       <div className="mt-24 grid grid-cols-1 gap-16 md:grid-cols-2">
-        {MODULES.map(m => (
-          <div key={m.name} className="rounded-card border bg-surface p-24" style={inputStyle}>
-            <div className="flex items-start justify-between gap-12">
-              <p className="text-sm font-bold" style={{ color: "var(--ink)" }}>{m.name}</p>
-              <span className="whitespace-nowrap px-8 py-2 text-[10px] font-bold uppercase"
-                style={{ borderLeft: `4px solid ${m.plan === "Enterprise" ? "var(--gold)" : "var(--brand)"}`, color: "var(--ink-soft)" }}>
-                {m.plan}
-              </span>
+        {MODULES.map(m => {
+          const card = (
+            <div key={m.name} className="rounded-card border bg-surface p-24" style={inputStyle}>
+              <div className="flex items-start justify-between gap-12">
+                <p className="text-sm font-bold" style={{ color: "var(--ink)" }}>{m.name}</p>
+                <span className="whitespace-nowrap px-8 py-2 text-[10px] font-bold uppercase"
+                  style={{ borderLeft: `4px solid ${m.plan === "Enterprise" ? "var(--gold)" : "var(--brand)"}`, color: "var(--ink-soft)" }}>
+                  {m.plan}
+                </span>
+              </div>
+              <p className="mt-8 text-xs leading-relaxed" style={{ color: "var(--ink-soft)" }}>{m.description}</p>
+              <p className="mt-12 text-[10px] font-bold uppercase tracking-[0.14em]"
+                style={{ color: m.href ? "var(--brand)" : "var(--gold-green)" }}>
+                {m.href ? "Open module" : "In build"}
+              </p>
             </div>
-            <p className="mt-8 text-xs leading-relaxed" style={{ color: "var(--ink-soft)" }}>{m.description}</p>
-            <p className="mt-12 text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--gold-green)" }}>
-              In build
-            </p>
-          </div>
-        ))}
+          );
+          return m.href ? <Link key={m.name} href={m.href} className="block">{card}</Link> : card;
+        })}
       </div>
 
       <p className="mt-24 text-xs" style={{ color: "var(--ink-soft)" }}>
