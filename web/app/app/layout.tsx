@@ -10,6 +10,10 @@ const NAV = [
   { href: "/app/routes", label: "Routes", accent: "var(--gold)" },
   { href: "/app/drivers", label: "Drivers", accent: "var(--success)" },
   { href: "/app/trips", label: "Trips", accent: "var(--gold)" },
+  { href: "/app/fuel", label: "Fuel", accent: "var(--warning)" },
+  { href: "/app/inventory", label: "Inventory", accent: "var(--brand)" },
+  { href: "/app/incidents", label: "Incidents", accent: "var(--danger)" },
+  { href: "/app/clients", label: "Clients", accent: "var(--gold-green)" },
   { href: "/app/staff", label: "Staff", accent: "var(--brand)" },
   { href: "/app/account", label: "Account", accent: "rgba(255,255,255,0.7)" }
 ];
@@ -51,7 +55,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </span>
         </div>
         {area === "transporter" && (
-          <nav className="flex gap-24 px-24 pb-12 pt-4 text-xs font-semibold">
+          <nav className="flex flex-wrap gap-x-24 gap-y-4 px-24 pb-12 pt-4 text-xs font-semibold">
             {NAV.map(n => {
               const active = pathname === n.href || pathname.startsWith(n.href + "/");
               return (
