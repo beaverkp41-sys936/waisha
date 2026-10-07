@@ -5,6 +5,12 @@ import { AREAS, areaUnlocked } from "../areas";
 
 const MODULES = [
   {
+    name: "Cargo Management",
+    href: "/app/cfa/cargo",
+    description: "Full clearing files — file numbers, containers, customs fields, six-stage workflow, tasks and attached documents.",
+    plan: "Business"
+  },
+  {
     name: "Invoices & Billing",
     href: "/app/cfa/invoices",
     description: "Shipping-grade invoices on your letterhead — line items with a live 18% VAT calculator, payment tracking (Paid / Partial / Overdue), record payments and print-ready output.",

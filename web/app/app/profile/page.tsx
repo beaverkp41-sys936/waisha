@@ -90,7 +90,8 @@ export default function ProfilePage() {
           payBankName: form.pay_bank_name || null,
           payBankAccount: form.pay_bank_account || null,
           payAccountName: form.pay_account_name || null,
-          payMobileMoney: form.pay_mobile_money || null
+          payMobileMoney: form.pay_mobile_money || null,
+          companyCode: form.company_code || null
         })
       });
       const j = await res.json().catch(() => ({}));
@@ -183,6 +184,12 @@ export default function ProfilePage() {
           <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Company name *</span>
           <input required disabled={!editing} value={F("company_name")} onChange={e => set("company_name", e.target.value)}
             className={inputCls} style={editing ? inputStyle : disabledStyle} />
+        </label>
+        <label className="block">
+          <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Company code (3 letters, for cargo file numbers)</span>
+          <input disabled={!editing} maxLength={3} value={F("company_code")}
+            onChange={e => set("company_code", e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))}
+            placeholder="e.g. LTL" className={inputCls} style={editing ? inputStyle : disabledStyle} />
         </label>
         <div className="grid grid-cols-2 gap-12">
           <label className="block">

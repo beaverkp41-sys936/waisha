@@ -174,6 +174,53 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
         });
       }
 
+      // Cargo file ETAs arriving within 3 days
+      const etaFiles = await c.query(
+        `select id, file_number, consignee_name, eta from cargo_shipments
+         where tenant_id = $1 and deleted_at is null and status = 'open'
+           and eta between current_date and current_date + 3`, [req.user.tid]);
+      for (const s of etaFiles.rows) {
+        const days = Math.ceil((new Date(s.eta).getTime() - today) / DAY);
+        items.push({
+          type: "cargo_eta", severity: "info",
+          title: `ETA ${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`}: ${s.file_number}`,
+          detail: `Consignee ${s.consignee_name}`,
+          href: "/app/cfa/cargo", date: s.eta
+        });
+      }
+
+      // Arrived cargo files still unpaid
+      const unpaidFiles = await c.query(
+        `select id, file_number, consignee_name, payment_status, eta from cargo_shipments
+         where tenant_id = $1 and deleted_at is null and status = 'open'
+           and payment_status <> 'paid' and eta < current_date`, [req.user.tid]);
+      for (const s of unpaidFiles.rows) {
+        items.push({
+          type: "cargo_payment", severity: "warning",
+          title: `Payment due on file ${s.file_number}`,
+          detail: `${s.consignee_name} — ${s.payment_status.replace("_", " ")} since arrival`,
+          href: "/app/cfa/cargo", date: s.eta
+        });
+      }
+
+      // Task deadlines (due today/soon) and overdue tasks
+      const dueTasks = await c.query(
+        `select k.id, k.title, k.due_date, s.file_number
+         from cargo_tasks k join cargo_shipments s on s.id = k.shipment_id
+         where k.tenant_id = $1 and k.status = 'pending' and k.due_date is not null
+           and k.due_date <= current_date + 2`, [req.user.tid]);
+      for (const t of dueTasks.rows) {
+        const days = Math.floor((new Date(t.due_date).getTime() - today) / DAY);
+        items.push({
+          type: "task_deadline", severity: days < 0 ? "critical" : "warning",
+          title: days < 0
+            ? `Task overdue: ${t.title}`
+            : `Task due ${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`}: ${t.title}`,
+          detail: `File ${t.file_number}`,
+          href: "/app/cfa/cargo", date: t.due_date
+        });
+      }
+
       const rank = { critical: 0, warning: 1, info: 2 };
       items.sort((a, b) => rank[a.severity] - rank[b.severity] || a.date.localeCompare(b.date));
 

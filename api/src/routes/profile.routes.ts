@@ -86,6 +86,7 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
       corridorsServed: z.string().max(300).optional(),
       description: z.string().max(2000).optional(),
       website: z.string().url().max(200).optional(),
+      companyCode: z.string().trim().regex(/^[A-Za-z]{3}$/, "Company code must be exactly 3 letters").nullable().optional(),
       payBankName: z.string().max(120).nullable().optional(),
       payBankAccount: z.string().max(60).nullable().optional(),
       payAccountName: z.string().max(120).nullable().optional(),
@@ -98,8 +99,8 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
            transport_licence_no, transport_licence_expiry, year_established,
            fleet_size_declared, services_offered, corridors_served, description,
            website, pay_bank_name, pay_bank_account, pay_account_name, pay_mobile_money,
-           updated_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+           company_code, updated_by)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          on conflict (tenant_id) do update set
            company_name = excluded.company_name,
            brela_number = excluded.brela_number,
@@ -116,6 +117,7 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
            pay_bank_account = excluded.pay_bank_account,
            pay_account_name = excluded.pay_account_name,
            pay_mobile_money = excluded.pay_mobile_money,
+           company_code = excluded.company_code,
            updated_by = excluded.updated_by,
            updated_at = now()`,
         [req.user.tid, body.companyName, body.brelaNumber ?? null, body.vatNumber ?? null,
@@ -124,7 +126,8 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
          body.servicesOffered ?? null, body.corridorsServed ?? null,
          body.description ?? null, body.website ?? null,
          body.payBankName ?? null, body.payBankAccount ?? null,
-         body.payAccountName ?? null, body.payMobileMoney ?? null, req.user.sub]);
+         body.payAccountName ?? null, body.payMobileMoney ?? null,
+         body.companyCode ? body.companyCode.toUpperCase() : null, req.user.sub]);
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         requestId: req.requestId, entity: "company_profiles",

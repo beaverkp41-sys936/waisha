@@ -23,15 +23,15 @@ async function requireAuth(req: any) {
   req.user = claims;
 }
 
-const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip"] as const;
-const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road_licence", "delivery_note", "other"] as const;
+const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip", "shipment"] as const;
+const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road_licence", "delivery_note", "invoice", "bill_of_lading", "packing_list", "other"] as const;
 const IMAGE_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const DOC_MIMES = [...IMAGE_MIMES, "application/pdf"];
 const MAX_BYTES = 8 * 1024 * 1024; // 8MB per file
 
 // Entities that must exist and belong to the tenant before a file attaches.
 const ENTITY_TABLES: Record<string, string> = {
-  user: "users", vessel: "vessels", driver: "drivers", trip: "trips"
+  user: "users", vessel: "vessels", driver: "drivers", trip: "trips", shipment: "cargo_shipments"
 };
 
 function sanitizeFileName(name: string): string {
