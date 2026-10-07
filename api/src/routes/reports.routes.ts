@@ -18,6 +18,74 @@ const summarySchema = z.object({
 
 export async function reportsRoutes(app: FastifyInstance, _opts: unknown) {
 
+  /** Cargo-specific period report: file summary, payment status, delays. */
+  app.get("/reports/cargo", { preHandler: [requireAuth] }, async (req: any) => {
+    const q = summarySchema.parse(req.query);
+    const to = q.to ?? new Date().toISOString().slice(0, 10);
+    const from = q.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+
+    return withTenant(req.user.tid, async (c) => {
+      const summary = await c.query(
+        `select count(*)::int as total,
+                count(*) filter (where status = 'completed')::int as completed,
+                count(*) filter (where status = 'open')::int as open,
+                count(*) filter (where status = 'on_hold')::int as on_hold,
+                coalesce(sum(processing_cost), 0)::float8 as processing_value,
+                coalesce(sum(payment_amount) filter (where payment_status <> 'cancelled'), 0)::float8 as billed
+         from cargo_shipments
+         where tenant_id = $1 and deleted_at is null
+           and created_at::date between $2 and $3`, [req.user.tid, from, to]);
+
+      const byType = await c.query(
+        `select shipment_type, count(*)::int as count from cargo_shipments
+         where tenant_id = $1 and deleted_at is null
+           and created_at::date between $2 and $3 and status <> 'cancelled'
+         group by shipment_type`, [req.user.tid, from, to]);
+
+      const byStage = await c.query(
+        `select stage, count(*)::int as count from cargo_shipments
+         where tenant_id = $1 and deleted_at is null and status = 'open'
+         group by stage`, [req.user.tid]);
+
+      const byPayment = await c.query(
+        `select payment_status, count(*)::int as count,
+                coalesce(sum(coalesce(payment_amount, processing_cost)), 0)::float8 as value
+         from cargo_shipments
+         where tenant_id = $1 and deleted_at is null and status <> 'cancelled'
+         group by payment_status`, [req.user.tid]);
+
+      // Delays: files whose carry-in happened after ETA (measured lateness)
+      // plus open files whose ETA has passed without reaching exit.
+      const lateDelivered = await c.query(
+        `select file_number, consignee_name, eta, carry_in_date,
+                greatest((carry_in_date - eta), 0) as days_late
+         from cargo_shipments
+         where tenant_id = $1 and deleted_at is null and status <> 'cancelled'
+           and eta is not null and carry_in_date is not null and carry_in_date > eta
+           and created_at::date between $2 and $3
+         order by days_late desc limit 20`, [req.user.tid, from, to]);
+
+      const lateOpen = await c.query(
+        `select file_number, consignee_name, eta,
+                (current_date - eta)::int as days_past_eta, stage
+         from cargo_shipments
+         where tenant_id = $1 and deleted_at is null and status = 'open'
+           and created_at::date between $2 and $3
+           and eta is not null and eta < current_date and stage not in ('release','exit')
+         order by days_past_eta desc limit 20`, [req.user.tid, from, to]);
+
+      return {
+        from, to,
+        summary: summary.rows[0],
+        byType: byType.rows,
+        byStage: byStage.rows,
+        byPayment: byPayment.rows,
+        lateDelivered: lateDelivered.rows,
+        lateOpen: lateOpen.rows
+      };
+    });
+  });
+
   /** Period-filtered operational + financial summary. Defaults: last 30 days. */
   app.get("/reports/summary", { preHandler: [requireAuth] }, async (req: any) => {
     const q = summarySchema.parse(req.query);

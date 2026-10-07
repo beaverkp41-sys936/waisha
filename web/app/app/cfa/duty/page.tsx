@@ -227,51 +227,110 @@ export default function DutyCalculatorPage() {
       )}
 
       {rates && (
-        <section className="mt-24">
-          <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
-            Quick reference — {rates.version}
-          </h2>
-          <div className="mt-16 grid grid-cols-1 gap-16 md:grid-cols-2">
-            <div className={card} style={cardStyle}>
-              <p className="text-xs font-bold uppercase" style={{ color: "var(--ink-soft)" }}>Import duty bands</p>
-              <table className="mt-8 w-full text-xs">
-                <tbody>
-                  {rates.bands.map(b => (
-                    <tr key={b.id} className="border-b" style={{ borderColor: "var(--line)" }}>
-                      <td className="py-8" style={{ color: "var(--ink)" }}>{b.label}</td>
-                      <td className="py-8 text-right font-bold tabular-nums" style={{ color: "var(--ink)" }}>{Number(b.rate_value)}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
-                Withholding VAT on the portal: goods {rates.core.whVatGoods}% · services {rates.core.whVatServices}%.
-              </p>
-            </div>
-            <div className={card} style={cardStyle}>
-              <p className="text-xs font-bold uppercase" style={{ color: "var(--ink-soft)" }}>
-                Industrial Development Levy (customs value)
-              </p>
-              <table className="mt-8 w-full text-xs">
-                <tbody>
-                  {rates.idl.map(r => (
-                    <tr key={r.id} className="border-b" style={{ borderColor: "var(--line)" }}>
-                      <td className="py-8" style={{ color: "var(--ink)" }}>
-                        <span className="tabular-nums font-semibold">{r.hs_code}</span> — {r.label.replace(/^IDL — /, "").replace(/ \d{2}\.\d{2}\.\d{2}[–-]?\d*\.*$/, "")}
-                      </td>
-                      <td className="py-8 text-right font-bold tabular-nums" style={{ color: "var(--ink)" }}>{Number(r.rate_value)}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <p className="mt-16 text-[10px]" style={{ color: "var(--ink-soft)" }}>
-            Source: TRA "Taxes and Duties at a Glance" {rates.version}. This tool is a guide — the Customs Value and
-            classification are confirmed by TRA at entry. Sensitivity lists and duty remissions may modify the band.
-          </p>
-        </section>
+        <TariffExplorer version={rates.version} />
       )}
     </div>
+  );
+}
+
+const KIND_OPTIONS = [
+  { key: "", label: "All kinds" },
+  { key: "import_band", label: "Import duty bands" },
+  { key: "idl", label: "Industrial Development Levy" },
+  { key: "excise", label: "Excise" },
+  { key: "vat", label: "VAT" },
+  { key: "levy", label: "Levies" },
+  { key: "fee", label: "Fees" }
+];
+const BASIS_LABELS: Record<string, string> = {
+  cif: "of CIF", fob: "of FOB", duty_paid_value: "of duty-paid value",
+  per_unit: "per unit", fixed: "fixed"
+};
+
+function TariffExplorer({ version }: { version: string }) {
+  const inputCls = "w-full rounded-input border px-12 py-8 text-sm";
+  const inputStyle = { borderColor: "var(--line)", background: "var(--milk)" };
+  const [kind, setKind] = useState("");
+  const [query, setQuery] = useState("");
+  const [minRate, setMinRate] = useState("");
+  const [maxRate, setMaxRate] = useState("");
+  const [rows, setRows] = useState<RateRow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const search = useCallback(async () => {
+    setBusy(true);
+    try {
+      const qs = new URLSearchParams();
+      if (kind) qs.set("kinds", kind);
+      if (query.trim()) qs.set("query", query.trim());
+      if (minRate) qs.set("minRate", minRate);
+      if (maxRate) qs.set("maxRate", maxRate);
+      const res = await apiFetch(`/duty/tariff?${qs.toString()}`);
+      const j = await res.json().catch(() => ({}));
+      if (res.ok) setRows(j.rows ?? []);
+    } finally { setBusy(false); }
+  }, [kind, query, minRate, maxRate]);
+
+  return (
+    <section className="mt-24">
+      <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+        Tariff explorer — duties, VAT, levies and fees ({version})
+      </h2>
+      <div className="mt-16 grid grid-cols-2 gap-12 rounded-card border bg-surface p-24 md:grid-cols-5" style={{ borderColor: "var(--line)" }}>
+        <label className="block">
+          <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Kind</span>
+          <select value={kind} onChange={e => setKind(e.target.value)} className={inputCls} style={inputStyle}>
+            {KIND_OPTIONS.map(k => <option key={k.key} value={k.key}>{k.label}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Search</span>
+          <input value={query} onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") search(); }}
+            placeholder="HS code or description" className={inputCls} style={inputStyle} />
+        </label>
+        <label className="block">
+          <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Min rate</span>
+          <input type="number" min={0} value={minRate} onChange={e => setMinRate(e.target.value)} className={inputCls} style={inputStyle} />
+        </label>
+        <label className="block">
+          <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Max rate</span>
+          <input type="number" min={0} value={maxRate} onChange={e => setMaxRate(e.target.value)} className={inputCls} style={inputStyle} />
+        </label>
+        <button type="button" onClick={search} disabled={busy}
+          className="waisha-btn self-end rounded-input py-8 text-xs font-semibold disabled:opacity-60">
+          {busy ? "Searching…" : "Search tariff"}
+        </button>
+      </div>
+      {rows && (
+        <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={{ borderColor: "var(--line)" }}>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+                <th className="p-12">HS code</th><th className="p-12">Kind</th>
+                <th className="p-12">Description</th><th className="p-12">Basis</th>
+                <th className="p-12 text-right">Rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.id} className="border-b" style={{ borderColor: "var(--line)" }}>
+                  <td className="p-12 tabular-nums" style={{ color: "var(--ink)" }}>{r.hs_code ?? "—"}</td>
+                  <td className="p-12 text-xs uppercase" style={{ color: "var(--ink-soft)" }}>{r.kind.replace("_", " ")}</td>
+                  <td className="p-12" style={{ color: "var(--ink)" }}>{r.label}</td>
+                  <td className="p-12 text-xs" style={{ color: "var(--ink-soft)" }}>{BASIS_LABELS[r.basis] ?? r.basis}</td>
+                  <td className="p-12 text-right font-bold tabular-nums" style={{ color: "var(--ink)" }}>
+                    {r.rate_type === "percent" ? `${Number(r.rate_value)}%` : `TZS ${Number(r.rate_value).toLocaleString()}`}
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr><td colSpan={5} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>No rates match the filters.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }

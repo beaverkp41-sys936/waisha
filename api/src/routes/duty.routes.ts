@@ -90,6 +90,39 @@ export async function dutyRoutes(app: FastifyInstance, _opts: unknown) {
     return r.rows;
   });
 
+  // ---------- Tariff multi-filter search (duties, VAT, levies, fees) ----------
+  app.get("/duty/tariff", { preHandler: [requireAuth] }, async (req: any) => {
+    const q = z.object({
+      kinds: z.string().trim().max(120).optional(),   // csv of kinds: vat,levy,fee,import_band,idl,excise
+      query: z.string().trim().max(60).optional(),     // label / hs_code text
+      minRate: z.coerce.number().min(0).max(1_000_000).optional(),
+      maxRate: z.coerce.number().min(0).max(1_000_000).optional()
+    }).parse(req.query);
+
+    const v = await activeVersion();
+    const kinds = q.kinds ? q.kinds.split(",").map(k => k.trim()).filter(Boolean) : [];
+    const text = q.query ? `%${q.query}%` : null;
+
+    const r = await pool.query(
+      `select id, kind, hs_code, category, label, basis, rate_type, rate_value::text
+       from duty_rates
+       where version = $1 and is_active
+         and ($2::text[] is null or kind = any($2::text[]))
+         and ($3::text is null or label ilike $3 or hs_code ilike $3)
+         and rate_value >= $4 and rate_value <= $5
+       order by
+         case kind when 'vat' then 1 when 'levy' then 2 when 'fee' then 3
+                   when 'import_band' then 4 when 'idl' then 5 else 6 end,
+         hs_code nulls last, label
+       limit 100`,
+      [v.version,
+       kinds.length ? kinds : null,
+       text,
+       q.minRate ?? 0,
+       q.maxRate ?? 1_000_000]);
+    return { version: v.version, expired: v.expired, rows: r.rows };
+  });
+
   // ---------- Calculate ----------
   app.post("/duty/calculate", { preHandler: [requireAuth] }, async (req: any) => {
     const body = z.object({

@@ -16,6 +16,15 @@ interface Summary {
   incidents: { open: number; resolved: number };
   topCustomers: { customer_name: string; invoiced: number; invoices: number }[];
 }
+interface CargoReport {
+  from: string; to: string;
+  summary: { total: number; completed: number; open: number; on_hold: number; processing_value: number; billed: number };
+  byType: { shipment_type: string; count: number }[];
+  byStage: { stage: string; count: number }[];
+  byPayment: { payment_status: string; count: number; value: number }[];
+  lateDelivered: { file_number: string; consignee_name: string; eta: string; carry_in_date: string; days_late: number }[];
+  lateOpen: { file_number: string; consignee_name: string; eta: string; days_past_eta: number; stage: string }[];
+}
 
 const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -41,6 +50,7 @@ export default function ReportsPage() {
   const [from, setFrom] = useState(rangeFor("month").from);
   const [to, setTo] = useState(rangeFor("month").to);
   const [data, setData] = useState<Summary | null>(null);
+  const [cargo, setCargo] = useState<CargoReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -51,6 +61,8 @@ export default function ReportsPage() {
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setError(errorText(j, "Could not load the report.")); return; }
       setData(j);
+      const cr = await apiFetch(`/reports/cargo?from=${f}&to=${t}`);
+      if (cr.ok) setCargo(await cr.json()); else setCargo(null);
     } finally { setBusy(false); }
   }, []);
 
@@ -231,6 +243,58 @@ export default function ReportsPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {/* Cargo report */}
+            {cargo && (
+              <div className="mt-24 border-t pt-16" style={{ borderColor: "var(--line)" }}>
+                <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Cargo files</p>
+                <p className="mt-8 text-sm" style={{ color: "var(--ink)" }}>
+                  {cargo.summary.total} opened ({cargo.summary.completed} completed, {cargo.summary.open} open, {cargo.summary.on_hold} on hold)
+                  · processing value TZS {fmt(cargo.summary.processing_value)}
+                </p>
+                {cargo.byType.length > 0 && (
+                  <p className="mt-8 text-sm" style={{ color: "var(--ink)" }}>
+                    By type: {cargo.byType.map(t => `${t.shipment_type} ${t.count}`).join(" · ")}
+                  </p>
+                )}
+                {cargo.byPayment.length > 0 && (
+                  <p className="mt-8 text-sm" style={{ color: "var(--ink)" }}>
+                    Payment: {cargo.byPayment.map(p => `${p.payment_status} ${p.count} (${fmt(p.value)} TZS)`).join(" · ")}
+                  </p>
+                )}
+                {(cargo.lateDelivered.length > 0 || cargo.lateOpen.length > 0) && (
+                  <div className="mt-16">
+                    <p className="text-xs font-bold uppercase" style={{ color: "var(--danger)" }}>Delays</p>
+                    <table className="mt-8 w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+                          <th className="py-8">File</th><th className="py-8">Consignee</th>
+                          <th className="py-8">ETA</th><th className="py-8 text-right">Delay</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cargo.lateOpen.map(f => (
+                          <tr key={f.file_number} className="border-b" style={{ borderColor: "var(--line)" }}>
+                            <td className="py-8" style={{ color: "var(--ink)" }}>{f.file_number}</td>
+                            <td className="py-8" style={{ color: "var(--ink-soft)" }}>{f.consignee_name}</td>
+                            <td className="py-8 tabular-nums" style={{ color: "var(--ink-soft)" }}>{new Date(f.eta).toLocaleDateString()}</td>
+                            <td className="py-8 text-right tabular-nums" style={{ color: "var(--danger)" }}>{f.days_past_eta} days in customs</td>
+                          </tr>
+                        ))}
+                        {cargo.lateDelivered.map(f => (
+                          <tr key={f.file_number} className="border-b" style={{ borderColor: "var(--line)" }}>
+                            <td className="py-8" style={{ color: "var(--ink)" }}>{f.file_number}</td>
+                            <td className="py-8" style={{ color: "var(--ink-soft)" }}>{f.consignee_name}</td>
+                            <td className="py-8 tabular-nums" style={{ color: "var(--ink-soft)" }}>{new Date(f.eta).toLocaleDateString()}</td>
+                            <td className="py-8 text-right tabular-nums" style={{ color: "var(--warning)" }}>{f.days_late} days late</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
           </section>

@@ -229,10 +229,15 @@ function CargoContent() {
             Clearing and forwarding files — {companyCode ? `your file numbers run as ${prefix}${companyCode}-001-${new Date().getFullYear()}` : "set your company code on the Profile page to open files"}.
           </p>
         </div>
-        <button type="button" onClick={() => { setForm(EMPTY); setShowForm(s => !s); }}
-          className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">
-          {showForm ? "Close form" : "+ New file"}
-        </button>
+        <div className="flex gap-8">
+          <Link href="/app/cfa/cargo/analytics"
+            className="rounded-input border px-16 py-8 text-xs font-semibold"
+            style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Analytics</Link>
+          <button type="button" onClick={() => { setForm(EMPTY); setShowForm(s => !s); }}
+            className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">
+            {showForm ? "Close form" : "+ New file"}
+          </button>
+        </div>
       </div>
       {error && <div role="alert" className="mt-16 mb-16 px-12 py-8 text-sm"
         style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>{error}</div>}

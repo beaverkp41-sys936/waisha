@@ -113,6 +113,88 @@ async function nextFileNumber(
 
 export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
 
+  // ---------- Analytics (pie / line / histogram / progress / P&L) ----------
+  app.get("/cargo/analytics", { preHandler: [requireAuth, requirePermission("shipments.view")] },
+    async (req: any) => {
+      return withTenant(req.user.tid, async (c) => {
+        const byType = await c.query(
+          `select shipment_type, count(*)::int as count from cargo_shipments
+           where tenant_id = $1 and deleted_at is null and status <> 'cancelled'
+           group by shipment_type`, [req.user.tid]);
+
+        const monthly = await c.query(
+          `select to_char(date_trunc('month', created_at), 'YYYY-MM') as month, count(*)::int as count
+           from cargo_shipments
+           where tenant_id = $1 and deleted_at is null and status <> 'cancelled'
+             and created_at >= (now() - interval '11 months')
+           group by 1`, [req.user.tid]);
+
+        const byStage = await c.query(
+          `select stage, count(*)::int as count from cargo_shipments
+           where tenant_id = $1 and deleted_at is null and status = 'open'
+           group by stage`, [req.user.tid]);
+
+        // Processing time: created -> completed, for files completed in the last year.
+        const processing = await c.query(
+          `select extract(day from completed_at - created_at)::int as days
+           from cargo_shipments
+           where tenant_id = $1 and deleted_at is null and status = 'completed'
+             and completed_at is not null
+             and completed_at >= (now() - interval '12 months')`, [req.user.tid]);
+        const buckets = [
+          { label: "0-3 days", min: 0, max: 3 },
+          { label: "4-7 days", min: 4, max: 7 },
+          { label: "8-14 days", min: 8, max: 14 },
+          { label: "15-30 days", min: 15, max: 30 },
+          { label: "30+ days", min: 31, max: 100000 }
+        ].map(b => ({
+          label: b.label,
+          count: processing.rows.filter((r: any) => r.days >= b.min && r.days <= b.max).length
+        }));
+
+        const revenue = await c.query(
+          `select to_char(date_trunc('month', issue_date), 'YYYY-MM') as month,
+                  coalesce(sum(total), 0)::float8 as value
+           from freight_invoices
+           where tenant_id = $1 and deleted_at is null and status not in ('draft','cancelled')
+             and issue_date >= (current_date - interval '11 months')
+           group by 1`, [req.user.tid]);
+
+        const pnl = await c.query(
+          `select (select coalesce(sum(total), 0)::float8 from freight_invoices
+                    where tenant_id = $1 and deleted_at is null and status not in ('draft','cancelled')) as revenue,
+                  (select coalesce(sum(amount_paid), 0)::float8 from freight_invoices
+                    where tenant_id = $1 and deleted_at is null and status not in ('draft','cancelled')) as received,
+                  (select coalesce(sum(amount_paid), 0)::float8 from freight_expenses
+                    where tenant_id = $1 and deleted_at is null and status <> 'cancelled') as paid`,
+          [req.user.tid]);
+
+        const p = pnl.rows[0];
+        const revMap = new Map(revenue.rows.map((r: any) => [r.month, Number(r.value)]));
+        const shipMap = new Map(monthly.rows.map((r: any) => [r.month, Number(r.count)]));
+        const months: { month: string; shipments: number; revenue: number }[] = [];
+        const now = new Date();
+        for (let i = 11; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          months.push({ month: key, shipments: shipMap.get(key) ?? 0, revenue: revMap.get(key) ?? 0 });
+        }
+
+        return {
+          byType: byType.rows,
+          months,
+          byStage: byStage.rows,
+          processingBuckets: buckets,
+          pnl: {
+            revenue: Number(p.revenue),
+            received: Number(p.received),
+            paid: Number(p.paid),
+            net: Math.round((Number(p.received) - Number(p.paid)) * 100) / 100
+          }
+        };
+      });
+    });
+
   // ---------- Register ----------
   app.get("/cargo", { preHandler: [requireAuth, requirePermission("shipments.view")] },
     async (req: any) => {
@@ -358,7 +440,9 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
         if (prev.rows[0].status === body.status) return; // caller sees { ok: true }
 
         await c.query(
-          `update cargo_shipments set status = $2, updated_by = $3, updated_at = now()
+          `update cargo_shipments set status = $2,
+             completed_at = case when $2 = 'completed' then now() else null end,
+             updated_by = $3, updated_at = now()
            where id = $1 and tenant_id = $4 and deleted_at is null`,
           [id, body.status, req.user.sub, req.user.tid]);
         await writeAudit(c, {
