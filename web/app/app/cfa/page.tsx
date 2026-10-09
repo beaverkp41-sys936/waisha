@@ -24,7 +24,8 @@ const MODULES = [
   },
   {
     name: "Documents Vault",
-    description: "Licences, insurance certificates, inspection papers and delivery notes stored against vessels, drivers and trips.",
+    href: "/app/documents",
+    description: "Every file stored in the portal — licences, insurance, invoices, bills of lading and packing lists, filterable by type and entity.",
     plan: "Business"
   },
   {
@@ -40,7 +41,8 @@ const MODULES = [
   },
   {
     name: "ETA Calendar",
-    description: "Month calendar marking arrivals, deadlines, renewals and payments, with an upcoming-events sidebar.",
+    href: "/app/cfa/calendar",
+    description: "Month calendar marking cargo ETAs, trip departures and arrivals, invoice due dates, task deadlines and document renewals, with an upcoming-events sidebar.",
     plan: "Enterprise"
   },
   {

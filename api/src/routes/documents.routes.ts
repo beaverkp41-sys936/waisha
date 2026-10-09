@@ -130,6 +130,34 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
     return reply.status(201).send({ id, fileName, mimeType: mime, sizeBytes: bytes.length });
   });
 
+  // ---------- Vault: every document across entities, with labels ----------
+  app.get("/documents/vault", { preHandler: [requireAuth] }, async (req: any) => {
+    const q = z.object({
+      entityType: z.enum(ENTITY_KINDS).optional(),
+      kind: z.enum(DOC_KINDS).optional()
+    }).parse(req.query);
+
+    const { rows } = await withTenant(req.user.tid, (c) => c.query(
+      `select d.id, d.entity_type, d.entity_id, d.kind, d.file_name, d.mime_type,
+              d.size_bytes, d.created_at,
+              case d.entity_type
+                when 'tenant' then (select name from tenants t where t.id = d.entity_id)
+                when 'user' then (select full_name from users u where u.id = d.entity_id)
+                when 'vessel' then (select name from vessels v where v.id = d.entity_id)
+                when 'driver' then (select full_name from drivers dr where dr.id = d.entity_id)
+                when 'trip' then (select coalesce(reference, 'Trip') from trips tr where tr.id = d.entity_id)
+                when 'shipment' then (select file_number from cargo_shipments cs where cs.id = d.entity_id)
+              end as entity_label
+       from documents d
+       where d.tenant_id = $1 and d.deleted_at is null
+         and ($2::text is null or d.entity_type = $2)
+         and ($3::text is null or d.kind = $3)
+       order by d.created_at desc
+       limit 300`,
+      [req.user.tid, q.entityType ?? null, q.kind ?? null]));
+    return rows;
+  });
+
   // ---------- List for an entity ----------
   app.get("/documents", { preHandler: [requireAuth] }, async (req: any) => {
     const q = z.object({
