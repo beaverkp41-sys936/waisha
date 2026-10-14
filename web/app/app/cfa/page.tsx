@@ -48,6 +48,7 @@ const MODULES = [
   },
   {
     name: "Compliance & Screening",
+    href: "/app/cfa/compliance",
     description: "Client blacklist screening, plus a licence tracker for TRA, BRELA and bond permits with renewal alerts.",
     plan: "Enterprise"
   }

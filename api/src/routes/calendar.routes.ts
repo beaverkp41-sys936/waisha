@@ -36,9 +36,17 @@ export async function calendarRoutes(app: FastifyInstance, _opts: unknown) {
 
     return withTenant(req.user.tid, async (c) => {
       const events: CalendarEvent[] = [];
-      const push = (date: string | null, type: string, label: string, detail: string, href: string) => {
-        if (!date) return;
-        const d = String(date).slice(0, 10);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      // pg hands back DATE columns as JS Dates at local midnight, so the local
+      // year/month/day are the calendar day; plain day strings pass through.
+      const dayOf = (v: unknown): string | null => {
+        if (v == null) return null;
+        if (v instanceof Date) return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`;
+        return String(v).slice(0, 10);
+      };
+      const push = (date: unknown, type: string, label: string, detail: string, href: string) => {
+        const d = dayOf(date);
+        if (!d) return;
         if (d < first || d > last) return;
         events.push({ date: d, type, label, detail, href });
       };
@@ -101,6 +109,14 @@ export async function calendarRoutes(app: FastifyInstance, _opts: unknown) {
          where tenant_id = $1 and deleted_at is null and licence_expiry is not null`, [req.user.tid]);
       for (const d of drivers.rows) {
         push(d.licence_expiry, "doc_expiry", `${d.full_name} licence expires`, "Renew driving licence", "/app/compliance");
+      }
+
+      const regulatory = await c.query(
+        `select title, authority, licence_number, expiry_date from regulatory_licences
+         where tenant_id = $1 and deleted_at is null`, [req.user.tid]);
+      for (const l of regulatory.rows) {
+        push(l.expiry_date, "doc_expiry", `${l.title} expires`,
+          `${l.authority.toUpperCase()}${l.licence_number ? ` ${l.licence_number}` : ""}`, "/app/cfa/compliance");
       }
 
       events.sort((a, b) => a.date.localeCompare(b.date));

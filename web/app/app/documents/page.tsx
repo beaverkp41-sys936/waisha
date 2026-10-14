@@ -19,7 +19,8 @@ interface Doc {
 
 const ENTITY_LABELS: Record<string, string> = {
   tenant: "Company", user: "Staff member", vessel: "Vessel",
-  driver: "Driver", trip: "Trip", shipment: "Cargo file", message: "Message"
+  driver: "Driver", trip: "Trip", shipment: "Cargo file", message: "Message",
+  licence: "Regulatory licence"
 };
 const KIND_LABELS: Record<string, string> = {
   logo: "Logo", avatar: "Photo", licence: "Licence", insurance: "Insurance",

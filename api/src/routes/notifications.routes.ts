@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { withTenant } from "../db/pool.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { ApiError } from "../util/errors.js";
+import { namesMatch } from "../util/name-match.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -101,6 +102,58 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
             detail: `Expires ${new Date(d.licence_expiry).toLocaleDateString()}`,
             href: "/app/compliance", date: d.licence_expiry
           });
+        }
+      }
+
+      // Regulatory licences (TRA, BRELA, TPA and bond permits)
+      const licences = await c.query(
+        `select id, authority, title, expiry_date from regulatory_licences
+         where tenant_id = $1 and deleted_at is null`, [req.user.tid]);
+      for (const l of licences.rows) {
+        const days = Math.floor((new Date(l.expiry_date).getTime() - today) / DAY);
+        if (days < 0) {
+          items.push({
+            type: "licence_expired", severity: "critical",
+            title: `${l.title} expired`,
+            detail: `${l.authority.toUpperCase()} licence expired ${-days} day${-days === 1 ? "" : "s"} ago (${new Date(l.expiry_date).toLocaleDateString()})`,
+            href: "/app/cfa/compliance", date: l.expiry_date
+          });
+        } else if (days <= 30) {
+          items.push({
+            type: "licence_expiring", severity: "warning",
+            title: `${l.title} expires in ${days} day${days === 1 ? "" : "s"}`,
+            detail: `${l.authority.toUpperCase()} — renew before ${new Date(l.expiry_date).toLocaleDateString()}`,
+            href: "/app/cfa/compliance", date: l.expiry_date
+          });
+        }
+      }
+
+      // Watchlist screening hits on open cargo files
+      const watch = await c.query(
+        `select id, party_name, severity from screening_entries
+         where tenant_id = $1 and deleted_at is null and status = 'active'`, [req.user.tid]);
+      if (watch.rowCount) {
+        const openFiles = await c.query(
+          `select id, file_number, consignee_name, consignor_name from cargo_shipments
+           where tenant_id = $1 and deleted_at is null and status = 'open'`, [req.user.tid]);
+        for (const f of openFiles.rows) {
+          const hits = [
+            ...watch.rows.filter((w: any) => namesMatch(f.consignee_name, w.party_name))
+              .map((w: any) => `consignee ${f.consignee_name} → ${w.party_name}`),
+            ...watch.rows.filter((w: any) => namesMatch(f.consignor_name, w.party_name))
+              .map((w: any) => `consignor ${f.consignor_name} → ${w.party_name}`)
+          ];
+          if (hits.length) {
+            const high = watch.rows.some((w: any) =>
+              w.severity === "high" &&
+              (namesMatch(f.consignee_name, w.party_name) || namesMatch(f.consignor_name, w.party_name)));
+            items.push({
+              type: "screening_hit", severity: high ? "critical" : "warning",
+              title: `Screening hit on cargo file ${f.file_number}`,
+              detail: hits.join("; "),
+              href: "/app/cfa/compliance", date: new Date().toISOString().slice(0, 10)
+            });
+          }
         }
       }
 
@@ -222,7 +275,14 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
       }
 
       const rank = { critical: 0, warning: 1, info: 2 };
-      items.sort((a, b) => rank[a.severity] - rank[b.severity] || a.date.localeCompare(b.date));
+      const pad = (n: number) => String(n).padStart(2, "0");
+      // pg DATE columns arrive as JS Dates at local midnight; normalise to day
+      // strings so mixed Date/string sources can be compared.
+      const dayKey = (v: unknown) =>
+        v instanceof Date
+          ? `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`
+          : String(v ?? "");
+      items.sort((a, b) => rank[a.severity] - rank[b.severity] || dayKey(a.date).localeCompare(dayKey(b.date)));
 
       return {
         items,
