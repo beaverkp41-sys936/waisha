@@ -20,13 +20,13 @@ interface Doc {
 const ENTITY_LABELS: Record<string, string> = {
   tenant: "Company", user: "Staff member", vessel: "Vessel",
   driver: "Driver", trip: "Trip", shipment: "Cargo file", message: "Message",
-  licence: "Regulatory licence", employee: "Employee"
+  licence: "Regulatory licence", employee: "Employee", office_cost: "Office cost"
 };
 const KIND_LABELS: Record<string, string> = {
   logo: "Logo", avatar: "Photo", licence: "Licence", insurance: "Insurance",
   inspection: "Inspection", road_licence: "Road licence", delivery_note: "Delivery note",
   invoice: "Invoice", bill_of_lading: "Bill of Lading", packing_list: "Packing list",
-  contract: "Contract", other: "Other", attachment: "Attachment"
+  contract: "Contract", other: "Other", attachment: "Attachment", receipt: "Receipt"
 };
 
 export default function DocumentsVaultPage() {

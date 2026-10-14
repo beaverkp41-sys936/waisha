@@ -22,6 +22,12 @@ interface Notification {
 
 const DAY = 86_400_000;
 
+const COST_CATEGORY_LABELS: Record<string, string> = {
+  allowance: "Allowances", meals: "Meals & refreshments", utilities: "Utilities",
+  rent: "Rent", transport: "Transport", supplies: "Supplies",
+  communication: "Communication", other: "Other"
+};
+
 export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) {
 
   /**
@@ -319,6 +325,57 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
           detail: `Assigned to ${t.full_name}`,
           href: "/app/office/employees", date: t.due_date
         });
+      }
+
+      // Office costs awaiting approval
+      const pendingCosts = await c.query(
+        `select count(*)::int as n,
+                coalesce(sum(amount), 0)::float8 as total,
+                count(*) filter (where created_at < now() - interval '7 days')::int as stale
+         from office_costs
+         where tenant_id = $1 and deleted_at is null and status = 'pending'`, [req.user.tid]);
+      const pc = pendingCosts.rows[0];
+      if (pc && Number(pc.n) > 0) {
+        items.push({
+          type: "office_cost_pending",
+          severity: Number(pc.stale) > 0 ? "warning" : "info",
+          title: `${pc.n} office cost${Number(pc.n) === 1 ? "" : "s"} awaiting approval`,
+          detail: `Total ${Number(pc.total).toLocaleString()} to review`,
+          href: "/app/office/costs", date: new Date().toISOString().slice(0, 10)
+        });
+      }
+
+      // Current-month office budgets against approved spend
+      const budgets = await c.query(
+        `select b.category, b.amount::float8 as budget,
+                coalesce(sum(c.amount) filter (where c.status = 'approved'), 0)::float8 as spent
+         from office_budgets b
+         left join office_costs c
+           on c.tenant_id = b.tenant_id and c.category = b.category and c.deleted_at is null
+           and c.cost_date >= b.period and c.cost_date < (b.period + interval '1 month')
+         where b.tenant_id = $1 and b.deleted_at is null
+           and b.period = date_trunc('month', current_date)::date
+         group by b.id`, [req.user.tid]);
+      for (const b of budgets.rows) {
+        const budget = Number(b.budget);
+        const spent = Number(b.spent);
+        if (budget <= 0) continue;
+        const label = COST_CATEGORY_LABELS[b.category] ?? b.category;
+        if (spent > budget) {
+          items.push({
+            type: "office_budget_over", severity: "critical",
+            title: `Office budget exceeded: ${label}`,
+            detail: `Spent ${spent.toLocaleString()} of ${budget.toLocaleString()} this month`,
+            href: "/app/office/costs", date: new Date().toISOString().slice(0, 10)
+          });
+        } else if (spent >= budget * 0.9) {
+          items.push({
+            type: "office_budget_near", severity: "warning",
+            title: `Office budget nearly used: ${label}`,
+            detail: `Spent ${spent.toLocaleString()} of ${budget.toLocaleString()} this month`,
+            href: "/app/office/costs", date: new Date().toISOString().slice(0, 10)
+          });
+        }
       }
 
       const rank = { critical: 0, warning: 1, info: 2 };

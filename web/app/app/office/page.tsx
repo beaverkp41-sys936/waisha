@@ -12,6 +12,7 @@ const MODULES = [
   },
   {
     name: "Office Management",
+    href: "/app/office/costs",
     description: "What running the office costs — dashboard by period, allowances, meals and refreshments, daily costs with approvals, file costs against revenue, and budget-versus-spend reports.",
     plan: "Enterprise"
   }
