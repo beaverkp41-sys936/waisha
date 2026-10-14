@@ -119,6 +119,25 @@ export async function calendarRoutes(app: FastifyInstance, _opts: unknown) {
           `${l.authority.toUpperCase()}${l.licence_number ? ` ${l.licence_number}` : ""}`, "/app/cfa/compliance");
       }
 
+      const contracts = await c.query(
+        `select full_name, employment_type, contract_end from employees
+         where tenant_id = $1 and deleted_at is null and status = 'active'
+           and contract_end is not null`, [req.user.tid]);
+      for (const e of contracts.rows) {
+        push(e.contract_end, "doc_expiry", `${e.full_name} contract ends`,
+          e.employment_type === "intern" ? "Internship ends — absorb or close" : "Renew or close the contract",
+          "/app/office/employees");
+      }
+
+      const officeTasks = await c.query(
+        `select t.title, t.due_date, e.full_name from office_tasks t
+         join employees e on e.id = t.employee_id
+         where t.tenant_id = $1 and t.status in ('pending','in_progress') and t.due_date is not null`,
+        [req.user.tid]);
+      for (const t of officeTasks.rows) {
+        push(t.due_date, "task_due", `Task due: ${t.title}`, `Assigned to ${t.full_name}`, "/app/office/employees");
+      }
+
       events.sort((a, b) => a.date.localeCompare(b.date));
       return { month, events };
     });

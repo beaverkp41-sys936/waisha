@@ -3,31 +3,17 @@ import Link from "next/link";
 import { useLicence } from "../account/gate";
 import { AREAS, areaUnlocked } from "../areas";
 
-const SYSTEMS = [
+const MODULES = [
   {
     name: "Employees Management",
-    description: "Your people, ranked by task handling.",
-    items: [
-      "Overview — staff KPIs and a leaderboard ranked by completed tasks",
-      "Roster — member profiles with skills, contracts and ratings",
-      "Tasks & Files — daily assignments linked to cargo files with priorities and deadlines",
-      "Evaluation — performance across task completion, punctuality, client satisfaction and collaboration",
-      "Contracts — permanent and fixed-term register with renewal countdowns",
-      "Trainees — internship register with supervisors and absorption on completion",
-      "Reports — payroll summary and graded task performance"
-    ]
+    href: "/app/office/employees",
+    description: "Your people, ranked by task handling — overview KPIs and a leaderboard, roster with skills and contracts, daily assignments linked to cargo files, monthly evaluations, renewal countdowns and the trainee register with absorption.",
+    plan: "Enterprise"
   },
   {
     name: "Office Management",
-    description: "What running the office costs, per day and per file.",
-    items: [
-      "Dashboard — daily, weekly, monthly and yearly cost totals by category",
-      "Allowances — transport, housing and field allowances per employee",
-      "Meals & Drinks — daily meals and refreshments logs with period totals",
-      "Daily Costs — expense log with approval and receipt tracking",
-      "File Costs — clearance, transport and staff time per cargo file against revenue",
-      "Reports — budget versus spend and revenue versus costs"
-    ]
+    description: "What running the office costs — dashboard by period, allowances, meals and refreshments, daily costs with approvals, file costs against revenue, and budget-versus-spend reports.",
+    plan: "Enterprise"
   }
 ];
 
@@ -50,35 +36,30 @@ export default function OfficeAreaPage() {
       {unlocked && (
         <div role="status" className="mt-16 px-16 py-8 text-sm"
           style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>
-          Included in your plan — modules below are in build and will appear here as they ship.
+          Included in your plan — shipped modules open below, the rest land here as they are built.
         </div>
       )}
 
-      <div className="mt-24 space-y-16">
-        {SYSTEMS.map(s => (
-          <div key={s.name} className="rounded-card border bg-surface p-24" style={{ borderColor: "var(--line)" }}>
-            <div className="flex items-start justify-between gap-12">
-              <div>
-                <p className="text-sm font-bold" style={{ color: "var(--ink)" }}>{s.name}</p>
-                <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>{s.description}</p>
+      <div className="mt-24 grid grid-cols-1 gap-16 md:grid-cols-2">
+        {MODULES.map(m => {
+          const card = (
+            <div key={m.name} className="rounded-card border bg-surface p-24" style={{ borderColor: "var(--line)" }}>
+              <div className="flex items-start justify-between gap-12">
+                <p className="text-sm font-bold" style={{ color: "var(--ink)" }}>{m.name}</p>
+                <span className="whitespace-nowrap px-8 py-2 text-[10px] font-bold uppercase"
+                  style={{ borderLeft: "4px solid var(--gold)", color: "var(--ink-soft)" }}>
+                  {m.plan}
+                </span>
               </div>
-              <span className="whitespace-nowrap px-8 py-2 text-[10px] font-bold uppercase"
-                style={{ borderLeft: "4px solid var(--gold)", color: "var(--ink-soft)" }}>
-                Enterprise
-              </span>
+              <p className="mt-8 text-xs leading-relaxed" style={{ color: "var(--ink-soft)" }}>{m.description}</p>
+              <p className="mt-12 text-[10px] font-bold uppercase tracking-[0.14em]"
+                style={{ color: m.href ? "var(--brand)" : "var(--gold-green)" }}>
+                {m.href ? "Open module" : "In build"}
+              </p>
             </div>
-            <ul className="mt-16 space-y-8">
-              {s.items.map(i => (
-                <li key={i} className="text-xs leading-relaxed" style={{ color: "var(--ink-soft)" }}>
-                  {i}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-16 text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--gold-green)" }}>
-              In build
-            </p>
-          </div>
-        ))}
+          );
+          return m.href ? <Link key={m.name} href={m.href} className="block">{card}</Link> : card;
+        })}
       </div>
 
       <p className="mt-24 text-xs" style={{ color: "var(--ink-soft)" }}>

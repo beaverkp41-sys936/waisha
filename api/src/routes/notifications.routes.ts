@@ -33,7 +33,11 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
   app.get("/notifications", { preHandler: [requireAuth] }, async (req: any) => {
     return withTenant(req.user.tid, async (c) => {
       const items: Notification[] = [];
-      const today = Date.now();
+      // pg DATE columns arrive at local midnight, so count days from the start
+      // of today — otherwise a date falling today reads as a negative fraction.
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      const today = startOfToday.getTime();
 
       // Overdue customer invoices
       const overdueInv = await c.query(
@@ -74,7 +78,7 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
           } else if (days <= 30) {
             items.push({
               type: "document_expiring", severity: "warning",
-              title: `${v.name}: ${doc.toLowerCase()} expires in ${days} day${days === 1 ? "" : "s"}`,
+              title: `${v.name}: ${doc.toLowerCase()} ${days === 0 ? "expires today" : `expires in ${days} day${days === 1 ? "" : "s"}`}`,
               detail: `Expires ${new Date(expiry).toLocaleDateString()}`,
               href: "/app/compliance", date: expiry
             });
@@ -98,7 +102,7 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
         } else if (days <= 30) {
           items.push({
             type: "document_expiring", severity: "warning",
-            title: `${d.full_name}: driving licence expires in ${days} day${days === 1 ? "" : "s"}`,
+            title: `${d.full_name}: driving licence ${days === 0 ? "expires today" : `expires in ${days} day${days === 1 ? "" : "s"}`}`,
             detail: `Expires ${new Date(d.licence_expiry).toLocaleDateString()}`,
             href: "/app/compliance", date: d.licence_expiry
           });
@@ -121,7 +125,7 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
         } else if (days <= 30) {
           items.push({
             type: "licence_expiring", severity: "warning",
-            title: `${l.title} expires in ${days} day${days === 1 ? "" : "s"}`,
+            title: `${l.title} ${days === 0 ? "expires today" : `expires in ${days} day${days === 1 ? "" : "s"}`}`,
             detail: `${l.authority.toUpperCase()} — renew before ${new Date(l.expiry_date).toLocaleDateString()}`,
             href: "/app/cfa/compliance", date: l.expiry_date
           });
@@ -271,6 +275,49 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
             : `Task due ${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`}: ${t.title}`,
           detail: `File ${t.file_number}`,
           href: "/app/cfa/cargo", date: t.due_date
+        });
+      }
+
+      // Employment contract renewals
+      const contracts = await c.query(
+        `select id, full_name, employment_type, contract_end from employees
+         where tenant_id = $1 and deleted_at is null and status = 'active'
+           and contract_end is not null`, [req.user.tid]);
+      for (const e of contracts.rows) {
+        const days = Math.floor((new Date(e.contract_end).getTime() - today) / DAY);
+        const kind = e.employment_type === "intern" ? "Internship" : "Contract";
+        if (days < 0) {
+          items.push({
+            type: "contract_ended", severity: "critical",
+            title: `${e.full_name}: ${kind.toLowerCase()} ended`,
+            detail: `${kind} ended ${-days} day${-days === 1 ? "" : "s"} ago — renew or close`,
+            href: "/app/office/employees", date: e.contract_end
+          });
+        } else if (days <= 30) {
+          items.push({
+            type: "contract_expiring", severity: "warning",
+            title: `${e.full_name}: ${kind.toLowerCase()} ${days === 0 ? "ends today" : `ends in ${days} day${days === 1 ? "" : "s"}`}`,
+            detail: `Renewal due ${new Date(e.contract_end).toLocaleDateString()}`,
+            href: "/app/office/employees", date: e.contract_end
+          });
+        }
+      }
+
+      // Office task deadlines
+      const officeDue = await c.query(
+        `select t.id, t.title, t.due_date, e.full_name from office_tasks t
+         join employees e on e.id = t.employee_id
+         where t.tenant_id = $1 and t.status in ('pending','in_progress') and t.due_date is not null
+           and t.due_date <= current_date + 2`, [req.user.tid]);
+      for (const t of officeDue.rows) {
+        const days = Math.floor((new Date(t.due_date).getTime() - today) / DAY);
+        items.push({
+          type: "task_deadline", severity: days < 0 ? "critical" : "warning",
+          title: days < 0
+            ? `Task overdue: ${t.title}`
+            : `Task due ${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`}: ${t.title}`,
+          detail: `Assigned to ${t.full_name}`,
+          href: "/app/office/employees", date: t.due_date
         });
       }
 

@@ -23,8 +23,8 @@ async function requireAuth(req: any) {
   req.user = claims;
 }
 
-const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip", "shipment", "message", "licence"] as const;
-const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road_licence", "delivery_note", "invoice", "bill_of_lading", "packing_list", "other", "attachment"] as const;
+const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip", "shipment", "message", "licence", "employee"] as const;
+const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road_licence", "delivery_note", "invoice", "bill_of_lading", "packing_list", "contract", "other", "attachment"] as const;
 const IMAGE_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const DOC_MIMES = [...IMAGE_MIMES, "application/pdf"];
 const MAX_BYTES = 8 * 1024 * 1024; // 8MB per file
@@ -33,7 +33,7 @@ const MAX_MESSAGE_FILES = 5;
 // Entities that must exist and belong to the tenant before a file attaches.
 const ENTITY_TABLES: Record<string, string> = {
   user: "users", vessel: "vessels", driver: "drivers", trip: "trips",
-  shipment: "cargo_shipments", licence: "regulatory_licences"
+  shipment: "cargo_shipments", licence: "regulatory_licences", employee: "employees"
 };
 
 function sanitizeFileName(name: string): string {
@@ -173,6 +173,7 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
                   'Team channel')
                   from messages m where m.id = d.entity_id)
                 when 'licence' then (select title from regulatory_licences rl where rl.id = d.entity_id)
+                when 'employee' then (select full_name from employees emp where emp.id = d.entity_id)
               end as entity_label
        from documents d
        where d.tenant_id = $1 and d.deleted_at is null
