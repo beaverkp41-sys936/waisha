@@ -23,11 +23,12 @@ async function requireAuth(req: any) {
   req.user = claims;
 }
 
-const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip", "shipment"] as const;
-const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road_licence", "delivery_note", "invoice", "bill_of_lading", "packing_list", "other"] as const;
+const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip", "shipment", "message"] as const;
+const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road_licence", "delivery_note", "invoice", "bill_of_lading", "packing_list", "other", "attachment"] as const;
 const IMAGE_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const DOC_MIMES = [...IMAGE_MIMES, "application/pdf"];
 const MAX_BYTES = 8 * 1024 * 1024; // 8MB per file
+const MAX_MESSAGE_FILES = 5;
 
 // Entities that must exist and belong to the tenant before a file attaches.
 const ENTITY_TABLES: Record<string, string> = {
@@ -98,7 +99,26 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
     }
 
     await withTenant(req.user.tid, async (c) => {
-      if (body.entityType !== "tenant") {
+      if (body.entityType === "message") {
+        // Attachments belong to the sender's own message, capped per message.
+        const msg = await c.query(
+          "select created_by, deleted_at from messages where id = $1 and tenant_id = $2",
+          [entityId, req.user.tid]);
+        if (!msg.rowCount || msg.rows[0].deleted_at) {
+          throw new ApiError("NOT_FOUND", "This message does not exist.", 404);
+        }
+        if (msg.rows[0].created_by !== req.user.sub) {
+          throw new ApiError("FORBIDDEN", "You can only attach files to your own messages.", 403);
+        }
+        const existing = await c.query(
+          `select count(*)::int as n from documents
+           where tenant_id = $1 and entity_type = 'message' and entity_id = $2 and deleted_at is null`,
+          [req.user.tid, entityId]);
+        if (existing.rows[0].n >= MAX_MESSAGE_FILES) {
+          throw new ApiError("VALIDATION_FAILED",
+            `Up to ${MAX_MESSAGE_FILES} files per message.`, 400, [{ field: "file" }]);
+        }
+      } else if (body.entityType !== "tenant") {
         const own = await c.query(
           `select id from ${ENTITY_TABLES[body.entityType]} where id = $1 and tenant_id = $2 and deleted_at is null`,
           [entityId, req.user.tid]);
@@ -147,6 +167,10 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
                 when 'driver' then (select full_name from drivers dr where dr.id = d.entity_id)
                 when 'trip' then (select coalesce(reference, 'Trip') from trips tr where tr.id = d.entity_id)
                 when 'shipment' then (select file_number from cargo_shipments cs where cs.id = d.entity_id)
+                when 'message' then (select coalesce(
+                  (select cs.file_number from cargo_shipments cs where cs.id = m.shipment_id),
+                  'Team channel')
+                  from messages m where m.id = d.entity_id)
               end as entity_label
        from documents d
        where d.tenant_id = $1 and d.deleted_at is null

@@ -209,6 +209,9 @@ export default function CargoDetailPage() {
       <div className="no-print flex flex-wrap items-center justify-between gap-12">
         <Link href="/app/cfa/cargo" className="text-xs underline" style={{ color: "var(--ink-soft)" }}>← All cargo files</Link>
         <div className="flex flex-wrap gap-8">
+          <Link href={`/app/cfa/messages?file=${id}`}
+            className="rounded-input border px-16 py-8 text-xs font-semibold"
+            style={{ borderColor: "var(--line)", color: "var(--brand)" }}>Messages</Link>
           {editable && (
             <Link href={`/app/cfa/cargo?edit=${id}`}
               className="rounded-input border px-16 py-8 text-xs font-semibold"

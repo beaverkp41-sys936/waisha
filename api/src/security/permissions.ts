@@ -1,4 +1,5 @@
 import type { FastifyRequest } from "fastify";
+import type { PoolClient } from "pg";
 import { withTenant } from "../db/pool.js";
 import { ApiError } from "../util/errors.js";
 
@@ -10,6 +11,19 @@ import { ApiError } from "../util/errors.js";
  * Chain after requireAuth: { preHandler: [requireAuth, requirePermission("x.view")] }.
  * Directors pass every check — the seed grants the director role all keys.
  */
+
+/** Check a permission on the caller's open transaction (for conditional rules). */
+export async function checkPermission(c: PoolClient, userId: string, permissionKey: string): Promise<boolean> {
+  const r = await c.query(
+    `select 1 from user_roles ur
+     join role_permissions rp on rp.role_id = ur.role_id
+     where ur.user_id = $1 and rp.permission_key = $2
+       and (ur.expires_at is null or ur.expires_at > now())
+     limit 1`,
+    [userId, permissionKey]);
+  return !!r.rowCount;
+}
+
 export function requirePermission(permissionKey: string) {
   return async (req: FastifyRequest & { user?: { sub: string; tid: string } }) => {
     if (!req.user?.sub || !req.user?.tid) {
@@ -17,14 +31,8 @@ export function requirePermission(permissionKey: string) {
     }
     const userId = req.user.sub;
     const tid = req.user.tid;
-    const r = await withTenant(tid, (c) => c.query(
-      `select 1 from user_roles ur
-       join role_permissions rp on rp.role_id = ur.role_id
-       where ur.user_id = $1 and rp.permission_key = $2
-         and (ur.expires_at is null or ur.expires_at > now())
-       limit 1`,
-      [userId, permissionKey]));
-    if (!r.rowCount) {
+    const ok = await withTenant(tid, (c) => checkPermission(c, userId, permissionKey));
+    if (!ok) {
       throw new ApiError("FORBIDDEN", "Your role does not allow this action.", 403);
     }
   };

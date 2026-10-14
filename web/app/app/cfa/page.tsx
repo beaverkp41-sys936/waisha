@@ -36,6 +36,7 @@ const MODULES = [
   },
   {
     name: "Internal Messages",
+    href: "/app/cfa/messages",
     description: "One conversation per cargo file — read states, attachments and a general team channel.",
     plan: "Enterprise"
   },

@@ -28,6 +28,7 @@ import { notificationsRoutes } from "./routes/notifications.routes.js";
 import { reportsRoutes } from "./routes/reports.routes.js";
 import { cargoRoutes } from "./routes/cargo.routes.js";
 import { calendarRoutes } from "./routes/calendar.routes.js";
+import { messagesRoutes } from "./routes/messages.routes.js";
 
 async function main() {
   const app = Fastify({
@@ -69,6 +70,7 @@ async function main() {
   await app.register(reportsRoutes, { prefix: "/api/v1" });
   await app.register(cargoRoutes, { prefix: "/api/v1" });
   await app.register(calendarRoutes, { prefix: "/api/v1" });
+  await app.register(messagesRoutes, { prefix: "/api/v1" });
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
 }
 
