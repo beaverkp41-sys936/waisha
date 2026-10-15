@@ -5,6 +5,12 @@ import { AREAS, areaUnlocked } from "../areas";
 
 const MODULES = [
   {
+    name: "Job Pipeline",
+    href: "/app/cfa/jobs",
+    description: "Every cargo file as a ten-stage clearing job — auto-generated checklist, document register with verification gates, blocked-stage reasons, kanban board, my-tasks and deadline alerts.",
+    plan: "Business"
+  },
+  {
     name: "Cargo Management",
     href: "/app/cfa/cargo",
     description: "Full clearing files — file numbers, containers, customs fields, six-stage workflow, tasks and attached documents.",

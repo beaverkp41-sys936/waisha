@@ -25,7 +25,9 @@ async function requireAuth(req: any) {
 }
 
 const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip", "shipment", "message", "licence", "employee", "office_cost"] as const;
-const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road_licence", "delivery_note", "invoice", "bill_of_lading", "packing_list", "contract", "other", "attachment", "receipt"] as const;
+const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road_licence", "delivery_note", "invoice", "bill_of_lading", "packing_list", "contract", "other", "attachment", "receipt",
+  // Clearing-pipeline kinds stored by the job document register (042).
+  "arrival_notice", "delivery_order", "declaration", "assessment", "release_note", "permit", "pod", "handover"] as const;
 const IMAGE_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const DOC_MIMES = [...IMAGE_MIMES, "application/pdf"];
 const MAX_BYTES = 8 * 1024 * 1024; // 8MB per file

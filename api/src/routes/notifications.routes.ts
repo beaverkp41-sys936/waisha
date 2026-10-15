@@ -378,6 +378,84 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
         }
       }
 
+      // Job pipeline: blocked stages and the real clocks on a file — container
+      // free days, ETA, transit permit validity.
+      const blockedStages = await c.query(
+        `select g.name, g.blocked_reason, g.updated_at, s.file_number, j.id as job_id
+           from job_stages g
+           join jobs j on j.id = g.job_id and j.status = 'open' and j.deleted_at is null
+           join cargo_shipments s on s.id = j.shipment_id and s.deleted_at is null
+          where g.tenant_id = $1 and g.deleted_at is null and g.status = 'blocked'
+          order by g.updated_at desc limit 12`, [req.user.tid]);
+      for (const b of blockedStages.rows) {
+        items.push({
+          type: "job_stage_blocked", severity: "warning",
+          title: `File ${b.file_number} blocked at ${b.name.toLowerCase()}`,
+          detail: b.blocked_reason ?? "No reason recorded",
+          href: `/app/jobs/${b.job_id}`, date: new Date(b.updated_at).toISOString().slice(0, 10)
+        });
+      }
+
+      const jobTasks = await c.query(
+        `select k.title, k.due_date, s.file_number, j.id as job_id,
+                coalesce(u.full_name, 'Unassigned') as assignee
+           from cargo_tasks k
+           join jobs j on j.shipment_id = k.shipment_id and j.status = 'open' and j.deleted_at is null
+           join cargo_shipments s on s.id = k.shipment_id and s.deleted_at is null
+           left join users u on u.id = k.assigned_to
+          where k.tenant_id = $1 and k.status = 'pending'
+            and k.due_date is not null and k.due_date <= current_date + 1
+          order by k.due_date limit 12`, [req.user.tid]);
+      for (const t of jobTasks.rows) {
+        const days = Math.floor((new Date(t.due_date).getTime() - today) / DAY);
+        items.push({
+          type: "job_task_deadline", severity: days < 0 ? "critical" : "warning",
+          title: days < 0
+            ? `File ${t.file_number}: task overdue ${-days} day${-days === 1 ? "" : "s"} — ${t.title}`
+            : `File ${t.file_number}: task due ${days === 0 ? "today" : `tomorrow`} — ${t.title}`,
+          detail: `Assigned to ${t.assignee}`,
+          href: `/app/jobs/${t.job_id}`, date: t.due_date
+        });
+      }
+
+      const jobClocks = await c.query(
+        `select * from (
+           select j.id as job_id, s.file_number, 'free_days' as kind,
+                  (j.free_days_start + j.free_days) as due_on
+             from jobs j join cargo_shipments s on s.id = j.shipment_id and s.deleted_at is null
+            where j.tenant_id = $1 and j.deleted_at is null and j.status = 'open'
+              and j.free_days is not null and j.free_days_start is not null
+              and (j.free_days_start + j.free_days) <= current_date + 3
+         union all
+           select j.id, s.file_number, 'eta', s.eta
+             from jobs j join cargo_shipments s on s.id = j.shipment_id and s.deleted_at is null
+            where j.tenant_id = $1 and j.deleted_at is null and j.status = 'open'
+              and s.eta is not null and s.eta <= current_date + 3
+         union all
+           select d.job_id, s.file_number, 'permit', d.doc_date
+             from job_documents d
+             join jobs j on j.id = d.job_id and j.status = 'open' and j.deleted_at is null
+             join cargo_shipments s on s.id = j.shipment_id and s.deleted_at is null
+            where d.tenant_id = $1 and d.deleted_at is null and d.kind = 'permit'
+              and d.doc_date is not null and d.doc_date <= current_date + 7
+         ) x where x.due_on is not null order by x.due_on limit 12`, [req.user.tid]);
+      const clockLabels: Record<string, string> = {
+        free_days: "container free days end", eta: "vessel / flight ETA", permit: "transit permit expires"
+      };
+      for (const k of jobClocks.rows) {
+        const days = Math.floor((new Date(k.due_on).getTime() - today) / DAY);
+        items.push({
+          type: `job_${k.kind}`, severity: days < 0 ? "critical" : "warning",
+          title: `File ${k.file_number}: ${clockLabels[k.kind]} ${
+            days < 0 ? `passed ${-days} day${-days === 1 ? "" : "s"} ago`
+              : days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`}`,
+          detail: k.kind === "free_days"
+            ? "Demurrage starts accruing after this date"
+            : k.kind === "eta" ? "Arrival handling steps should be ready" : "Renew before the cargo moves",
+          href: `/app/jobs/${k.job_id}`, date: k.due_on
+        });
+      }
+
       const rank = { critical: 0, warning: 1, info: 2 };
       const pad = (n: number) => String(n).padStart(2, "0");
       // pg DATE columns arrive as JS Dates at local midnight; normalise to day

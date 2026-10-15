@@ -29,6 +29,21 @@ export function registerErrorHandling(app: FastifyInstance) {
                  details: (err as any).validation, request_id: requestId }
       });
     }
+    // @fastify/multipart aborts the stream the moment a part crosses its
+    // fileSize/parts limit, so the route's own size checks never run.
+    const code = (err as any).code;
+    if (code === "FST_REQ_FILE_TOO_LARGE") {
+      return reply.status(400).send({
+        error: { code: "VALIDATION_FAILED", message: "Files are limited to 8 MB.",
+                 details: [{ field: "file", message: "Too large" }], request_id: requestId }
+      });
+    }
+    if (code === "FST_PARTS_LIMIT") {
+      return reply.status(400).send({
+        error: { code: "VALIDATION_FAILED", message: "One file per upload.",
+                 details: [{ field: "file", message: "Too many files" }], request_id: requestId }
+      });
+    }
     req.log.error(err);
     return reply.status(500).send({
       error: { code: "INTERNAL", message: "An unexpected error occurred", details: [], request_id: requestId }

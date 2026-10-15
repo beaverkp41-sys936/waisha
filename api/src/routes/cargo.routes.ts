@@ -6,6 +6,7 @@ import { uuidv7 } from "../util/uuid.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { requirePermission } from "../security/permissions.js";
 import { writeAudit } from "../audit/audit.js";
+import { openJob, assertAssignable } from "../util/jobs.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -268,6 +269,8 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
              body.processingCost ?? null, body.paymentAmount ?? null,
              body.paymentStatus ?? "unpaid", body.notes ?? null, req.user.sub]);
 
+          await openJob(c, req.user.tid, id, req.user.sub);
+
           await writeAudit(c, {
             tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
             requestId: req.requestId, entity: "cargo_shipments", entityId: id,
@@ -493,6 +496,8 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
              from cargo_shipments where id = $7`,
             [newId, req.user.tid, fn, seq, year, req.user.sub, id]);
 
+          await openJob(c, req.user.tid, newId, req.user.sub);
+
           await writeAudit(c, {
             tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
             requestId: req.requestId, entity: "cargo_shipments", entityId: newId,
@@ -542,6 +547,7 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
           "select id from cargo_shipments where id=$1 and tenant_id=$2 and deleted_at is null",
           [id, req.user.tid]);
         if (!own.rowCount) throw new ApiError("NOT_FOUND", "Cargo file not found", 404);
+        if (body.assignedTo) await assertAssignable(c, req.user.tid, body.assignedTo);
 
         await c.query(
           `insert into cargo_tasks (id, tenant_id, shipment_id, title, assigned_to, due_date, notes, created_by, updated_by)
