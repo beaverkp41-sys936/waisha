@@ -1,35 +1,46 @@
 "use client";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiFetch } from "./api-client";
+import { CFA_NAV, OFFICE_NAV, TRANSPORTER_NAV } from "./nav";
+import type { NavItem } from "./nav";
 
-const NAV = [
-  { href: "/app/dashboard", label: "Dashboard", accent: "var(--gold)" },
-  { href: "/app/board", label: "Notice board", accent: "var(--gold-green)" },
-  { href: "/app/profile", label: "Profile", accent: "var(--success)" },
-  { href: "/app/branches", label: "Branches", accent: "var(--brand)" },
-  { href: "/app/fleet", label: "Fleet", accent: "var(--gold-green)" },
-  { href: "/app/routes", label: "Routes", accent: "var(--gold)" },
-  { href: "/app/drivers", label: "Drivers", accent: "var(--success)" },
-  { href: "/app/trips", label: "Trips", accent: "var(--gold)" },
-  { href: "/app/fuel", label: "Fuel", accent: "var(--warning)" },
-  { href: "/app/inventory", label: "Inventory", accent: "var(--brand)" },
-  { href: "/app/incidents", label: "Incidents", accent: "var(--danger)" },
-  { href: "/app/clients", label: "Clients", accent: "var(--gold-green)" },
-  { href: "/app/shipper-access", label: "Shipper access", accent: "var(--brand)" },
-  { href: "/app/compliance", label: "Compliance", accent: "var(--success)" },
-  { href: "/app/reports", label: "Reports", accent: "var(--gold)" },
-  { href: "/app/staff", label: "Staff", accent: "var(--brand)" },
-  { href: "/app/account", label: "Account", accent: "rgba(255,255,255,0.7)" }
-];
+const WORKSPACES = [
+  { key: "transporter", label: "Transporter", home: "/app/dashboard" },
+  { key: "cfa", label: "CFA", home: "/app/cfa" },
+  { key: "office", label: "Office", home: "/app/office" }
+] as const;
+
+const NAV_BY_AREA: Record<string, NavItem[]> = {
+  transporter: TRANSPORTER_NAV,
+  cfa: CFA_NAV,
+  office: OFFICE_NAV
+};
+
+function areaOf(pathname: string) {
+  if (pathname.startsWith("/app/cfa") || pathname === "/app/documents") return "cfa";
+  if (pathname.startsWith("/app/office")) return "office";
+  return "transporter";
+}
+
+/** Longest matching href wins, so /app/cfa/cargo is not also /app/cfa. */
+function activeHref(pathname: string, items: NavItem[]) {
+  let best = "";
+  for (const item of items) {
+    const hit = pathname === item.href || pathname.startsWith(item.href + "/");
+    if (hit && item.href.length > best.length) best = item.href;
+  }
+  return best;
+}
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-
-  const area =
-    pathname.startsWith("/app/cfa") ? "cfa" :
-    pathname.startsWith("/app/office") ? "office" : "transporter";
+  const area = areaOf(pathname);
+  const items = NAV_BY_AREA[area];
+  const current = items.find(i => i.href === activeHref(pathname, items));
+  const workspace = WORKSPACES.find(w => w.key === area)!;
 
   // Header alert count — computed live from overdue/expiring/low-stock signals.
   const [alertCount, setAlertCount] = useState<number | null>(null);
@@ -44,59 +55,73 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <div className="min-h-screen" style={{ background: "var(--milk)" }}>
-      <header style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--gold)" }}>
-        <div className="flex items-center justify-between px-24 pt-12">
-          <span className="text-sm font-bold tracking-[0.08em] text-white">WAISHA</span>
-          <nav className="flex gap-16 text-[11px] font-bold uppercase tracking-[0.12em]">
-            <Link href="/app/dashboard"
-              className="px-8 pb-8 transition-colors duration-200"
-              style={{ color: area === "transporter" ? "var(--gold)" : "rgba(255,255,255,0.55)",
-                       borderBottom: area === "transporter" ? "2px solid var(--gold)" : "2px solid transparent" }}>
-              Transporter
+    <div className="app-shell">
+      <div aria-hidden className="ws-bg" data-area={area}>
+        <div className="ws-bg-img" data-on="transporter" />
+        <div className="ws-bg-img" data-on="cfa" />
+        <div className="ws-bg-img" data-on="office" />
+        <div className="ws-bg-scrim" />
+      </div>
+
+      <aside className="sidebar">
+        <Link href={workspace.home} className="brand-lockup">
+          <Image src="/brand/waisha-white@2x.png" width={452} height={211}
+            alt="WAISHA" priority />
+          <span className="brand-tagline">Where shippers meet transporters</span>
+        </Link>
+
+        <div className="workspace-switch" role="group" aria-label="Workspace">
+          {WORKSPACES.map(w => (
+            <Link key={w.key} href={w.home} aria-current={area === w.key ? "true" : undefined}>
+              {w.label}
             </Link>
-            <Link href="/app/cfa"
-              className="px-8 pb-8 transition-colors duration-200"
-              style={{ color: area === "cfa" ? "var(--gold)" : "rgba(255,255,255,0.55)",
-                       borderBottom: area === "cfa" ? "2px solid var(--gold)" : "2px solid transparent" }}>
-              CFA Management
-            </Link>
-            <Link href="/app/office"
-              className="px-8 pb-8 transition-colors duration-200"
-              style={{ color: area === "office" ? "var(--gold)" : "rgba(255,255,255,0.55)",
-                       borderBottom: area === "office" ? "2px solid var(--gold)" : "2px solid transparent" }}>
-              Office Management
-            </Link>
-          </nav>
-          <Link href="/app/notifications"
-            className="relative pb-4 pt-4 text-[11px] font-bold uppercase tracking-[0.12em] transition-colors duration-200"
-            style={{ color: alertCount && alertCount > 0 ? "var(--gold)" : "rgba(255,255,255,0.55)" }}>
-            Alerts{alertCount !== null && alertCount > 0 ? ` (${alertCount})` : ""}
-          </Link>
-          <span className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "rgba(255,255,255,0.6)" }}>
-            Transporter portal
+          ))}
+        </div>
+
+        <nav className="nav-scroll" aria-label="Portal sections">
+          {items.map(({ href, label, icon: Icon }) => {
+            const active = activeHref(pathname, items) === href;
+            return (
+              <Link key={href} href={href} className={"nav-item" + (active ? " is-active" : "")}
+                aria-current={active ? "page" : undefined}>
+                <Icon aria-hidden strokeWidth={1.8} />
+                <span>{label}</span>
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="aegis">
+          <Image src="/brand/tengo-emblem@2x.png" width={112} height={112} alt="" />
+          <span>
+            <span className="aegis-name">A Tengo Aegis product</span>
+            <span className="aegis-line">From the shadow side to the edge of space</span>
           </span>
         </div>
-        {area === "transporter" && (
-          <nav className="flex flex-wrap gap-x-24 gap-y-4 px-24 pb-12 pt-4 text-xs font-semibold">
-            {NAV.map(n => {
-              const active = pathname === n.href || pathname.startsWith(n.href + "/");
-              return (
-                <Link key={n.href} href={n.href}
-                  className="relative pb-4 pt-4 transition-colors duration-200"
-                  style={{ color: active ? n.accent : "rgba(255,255,255,0.65)" }}>
-                  {n.label}
-                  {active && (
-                    <span aria-hidden className="absolute bottom-0 left-0 right-0 h-[2px]"
-                      style={{ background: n.accent }} />
-                  )}
-                </Link>
-              );
-            })}
-          </nav>
-        )}
-      </header>
-      <main>{children}</main>
+      </aside>
+
+      <div className="app-main">
+        <header className="topbar">
+          <p className="crumb">
+            <span className="crumb-area">{workspace.label} / </span>
+            <b>{current?.label ?? workspace.label}</b>
+          </p>
+          <div className="topbar-right">
+            <Link href="/app/notifications" className="alert-pill">
+              <span className={"alert-dot" + (alertCount ? " is-live" : "")} aria-hidden />
+              Alerts{alertCount ? ` (${alertCount})` : ""}
+            </Link>
+            <span className="flagpole" aria-hidden>
+              <span className="flagpole-finial" />
+              <span className="flagpole-mast" />
+              <span className="flagpole-flag">
+                <Image src="/brand/tengo-flag.jpg" width={204} height={136} alt="" />
+              </span>
+            </span>
+          </div>
+        </header>
+        <div className="app-content">{children}</div>
+      </div>
     </div>
   );
 }
