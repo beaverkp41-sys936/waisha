@@ -207,6 +207,26 @@ async function main() {
   const up = await fetch(`${API}/documents`, { method: "POST", headers: { Authorization: `Bearer ${tok2}` }, body: fd });
   check("B cannot upload into A's shipment", up.status >= 400, `[${up.status}]`);
 
+  // content spoofing: markup disguised as an image, and png bytes declared as pdf
+  const spoof = new FormData();
+  spoof.set("entityType", "shipment"); spoof.set("entityId", s1); spoof.set("kind", "invoice");
+  spoof.set("file", new Blob([Buffer.from("<html><script>alert(1)</script>payload payload".padEnd(64))],
+    { type: "image/png" }), "spoof.png");
+  const sp = await fetch(`${API}/documents`, { method: "POST", headers: { Authorization: `Bearer ${tok1}` }, body: spoof });
+  check("upload rejected when content is markup declared as png", sp.status === 400, `[${sp.status}]`);
+  const realPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const spoof2 = new FormData();
+  spoof2.set("entityType", "shipment"); spoof2.set("entityId", s1); spoof2.set("kind", "invoice");
+  spoof2.set("file", new Blob([realPng], { type: "application/pdf" }), "mismatch.pdf");
+  const sp2 = await fetch(`${API}/documents`, { method: "POST", headers: { Authorization: `Bearer ${tok1}` }, body: spoof2 });
+  check("upload rejected when png bytes are declared as pdf", sp2.status === 400, `[${sp2.status}]`);
+  const okFd = new FormData();
+  okFd.set("entityType", "shipment"); okFd.set("entityId", s1); okFd.set("kind", "invoice");
+  okFd.set("file", new Blob([realPng], { type: "image/png" }), "real.png");
+  const okUp = await fetch(`${API}/documents`, { method: "POST", headers: { Authorization: `Bearer ${tok1}` }, body: okFd });
+  check("positive: a genuine PNG still uploads", okUp.status === 201, `[${okUp.status}] ${JSON.stringify(okUp.body ?? {}).slice(0, 80)}`);
+  if (okUp.status === 201 && okUp.body?.id) await call(`/documents/${okUp.body.id}`, tok1, { method: "DELETE" });
+
   // ---- portal forged-tenant and no-account shippers --------------------------
   check("forged shipper (A user, B tenant) portal overview 403", (await call("/portal/overview", spTok2)).status === 403);
   const dirPortal = await call("/portal/files", tok2);

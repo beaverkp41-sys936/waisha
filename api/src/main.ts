@@ -4,6 +4,7 @@ import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import { env } from "./env.js";
+import { enforceRateLimit } from "./security/ratelimit.js";
 import { registerErrorHandling } from "./plugins/errors.js";
 import { authRoutes } from "./routes/auth.routes.js";
 import { contentRoutes } from "./routes/content.routes.js";
@@ -50,6 +51,13 @@ async function main() {
     limits: { fileSize: 8 * 1024 * 1024, files: 1 }
   });
   registerErrorHandling(app);
+
+  // Global baseline cap per client IP — backstops probing/flooding on routes
+  // that have no stricter dedicated bucket (auth buckets stay tighter).
+  app.addHook("onRequest", async (req) => {
+    if (req.method === "OPTIONS" || req.url.startsWith("/api/v1/health")) return;
+    await enforceRateLimit(`ip:${req.ip}`, 600, 60);
+  });
 
   app.get("/api/v1/health", async () => ({ status: "ok", time: new Date().toISOString() }));
   await app.register(authRoutes, { prefix: "/api/v1" });

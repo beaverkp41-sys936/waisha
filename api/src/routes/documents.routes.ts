@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { withTenant } from "../db/pool.js";
 import { ApiError } from "../util/errors.js";
+import { sniffFileType } from "../util/upload.js";
 import { uuidv7 } from "../util/uuid.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { requirePermission } from "../security/permissions.js";
@@ -75,6 +76,10 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
     const mime = (data.mimetype || "").toLowerCase();
     if (!DOC_MIMES.includes(mime)) {
       throw new ApiError("VALIDATION_FAILED", "Only JPEG, PNG, WebP or PDF files are accepted.", 400, [{ field: "file" }]);
+    }
+    const sniffed = sniffFileType(bytes);
+    if (!sniffed || sniffed !== mime) {
+      throw new ApiError("VALIDATION_FAILED", "The file content does not match its declared type.", 400, [{ field: "file" }]);
     }
     if ((body.kind === "logo" || body.kind === "avatar") && !IMAGE_MIMES.includes(mime)) {
       throw new ApiError("VALIDATION_FAILED", "Logos and avatars must be JPEG, PNG or WebP images.", 400, [{ field: "file" }]);
