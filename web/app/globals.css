@@ -2,29 +2,502 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------- tokens */
 :root {
-  --ink: #0F2A38; --ink-soft: #5A6E7A;
-  --brand-deep: #14415A; --brand: #2E6F95;
-  --milk: #EDF4F9; --milk-deep: #DCE9F2;
-  --surface: #FFFFFF; --line: #D7E3EC;
-  --gold-green: #93A544; --gold-green-dark: #7A8B35; --gold: #C8A951;
-  --success: #2E7D52; --warning: #B8860B; --danger: #A33A3A;
+  /* Brand palette */
+  --navy: #0d3350;
+  --navy-deep: #09263c;
+  --gold: #c9a84c;
+  --green: #2b7a55;
+  --olive: #8a9a3a;
+
+  /* Aliases the existing pages already reference. They exist so the palette
+     can move without rewriting 30 screens of inline var() calls. */
+  --ink: #123249;
+  --ink-soft: #52718a;
+  --brand: var(--navy);
+  --brand-deep: var(--navy-deep);
+  --gold-green: var(--olive);
+  --gold-green-dark: #6f7d2c;
+  --success: var(--green);
+  --warning: #a8791c;
+  --danger: #a33a3a;
+
+  /* Surfaces. --surface is the frosted card fill; --line stays neutral enough
+     to read on both the light and dark glass. */
+  --glass-opacity: 0.8;
+  --glass-rgb: 255, 255, 255;
+  --surface: rgba(var(--glass-rgb), var(--glass-opacity));
+  --line: rgba(13, 51, 80, 0.16);
+  --milk: #eaf1f6;
+  --milk-deep: #d7e5ef;
+
+  /* Photo scrim */
+  --scrim-top: rgba(8, 28, 44, 0.5);
+  --scrim-bottom: rgba(8, 28, 44, 0.36);
+  --side-top: rgba(6, 24, 38, 0.38);
+  --side-bottom: rgba(6, 24, 38, 0.06);
+  --on-photo: #ffffff;
+  --on-photo-soft: rgba(255, 255, 255, 0.78);
+  --photo-shadow: 0 1px 14px rgba(4, 18, 28, 0.55);
+
+  /* Shell metrics */
+  --sidebar-w: 272px;
+  --topbar-h: 68px;
+  --navy-panel: rgba(9, 38, 60, 0.72);
+
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  color-scheme: light;
 }
+
 @media (prefers-color-scheme: dark) {
   :root {
-    --ink: #E7EEF3; --ink-soft: #9FB2BD;
-    --milk: #0D1F2A; --milk-deep: #142C3B;
-    --surface: #10242F; --line: #23404F;
-    --brand-deep: #0C2938;
+    --ink: #e4eef5;
+    --ink-soft: #9db3c2;
+    --brand: #7fb2d8;
+    --brand-deep: #061a29;
+    --line: rgba(255, 255, 255, 0.16);
+    --milk: #071824;
+    --milk-deep: #0f2a3a;
+    --glass-opacity: 0.88;
+    --glass-rgb: 17, 37, 53;
+    --scrim-top: rgba(4, 16, 26, 0.68);
+    --scrim-bottom: rgba(4, 16, 26, 0.56);
+    --side-top: rgba(3, 13, 21, 0.58);
+    --side-bottom: rgba(3, 13, 21, 0.24);
+    color-scheme: dark;
   }
 }
+
 body {
   background: var(--milk);
   color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
-:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------- workspace photo */
+/* position:fixed layers rather than background-attachment:fixed, which iOS
+   ignores. Only the active layer is opaque; the transition is the crossfade. */
+.ws-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.ws-bg-img {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  opacity: 0;
+  transition: opacity 400ms var(--ease);
+}
+.ws-bg[data-area="transporter"] .ws-bg-img[data-on="transporter"],
+.ws-bg[data-area="cfa"] .ws-bg-img[data-on="cfa"],
+.ws-bg[data-area="office"] .ws-bg-img[data-on="office"] {
+  opacity: 1;
+}
+.ws-bg-img[data-on="transporter"] { background-image: url("/bg/transporter.jpg"); }
+.ws-bg-img[data-on="cfa"] { background-image: url("/bg/cfa.jpg"); }
+.ws-bg-img[data-on="office"] { background-image: url("/bg/office.jpg"); }
+.ws-bg-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, var(--scrim-top), var(--scrim-bottom));
+}
+
+/* -------------------------------------------------------------- the shell */
+/* The shell owns the viewport, so the marketing footer and the body scroll
+   have to step aside on portal routes. */
+body:has(.app-shell) { overflow: hidden; }
+body:has(.app-shell) .app-footer { display: none; }
+
+.app-shell {
+  position: relative;
+  min-height: 100vh;
+}
+.sidebar {
+  position: fixed;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--sidebar-w);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 0 calc(16px + env(safe-area-inset-bottom));
+  padding-left: env(safe-area-inset-left);
+  background: linear-gradient(180deg, var(--side-top), var(--side-bottom));
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  border-right: 1px solid rgba(255, 255, 255, 0.22);
+}
+.app-main {
+  position: relative;
+  z-index: 1;
+  margin-left: var(--sidebar-w);
+  height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* Brand lockup — the artwork carries no tagline, so it is live text. */
+.brand-lockup {
+  display: block;
+  padding: 0 20px 16px;
+}
+.brand-lockup img {
+  display: block;
+  width: 226px;
+  max-width: 100%;
+  height: auto;
+  filter: drop-shadow(0 2px 10px rgba(4, 16, 26, 0.45));
+}
+.brand-tagline {
+  margin-top: 8px;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--on-photo-soft);
+  text-shadow: 0 1px 6px rgba(4, 16, 26, 0.5);
+}
+
+/* Workspace switcher */
+.workspace-switch {
+  display: flex;
+  gap: 4px;
+  margin: 0 16px 16px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(6, 24, 38, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.workspace-switch a {
+  flex: 1 1 0;
+  padding: 7px 4px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+  transition: background 180ms var(--ease), color 180ms var(--ease);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+.workspace-switch a:hover { color: #fff; background: rgba(255, 255, 255, 0.09); }
+.workspace-switch a[aria-current="true"] {
+  background: var(--gold);
+  color: var(--navy-deep);
+}
+
+/* Section list */
+.nav-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  scrollbar-width: thin;
+}
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.82);
+  text-shadow: 0 1px 4px rgba(4, 16, 26, 0.45);
+  transition: background 160ms var(--ease), color 160ms var(--ease);
+}
+.nav-item svg { flex: 0 0 auto; width: 20px; height: 20px; }
+.nav-item:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.nav-item.is-active {
+  color: #fff;
+  font-weight: 700;
+  background: linear-gradient(90deg, rgba(201, 168, 76, 0.3), rgba(201, 168, 76, 0.09));
+}
+.nav-item.is-active svg { color: var(--gold); }
+.nav-item.is-active::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--gold);
+}
+.nav-group {
+  margin: 16px 12px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* Tengo Aegis credit, pinned to the foot of the sidebar */
+.aegis {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 16px 0;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+}
+.aegis img {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid var(--gold);
+  object-fit: cover;
+  box-shadow: 0 2px 10px rgba(4, 16, 26, 0.5);
+}
+.aegis-name {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(4, 16, 26, 0.45);
+}
+.aegis-line {
+  display: block;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+/* ------------------------------------------------------------- the topbar */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: var(--topbar-h);
+  padding: 0 24px;
+  background: rgba(var(--glass-rgb), calc(var(--glass-opacity) * 0.86));
+  -webkit-backdrop-filter: blur(12px) saturate(1.3);
+  backdrop-filter: blur(12px) saturate(1.3);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+}
+.crumb {
+  font-size: 13px;
+  color: var(--on-photo-soft);
+  text-shadow: 0 1px 6px rgba(4, 18, 28, 0.4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.crumb b { color: #fff; font-weight: 700; }
+.topbar-right { display: flex; align-items: center; gap: 18px; }
+
+.alert-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #fff;
+  background: rgba(13, 51, 80, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  transition: background 160ms var(--ease);
+}
+.alert-pill:hover { background: rgba(13, 51, 80, 0.62); }
+.alert-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 3px rgba(163, 58, 58, 0.28);
+}
+.alert-dot.is-live { animation: alertPulse 2.4s var(--ease) infinite; }
+@keyframes alertPulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(163, 58, 58, 0.28); }
+  50% { box-shadow: 0 0 0 6px rgba(163, 58, 58, 0.08); }
+}
+
+/* Flagpole: the mast reaches the bar's bottom border, the cloth flies from
+   the finial. Everything here is decorative, so it is aria-hidden. */
+.flagpole {
+  position: relative;
+  width: 84px;
+  height: calc(var(--topbar-h) - 1px);
+  flex: 0 0 auto;
+}
+.flagpole-mast {
+  position: absolute;
+  top: 6px;
+  bottom: 0;
+  right: 8px;
+  width: 2px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, #a5873a, var(--gold) 45%, #e6cf8f 60%, #a5873a);
+}
+.flagpole-finial {
+  position: absolute;
+  top: 2px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #f0dda3, var(--gold) 60%, #9c7d31);
+}
+.flagpole-flag {
+  position: absolute;
+  top: 10px;
+  right: 11px;
+  width: 68px;
+  height: 45px;
+  overflow: hidden;
+  border-radius: 1px;
+  transform-origin: right center;
+  box-shadow: 0 4px 12px rgba(4, 16, 26, 0.45);
+  animation: flagWave 4.5s ease-in-out infinite;
+}
+.flagpole-flag img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Cloth shading: three soft folds riding across the flag. */
+.flagpole-flag::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg,
+    rgba(255, 255, 255, 0.16) 0%,
+    rgba(0, 0, 0, 0.14) 22%,
+    rgba(255, 255, 255, 0.12) 44%,
+    rgba(0, 0, 0, 0.16) 68%,
+    rgba(255, 255, 255, 0.1) 100%);
+  mix-blend-mode: overlay;
+}
+@keyframes flagWave {
+  0%, 100% { transform: skewY(0deg) scaleX(1); }
+  35% { transform: skewY(-2deg) scaleX(0.965); }
+  70% { transform: skewY(1.2deg) scaleX(0.985); }
+}
+
+/* --------------------------------------------------------- page furniture */
+.app-content { padding-bottom: 48px; }
+
+/* Page headings sit on the photo, not on glass. The pages set their colour
+   inline, so the override has to win the cascade. */
+.app-main h1 {
+  color: var(--on-photo) !important;
+  text-shadow: var(--photo-shadow);
+  font-size: 26px;
+  line-height: 1.2;
+}
+.app-main h1 + p {
+  color: var(--on-photo-soft) !important;
+  text-shadow: 0 1px 10px rgba(4, 18, 28, 0.5);
+}
+
+/* Every card in the portal is bg-surface + a 1px border, so the glass lives on
+   the utility itself rather than in 30 call sites. */
+.bg-surface {
+  -webkit-backdrop-filter: blur(12px) saturate(1.25);
+  backdrop-filter: blur(12px) saturate(1.25);
+  box-shadow: 0 10px 30px rgba(6, 24, 38, 0.14);
+}
+
+/* Stat tiles and workspace cards */
+.stat-tile {
+  display: block;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  -webkit-backdrop-filter: blur(12px) saturate(1.25);
+  backdrop-filter: blur(12px) saturate(1.25);
+  box-shadow: 0 10px 30px rgba(6, 24, 38, 0.14);
+  padding: 20px;
+  transition: transform 180ms var(--ease), box-shadow 180ms var(--ease);
+}
+.stat-tile:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 36px rgba(6, 24, 38, 0.2);
+}
+
+/* Empty states: a gold icon tile over the photo. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 48px 24px;
+  text-align: center;
+  border-radius: 14px;
+  border: 1px dashed rgba(255, 255, 255, 0.34);
+  background: rgba(9, 38, 60, 0.28);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.empty-icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  color: var(--gold);
+  background: rgba(201, 168, 76, 0.16);
+  border: 1px solid rgba(201, 168, 76, 0.42);
+}
+.empty-icon svg { width: 30px; height: 30px; }
+.empty-title { font-size: 15px; font-weight: 700; color: #fff; text-shadow: var(--photo-shadow); }
+.empty-hint { font-size: 13px; color: rgba(255, 255, 255, 0.76); max-width: 42ch; }
+
+/* Progress ring */
+.ring-track { stroke: rgba(255, 255, 255, 0.26); }
+.ring-value { stroke: var(--gold); transition: stroke-dashoffset 600ms var(--ease); }
+
+/* Licence banner stays solid — it is a status, not chrome. */
+.licence-banner {
+  border-radius: 12px;
+  border-left: 4px solid var(--gold);
+  background: rgba(201, 168, 76, 0.18);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+/* ------------------------------------------------------------- controls */
+.waisha-input {
+  transition: border-color 180ms var(--ease), box-shadow 180ms var(--ease);
+}
+.waisha-input:focus:not(:focus-visible) { outline: none; }
+.waisha-input:focus {
+  border-color: var(--gold);
+  box-shadow: inset 3px 0 0 0 var(--gold);
+}
+.waisha-input:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.waisha-btn {
+  background: var(--gold);
+  color: var(--navy-deep);
+  font-weight: 700;
+  transition: background 180ms var(--ease), transform 180ms var(--ease);
+}
+.waisha-btn:hover { background: #b8963d; }
+.waisha-btn:active { transform: translateY(1px); }
+.waisha-btn:disabled { opacity: 0.6; }
 
 .panel-enter { animation: panelIn 200ms var(--ease) both; }
 @keyframes panelIn {
@@ -38,30 +511,64 @@ body {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.page-enter { animation: pageIn 220ms var(--ease) both; }
+.page-enter { animation: pageIn 260ms var(--ease) both; }
 @keyframes pageIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.waisha-input { transition: border-color 180ms var(--ease), box-shadow 180ms var(--ease); }
-.waisha-input:focus:not(:focus-visible) { outline: none; }
-.waisha-input:focus { border-color: var(--brand); box-shadow: inset 3px 0 0 0 var(--brand); }
-.waisha-input:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
-.waisha-btn {
-  background: var(--gold-green);
-  color: var(--ink);
-  transition: background 180ms var(--ease);
+/* ------------------------------------------------------------ responsive */
+@media (max-width: 860px) {
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  .sidebar {
+    position: relative;
+    width: auto;
+    flex: 0 0 auto;
+    padding: 12px 0 0;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+  }
+  .brand-lockup { padding: 0 16px 10px; }
+  .brand-lockup img { width: 150px; }
+  .nav-scroll {
+    flex-direction: row;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 12px 12px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav-item { flex: 0 0 auto; padding: 8px 12px; }
+  .nav-item.is-active::before { display: none; }
+  .nav-group { display: none; }
+  .aegis { display: none; }
+  .app-main { margin-left: 0; flex: 1 1 auto; min-height: 0; height: auto; }
+  .topbar { padding: 0 16px 0 calc(16px + env(safe-area-inset-left)); }
+  .crumb .crumb-area { display: none; }
+  .flagpole { width: 62px; }
+  .flagpole-flag { width: 48px; height: 32px; }
+  .app-main h1 { font-size: 22px; }
 }
-.waisha-btn:hover { background: var(--gold-green-dark); }
-.waisha-btn:disabled { opacity: 0.6; }
 
 @media (prefers-reduced-motion: reduce) {
   .panel-enter, .underline-slide, .sheet-in, .page-enter { animation: none; transition: none; }
+  .ws-bg-img { transition: none; }
+  .flagpole-flag { animation: none; }
+  .alert-dot.is-live { animation: none; }
+  .ring-value { transition: none; }
 }
+
 /* Print-ready invoices: only the invoice sheet prints. */
 @media print {
-  header { display: none !important; }
+  .sidebar, .topbar, .ws-bg, header { display: none !important; }
+  .app-main { margin-left: 0; height: auto; overflow: visible; }
   .no-print { display: none !important; }
+  .bg-surface, .stat-tile { box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
   body { background: #ffffff !important; }
+  .app-main h1, .app-main h1 + p { color: var(--navy) !important; text-shadow: none; }
 }
