@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { ContactRound } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch } from "../api-client";
 
 interface Driver {
@@ -293,7 +295,9 @@ export default function DriversPage() {
               </tr>
             ))}
             {drivers.length === 0 && (
-              <tr><td colSpan={6} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>No drivers yet.</td></tr>
+              <EmptyState colSpan={6} icon={ContactRound} title="No drivers yet"
+                hint="Add the people behind the wheel so every trip carries a named, licensed crew."
+                action={{ label: "Add a driver", onClick: () => { setForm(EMPTY); setEditingId(null); setShowForm(true); } }} />
             )}
           </tbody>
         </table>

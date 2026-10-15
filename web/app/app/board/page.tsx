@@ -1,6 +1,8 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from "react";
 import dynamic from "next/dynamic";
+import { Megaphone } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch, apiStream } from "../api-client";
 
 const RouteMap = dynamic(() => import("../routes/route-map"), {
@@ -459,10 +461,13 @@ export default function BoardPage() {
       </div>
 
       {!loading && cards.length === 0 && !denied && (
-        <p className="mt-24 text-sm" style={{ color: "var(--ink-soft)" }}>
-          {active ? "No load matches these filters right now." :
-            "The board is empty. New offers from any company appear here the moment they are published."}
-        </p>
+        <div className="mt-24">
+          <EmptyState icon={Megaphone}
+            title={active ? "No load matches these filters" : "The board is quiet"}
+            hint={active
+              ? "Widen the corridor or clear a filter — published offers expire fast."
+              : "New offers from any company appear here the moment they are published."} />
+        </div>
       )}
 
       {cards.length < total && (

@@ -1,6 +1,8 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import { Route } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch } from "../api-client";
 
 const RouteMap = dynamic(() => import("./route-map"), {
@@ -507,7 +509,9 @@ export default function RoutesPage() {
               </tr>
             ))}
             {routes.length === 0 && (
-              <tr><td colSpan={7} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>No routes yet.</td></tr>
+              <EmptyState colSpan={7} icon={Route} title="No routes yet"
+                hint="Map the corridors you run — ward to port, lake to road — so shippers can find you."
+                action={{ label: "Create a route", onClick: () => { resetForm(); setShowForm(true); } }} />
             )}
           </tbody>
         </table>

@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { KeyRound } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch } from "../api-client";
 import { fmtDate, fmtDateTime, errorText } from "../../portal/labels";
 
@@ -306,9 +308,9 @@ export default function ShipperAccessPage() {
               </tr>
             ))}
             {accounts.length === 0 && (
-              <tr><td colSpan={8} className="p-16 text-sm" style={soft}>
-                No shipper accounts yet — create one so a client can track their files in the portal.
-              </td></tr>
+              <EmptyState colSpan={8} icon={KeyRound} title="No shipper accounts yet"
+                hint="Give a client a login and they can track their own files, invoices and documents in the portal."
+                action={{ label: "Create an account", onClick: () => { setForm(EMPTY_CREATE); setEditing(null); setShowForm(true); } }} />
             )}
           </tbody>
         </table>

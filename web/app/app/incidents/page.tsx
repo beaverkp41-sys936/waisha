@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { TriangleAlert } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch } from "../api-client";
 
 function errorText(json: any, fallback: string): string {
@@ -263,9 +265,8 @@ export default function IncidentsPage() {
               </tr>
             ))}
             {incidents.length === 0 && (
-              <tr><td colSpan={7} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
-                No incidents recorded — that is the goal.
-              </td></tr>
+              <EmptyState colSpan={7} icon={TriangleAlert} title="No incidents recorded"
+                hint="That is the goal. Log one here the moment something happens on the road." />
             )}
           </tbody>
         </table>

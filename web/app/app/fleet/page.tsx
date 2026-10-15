@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { Truck } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch } from "../api-client";
 
 interface Vessel {
@@ -358,9 +360,9 @@ export default function FleetPage() {
               </tr>
             ))}
             {vessels.length === 0 && (
-              <tr><td colSpan={8} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
-                No vessels yet. Add your first truck or vessel.
-              </td></tr>
+              <EmptyState colSpan={8} icon={Truck} title="No vessels yet"
+                hint="Register your first truck, trailer or ship — everything you move is tied to a vessel."
+                action={{ label: "Add a vessel", onClick: () => { setEditingId(null); setShowForm(true); } }} />
             )}
           </tbody>
         </table>

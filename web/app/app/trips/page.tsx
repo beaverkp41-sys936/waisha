@@ -1,6 +1,8 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { Navigation } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch } from "../api-client";
 
 function errorText(json: any, fallback: string): string {
@@ -308,9 +310,9 @@ export default function TripsPage() {
               </tr>
             ))}
             {trips.length === 0 && (
-              <tr><td colSpan={8} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
-                No trips yet — plan one above.
-              </td></tr>
+              <EmptyState colSpan={8} icon={Navigation} title="No trips yet"
+                hint="Plan a trip and your fleet, driver and cargo finally sit on the same paper."
+                action={{ label: "Plan a trip", onClick: () => { setForm(EMPTY); setEditingId(null); setShowForm(true); } }} />
             )}
           </tbody>
         </table>

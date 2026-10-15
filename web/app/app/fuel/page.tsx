@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { Fuel } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch } from "../api-client";
 
 function errorText(json: any, fallback: string): string {
@@ -193,7 +195,9 @@ export default function FuelPage() {
               </tr>
             ))}
             {logs.length === 0 && (
-              <tr><td colSpan={7} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>No fuel logged yet.</td></tr>
+              <EmptyState colSpan={7} icon={Fuel} title="No fuel logged yet"
+                hint="Record each fill-up with litres and cost — distance per litre works itself out."
+                action={{ label: "Log fuel", target: "form" }} />
             )}
           </tbody>
         </table>

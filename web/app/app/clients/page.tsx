@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { Users } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch } from "../api-client";
 
 function errorText(json: any, fallback: string): string {
@@ -173,9 +175,9 @@ export default function ClientsPage() {
               </tr>
             ))}
             {clients.length === 0 && (
-              <tr><td colSpan={6} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
-                No clients yet — add the businesses you serve.
-              </td></tr>
+              <EmptyState colSpan={6} icon={Users} title="No clients yet"
+                hint="Add the businesses you serve — every file, invoice and shipper login hangs off them."
+                action={{ label: "Add a client", onClick: () => { setForm(EMPTY); setEditingId(null); setShowForm(true); } }} />
             )}
           </tbody>
         </table>

@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { IdCard } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch } from "../api-client";
 
 function errorText(json: any, fallback: string): string {
@@ -352,9 +354,9 @@ export default function StaffPage() {
               </tr>
             ))}
             {members.length === 0 && (
-              <tr><td colSpan={5} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
-                No members yet — invite your first dispatcher above.
-              </td></tr>
+              <EmptyState colSpan={5} icon={IdCard} title="No team members yet"
+                hint="Invite a dispatcher or accountant and give them only the areas they need."
+                action={{ label: "Invite a member", onClick: () => { setForm(EMPTY); setEditingId(null); setInviteUrl(null); setShowForm(true); } }} />
             )}
           </tbody>
         </table>

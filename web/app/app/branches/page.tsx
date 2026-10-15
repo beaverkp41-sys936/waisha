@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { MapPinned } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch } from "../api-client";
 
 interface Region { id: number; name_en: string; name_sw: string; }
@@ -236,7 +238,9 @@ export default function BranchesPage() {
               </tr>
             ))}
             {branches.length === 0 && (
-              <tr><td colSpan={6} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>No branches yet.</td></tr>
+              <EmptyState colSpan={6} icon={MapPinned} title="No branches yet"
+                hint="Add your HQ first — branches give trips, drivers and cargo a home base."
+                action={{ label: "Add a branch", onClick: () => { setEditingId(null); setForm(EMPTY_BRANCH); setDistricts([]); setWards([]); setShowForm(true); } }} />
             )}
           </tbody>
         </table>

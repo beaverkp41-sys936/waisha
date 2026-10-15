@@ -1,6 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import {
+  ArrowRight, Check, CircleDashed, MapPinned, Navigation, Route, Truck
+} from "lucide-react";
+import { ProgressRing } from "@/components/ProgressRing";
 import { apiFetch } from "../api-client";
 import { AREAS, areaUnlocked } from "../areas";
 
@@ -81,58 +85,97 @@ export default function DashboardPage() {
   const licenceActive = licence?.tenant_status === "active";
   const trialRunning = licence?.tenant_status === "trial" && licence?.operational !== false;
 
+  const firstName = (me?.full_name ?? "").trim().split(/\s+/)[0];
   const card = "rounded-card border bg-surface p-24";
   const cardStyle = { borderColor: "var(--line)" };
-  const count = "text-2xl font-bold tabular-nums";
+
+  const tiles = [
+    { label: "Fleet", href: "/app/fleet", icon: Truck, value: fleet?.fleetUsed ?? 0,
+      note: fleet?.fleetLimit !== null && fleet?.fleetLimit !== undefined ? `of ${fleet.fleetLimit} (trial)` : "vessels" },
+    { label: "Branches", href: "/app/branches", icon: MapPinned, value: branches.length, note: "locations" },
+    { label: "Routes", href: "/app/routes", icon: Route, value: routes.length, note: "corridors" },
+    { label: "Trips", href: "/app/trips", icon: Navigation,
+      value: trips.filter(t => t.status === "planned" || t.status === "in_transit").length,
+      note: `active of ${trips.length}` }
+  ];
 
   return (
     <div className="mx-auto max-w-[900px] px-16 py-32">
-      <h1 className="text-2xl font-bold" style={{ color: "var(--ink)" }}>
-        Welcome, {me?.name ?? "Director"}
+      <h1 className="text-2xl font-bold">
+        Welcome, {firstName || "Director"}
       </h1>
+      <p className="mt-8 text-sm">
+        {me?.tenant_name ?? "Your transport operation"} — fleet, routes and trips in one place.
+      </p>
 
       {trialRunning && (
-        <div role="status" className="mt-16 px-16 py-8 text-sm font-semibold"
-          style={{ background: "var(--warning)", color: "#fff" }}>
+        <div role="status" className="licence-banner mt-16 px-16 py-10 text-sm font-semibold"
+          style={{ borderLeftColor: "var(--warning)", background: "rgba(168, 121, 28, 0.18)", color: "#fff",
+                   textShadow: "0 1px 6px rgba(4,18,28,.4)" }}>
           Trial: {trialLeft} remaining
         </div>
       )}
       {licenceActive && (
-        <div role="status" className="mt-16 px-16 py-8 text-sm font-semibold"
-          style={{ background: "var(--gold)", color: "var(--ink)" }}>
+        <div role="status" className="licence-banner mt-16 px-16 py-10 text-sm font-semibold"
+          style={{ color: "#fff", textShadow: "0 1px 6px rgba(4,18,28,.4)" }}>
           Licence active{licence?.licence_expires_at ? ` — valid until ${new Date(licence.licence_expires_at).toLocaleDateString()}` : ""}
         </div>
       )}
 
       {/* Next actions — the guided journey */}
       <section className={`${card} mt-24`} style={cardStyle}>
-        <h2 className="mb-16 text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
-          {remaining.length > 0 ? "Next steps" : "Setup complete — you're running"}
-        </h2>
-        <div className="space-y-12">
+        <div className="flex items-center gap-20">
+          <span style={{ color: "var(--ink)" }}><ProgressRing value={completion} /></span>
+          <div className="min-w-0">
+            <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+              {remaining.length > 0 ? "Next steps" : "Setup complete — you're running"}
+            </h2>
+            <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+              {remaining.length} of {nextActions.length} left. Profile completeness {completion}%.
+            </p>
+          </div>
+        </div>
+
+        <ul className="mt-20 space-y-10">
           {nextActions.map(a => (
-            <Link key={a.label} href={a.href}
-              className="flex items-center justify-between rounded-input border px-16 py-12 text-sm transition-colors"
-              style={{ borderColor: a.done ? "var(--success)" : "var(--line)" }}>
-              <span>
-                <span className="font-semibold" style={{ color: a.done ? "var(--success)" : "var(--ink)" }}>
-                  {a.done ? "✓ " : ""}{a.label}
+            <li key={a.label}>
+              <Link href={a.href}
+                className="flex items-center justify-between gap-12 rounded-input border px-16 py-12 text-sm transition-colors"
+                style={{ borderColor: a.done ? "var(--success)" : "var(--line)" }}>
+                <span className="flex min-w-0 items-center gap-10">
+                  {a.done
+                    ? <Check aria-hidden size={18} strokeWidth={2.2} style={{ color: "var(--success)", flex: "0 0 auto" }} />
+                    : <CircleDashed aria-hidden size={18} strokeWidth={1.8} style={{ color: "var(--ink-soft)", flex: "0 0 auto" }} />}
+                  <span className="truncate">
+                    <span className="font-semibold" style={{ color: a.done ? "var(--success)" : "var(--ink)" }}>
+                      {a.label}
+                    </span>
+                    {!a.done && <span className="ml-8" style={{ color: "var(--ink-soft)" }}>— {a.hint}</span>}
+                  </span>
                 </span>
-                {!a.done && <span className="ml-8" style={{ color: "var(--ink-soft)" }}>— {a.hint}</span>}
-              </span>
-              <span style={{ color: "var(--brand)" }}>{a.done ? "View" : "Go →"}</span>
-            </Link>
+                <span className="flex flex-0 items-center gap-6 whitespace-nowrap font-semibold"
+                  style={{ color: "var(--brand)" }}>
+                  {a.done ? "View" : "Start"}
+                  <ArrowRight aria-hidden size={15} strokeWidth={2} />
+                </span>
+              </Link>
+            </li>
           ))}
-        </div>
-        {/* Profile completion meter */}
-        <div className="mt-16 border-t pt-16" style={{ borderColor: "var(--line)" }}>
-          <div className="mb-8 flex justify-between text-xs" style={{ color: "var(--ink-soft)" }}>
-            <span>Profile completeness</span><span className="tabular-nums">{completion}%</span>
-          </div>
-          <div className="h-8 w-full rounded-full" style={{ background: "var(--milk-deep)" }}>
-            <div className="h-8 rounded-full" style={{ width: `${completion}%`, background: "var(--gold-green)" }} />
-          </div>
-        </div>
+        </ul>
+      </section>
+
+      {/* Summary counts */}
+      <section className="mt-24 grid grid-cols-2 gap-16 lg:grid-cols-4">
+        {tiles.map(t => (
+          <Link key={t.label} href={t.href} className="stat-tile">
+            <t.icon aria-hidden size={20} strokeWidth={1.8} style={{ color: "var(--gold)" }} />
+            <p className="mt-12 text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+              {t.label}
+            </p>
+            <p className="mt-4 text-2xl font-bold tabular-nums" style={{ color: "var(--ink)" }}>{t.value}</p>
+            <p className="text-xs" style={{ color: "var(--ink-soft)" }}>{t.note}</p>
+          </Link>
+        ))}
       </section>
 
       {/* Workspaces — the portal's areas */}
@@ -145,8 +188,11 @@ export default function DashboardPage() {
                 <p className="text-[11px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink)" }}>
                   {a.label}
                 </p>
-                <span className="px-8 py-2 text-[9px] font-bold uppercase whitespace-nowrap"
-                  style={{ borderLeft: `4px solid ${unlocked ? "var(--success)" : "var(--gold)"}`, color: "var(--ink-soft)" }}>
+                <span className="rounded-full px-10 py-2 text-[9px] font-bold uppercase whitespace-nowrap"
+                  style={{
+                    background: unlocked ? "color-mix(in srgb, var(--success) 16%, transparent)" : "color-mix(in srgb, var(--gold) 20%, transparent)",
+                    color: unlocked ? "var(--success)" : "var(--ink)"
+                  }}>
                   {unlocked ? "Included" : a.planLabel}
                 </span>
               </div>
@@ -160,35 +206,6 @@ export default function DashboardPage() {
             </Link>
           );
         })}
-      </section>
-
-      {/* Summary counts */}
-      <section className="mt-24 grid grid-cols-2 gap-16 lg:grid-cols-4">
-        <Link href="/app/fleet" className={`${card} block`} style={cardStyle}>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Fleet</p>
-          <p className={`${count} mt-8`} style={{ color: "var(--ink)" }}>{fleet?.fleetUsed ?? 0}</p>
-          <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
-            {fleet?.fleetLimit !== null && fleet?.fleetLimit !== undefined
-              ? `of ${fleet.fleetLimit} (trial)` : "vessels"}
-          </p>
-        </Link>
-        <Link href="/app/branches" className={`${card} block`} style={cardStyle}>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Branches</p>
-          <p className={`${count} mt-8`} style={{ color: "var(--ink)" }}>{branches.length}</p>
-          <p className="text-xs" style={{ color: "var(--ink-soft)" }}>locations</p>
-        </Link>
-        <Link href="/app/routes" className={`${card} block`} style={cardStyle}>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Routes</p>
-          <p className={`${count} mt-8`} style={{ color: "var(--ink)" }}>{routes.length}</p>
-          <p className="text-xs" style={{ color: "var(--ink-soft)" }}>corridors</p>
-        </Link>
-        <Link href="/app/trips" className={`${card} block`} style={cardStyle}>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Trips</p>
-          <p className={`${count} mt-8`} style={{ color: "var(--ink)" }}>
-            {trips.filter(t => t.status === "planned" || t.status === "in_transit").length}
-          </p>
-          <p className="text-xs" style={{ color: "var(--ink-soft)" }}>active of {trips.length}</p>
-        </Link>
       </section>
 
       <p className="mt-24 text-xs" style={{ color: "var(--ink-soft)" }}>

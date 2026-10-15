@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { Package } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState";
 import { apiFetch } from "../api-client";
 
 function errorText(json: any, fallback: string): string {
@@ -197,9 +199,9 @@ export default function InventoryPage() {
               </tr>
             ))}
             {items.length === 0 && (
-              <tr><td colSpan={8} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
-                No parts yet — add your first spare.
-              </td></tr>
+              <EmptyState colSpan={8} icon={Package} title="No parts yet"
+                hint="Track spares and consumables so a breakdown never waits on stock."
+                action={{ label: "Add a part", onClick: () => { setForm(EMPTY); setEditingId(null); setShowForm(true); } }} />
             )}
           </tbody>
         </table>
