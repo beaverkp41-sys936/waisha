@@ -16,6 +16,7 @@ const NAV = [
   { href: "/app/inventory", label: "Inventory", accent: "var(--brand)" },
   { href: "/app/incidents", label: "Incidents", accent: "var(--danger)" },
   { href: "/app/clients", label: "Clients", accent: "var(--gold-green)" },
+  { href: "/app/shipper-access", label: "Shipper access", accent: "var(--brand)" },
   { href: "/app/compliance", label: "Compliance", accent: "var(--success)" },
   { href: "/app/reports", label: "Reports", accent: "var(--gold)" },
   { href: "/app/staff", label: "Staff", accent: "var(--brand)" },

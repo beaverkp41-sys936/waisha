@@ -26,7 +26,8 @@ const KIND_LABELS: Record<string, string> = {
   logo: "Logo", avatar: "Photo", licence: "Licence", insurance: "Insurance",
   inspection: "Inspection", road_licence: "Road licence", delivery_note: "Delivery note",
   invoice: "Invoice", bill_of_lading: "Bill of Lading", packing_list: "Packing list",
-  contract: "Contract", other: "Other", attachment: "Attachment", receipt: "Receipt"
+  contract: "Contract", other: "Other", attachment: "Attachment", receipt: "Receipt",
+  shipper_upload: "Shipper upload"
 };
 
 export default function DocumentsVaultPage() {

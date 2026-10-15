@@ -204,7 +204,7 @@ export default function LoginPage() {
       }
       if (!r.ok) { setError(errorText(r.json, "Sign in failed")); return; }
       sessionStorage.setItem("waisha_access", r.json.accessToken);
-      window.location.href = "/app/dashboard";
+      window.location.href = loginTab === 1 ? "/portal" : "/app/dashboard";
     } finally { setBusy(false); }
   }
 
@@ -243,6 +243,11 @@ export default function LoginPage() {
     if (r.ok && r.json?.resendAt) setPending({ ...pending, resendAt: r.json.resendAt });
     else if (!r.ok) setError(errorText(r.json, "Could not resend"));
   }
+
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    if (tab === "shipper") setLoginTab(1);
+  }, []);
 
   useEffect(() => {
     if (panel !== "otp" || !pending) return;

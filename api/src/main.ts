@@ -32,6 +32,8 @@ import { messagesRoutes } from "./routes/messages.routes.js";
 import { complianceRoutes } from "./routes/compliance.routes.js";
 import { employeesRoutes } from "./routes/employees.routes.js";
 import { officeCostsRoutes } from "./routes/office-costs.routes.js";
+import { shipperAccountsRoutes } from "./routes/shipper-accounts.routes.js";
+import { portalRoutes } from "./routes/portal.routes.js";
 
 async function main() {
   const app = Fastify({
@@ -77,6 +79,8 @@ async function main() {
   await app.register(complianceRoutes, { prefix: "/api/v1" });
   await app.register(employeesRoutes, { prefix: "/api/v1" });
   await app.register(officeCostsRoutes, { prefix: "/api/v1" });
+  await app.register(shipperAccountsRoutes, { prefix: "/api/v1" });
+  await app.register(portalRoutes, { prefix: "/api/v1" });
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
 }
 
