@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Client } from "pg";
 
 async function main() {
+  if (process.env.DNS_FALLBACK) await import("./util/dns-fallback.js");
   const url = process.env.MIGRATE_DATABASE_URL ?? process.env.DATABASE_URL;
   if (!url) throw new Error("Set MIGRATE_DATABASE_URL or DATABASE_URL in api/.env");
 

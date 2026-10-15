@@ -1,10 +1,21 @@
+import { readFileSync } from "node:fs";
 import { Pool, type PoolClient } from "pg";
-import { env } from "../env.js";
+import { env, isProd } from "../env.js";
+
+// The Supabase pooler serves a self-signed CA chain, so full verification
+// needs a pinned CA: set DB_SSL_CA_FILE to the bundle on the deploy target.
+// Without it we still encrypt, but cannot verify the chain — warn loudly.
+const ssl = env.DB_SSL_CA_FILE
+  ? { require: true, ca: readFileSync(env.DB_SSL_CA_FILE, "utf8") }
+  : { rejectUnauthorized: false };
+if (!env.DB_SSL_CA_FILE && isProd) {
+  console.warn("[db] TLS certificate verification DISABLED — set DB_SSL_CA_FILE to the Supabase CA bundle");
+}
 
 export const pool = new Pool({
   connectionString: env.DATABASE_URL,
   max: 10,
-  ssl: { rejectUnauthorized: false } // Supabase pooler; CA pinning lands in the hardening phase
+  ssl
 });
 
 /** Run inside one transaction with app.tenant_id set — RLS scopes every statement. */
