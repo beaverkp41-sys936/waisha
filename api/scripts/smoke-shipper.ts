@@ -44,7 +44,7 @@ async function call(path: string, token: string | null, init: RequestInit = {}) 
   const text = await res.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* non-JSON */ }
-  return { status: res.status, json };
+  return { status: res.status, json, headers: res.headers };
 }
 
 let failures = 0;
@@ -384,6 +384,35 @@ async function main() {
       method: "POST", body: JSON.stringify({ mode: "shipper", email: SHIPPER_EMAIL, password: PASSWORD2 })
     });
     check("new password accepted", newLogin.status === 200, newLogin.status);
+
+    // ---- refresh rotation ----
+    // 002 declared rotate_refresh's ip as text and coalesced it into sessions.ip
+    // (inet). Postgres found no common type, so every refresh aborted with 42804
+    // and no session could outlive its 15-minute access token. 045 fixed it.
+    const cookieOf = (h: Headers) =>
+      (typeof h.getSetCookie === "function" ? h.getSetCookie() : [])
+        .find((c) => c.startsWith("waisha_refresh="))?.split(";")[0] ?? "";
+    const rc1 = cookieOf(newLogin.headers);
+    const withCookie = (value: string) =>
+      call("/auth/refresh", null, { method: "POST", headers: { Cookie: value } });
+    const refresh1 = await withCookie(rc1);
+    check("refresh rotates the session → 200 with a new access token",
+      !!rc1 && refresh1.status === 200 && !!refresh1.json?.accessToken,
+      { cookie: !!rc1, status: refresh1.status, body: refresh1.json });
+    const rc2 = cookieOf(refresh1.headers);
+    check("rotation hands back a different refresh token", !!rc2 && rc2 !== rc1);
+    const refresh2 = await withCookie(rc2);
+    check("the rotated token refreshes again — chain stays alive",
+      refresh2.status === 200, refresh2.status);
+    const reuse = await withCookie(rc1);
+    check("replaying the retired token is refused and kills the family",
+      reuse.status === 401 && reuse.json?.error?.code === "TOKEN_REUSE",
+      { status: reuse.status, code: reuse.json?.error?.code });
+    const rot = await owner.query(
+      `select count(*)::int as n, count(*) filter (where ip is not null)::int as with_ip
+         from sessions where user_id = $1 and revoked_reason = 'rotated'`, [smokeUserId]);
+    check("rotated sessions stored their ip as inet",
+      rot.rows[0].n >= 2 && rot.rows[0].with_ip === rot.rows[0].n, rot.rows[0]);
 
     // ---- removal kills the login ----
     const remove = await call(`/shipper-accounts/${accountId}`, token, { method: "DELETE" });
