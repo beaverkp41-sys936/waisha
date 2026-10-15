@@ -63,17 +63,16 @@ const MANIFEST: [string, string][] = [
 
 function Segmented({ items, index, onChange }: { items: string[]; index: number; onChange: (i: number) => void }) {
   return (
-    <div role="tablist" className="relative flex border-b" style={{ borderColor: "var(--line)" }}>
+    <div role="tablist" className="auth-tab relative flex border-b">
       {items.map((label, i) => (
         <button key={label} type="button" role="tab" aria-selected={i === index}
           onClick={() => onChange(i)}
-          className={`flex-1 pb-8 pt-4 text-xs font-semibold uppercase tracking-[0.08em] ${i === index ? "" : "opacity-50"}`}
-          style={{ color: i === index ? "var(--brand-deep)" : "var(--ink-soft)" }}>
+          className={`auth-tab flex-1 pb-8 pt-4 text-xs font-semibold uppercase tracking-[0.08em] ${i === index ? "" : "opacity-60"}`}>
           {label}
         </button>
       ))}
-      <span aria-hidden className="underline-slide absolute bottom-0 left-0 h-[2px]"
-        style={{ width: `calc(100% / ${items.length})`, background: "var(--brand-deep)", transform: `translateX(${index * 100}%)` }} />
+      <span aria-hidden className="auth-tab-ink underline-slide absolute bottom-0 left-0 h-[2px]"
+        style={{ width: `calc(100% / ${items.length})`, transform: `translateX(${index * 100}%)` }} />
     </div>
   );
 }
@@ -81,10 +80,10 @@ function Segmented({ items, index, onChange }: { items: string[]; index: number;
 function Field({ label, error, ...props }: any) {
   return (
     <label className="block">
-      <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>{label}</span>
-      <input {...props} className="waisha-input w-full rounded-input border px-12 py-12 text-sm"
-        style={{ borderColor: error ? "var(--danger)" : "var(--line)", background: "var(--milk)" }} />
-      {error && <span className="mt-4 block text-xs" style={{ color: "var(--danger)" }}>{error}</span>}
+      <span className="auth-label mb-4 block font-semibold">{label}</span>
+      <input {...props} className="auth-field waisha-input w-full rounded-input px-12 py-12 text-sm"
+        style={error ? { borderColor: "#e07d7d" } : undefined} />
+      {error && <span className="mt-4 block text-xs" style={{ color: "#ffb3b3" }}>{error}</span>}
     </label>
   );
 }
@@ -92,18 +91,17 @@ function Field({ label, error, ...props }: any) {
 function PasswordField({ label, error, show, onToggle, ...props }: any) {
   return (
     <label className="block">
-      <span className="mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>{label}</span>
+      <span className="auth-label mb-4 block font-semibold">{label}</span>
       <div className="relative">
         <input {...props} type={show ? "text" : "password"}
-          className="waisha-input w-full rounded-input border px-12 py-12 pr-64 text-sm"
-          style={{ borderColor: error ? "var(--danger)" : "var(--line)", background: "var(--milk)" }} />
+          className="auth-field waisha-input w-full rounded-input px-12 py-12 pr-64 text-sm"
+          style={error ? { borderColor: "#e07d7d" } : undefined} />
         <button type="button" onClick={onToggle}
-          className="absolute right-12 top-1/2 -translate-y-1/2 text-[10px] font-bold tracking-[0.16em]"
-          style={{ color: "var(--brand)" }}>
+          className="auth-link absolute right-12 top-1/2 -translate-y-1/2 text-[10px] font-bold tracking-[0.16em]">
           {show ? "HIDE" : "SHOW"}
         </button>
       </div>
-      {error && <span className="mt-4 block text-xs" style={{ color: "var(--danger)" }}>{error}</span>}
+      {error && <span className="mt-4 block text-xs" style={{ color: "#ffb3b3" }}>{error}</span>}
     </label>
   );
 }
@@ -124,8 +122,7 @@ function OtpInput({ onComplete }: { onComplete: (code: string) => void }) {
       {digits.map((d, i) => (
         <input key={i} ref={el => { refs.current[i] = el; }} value={d}
           inputMode="numeric" maxLength={1} aria-label={`Digit ${i + 1}`}
-                    className="waisha-input h-48 w-48 rounded-input border text-center text-lg"
-          style={{ borderColor: "var(--line)", background: "var(--milk)" }}
+                    className="auth-field waisha-input h-48 w-48 rounded-input text-center text-lg"
           onChange={e => setAt(i, e.target.value.replace(/\D/g, "").slice(-1))}
           onKeyDown={e => { if (e.key === "Backspace" && !digits[i] && i > 0) refs.current[i - 1]?.focus(); }}
           onPaste={e => {
@@ -146,8 +143,7 @@ function OtpInput({ onComplete }: { onComplete: (code: string) => void }) {
 function ErrorChip({ msg }: { msg: string | null }) {
   if (!msg) return null;
   return (
-    <div role="alert" aria-live="polite" className="mb-16 px-12 py-8 text-sm"
-      style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>
+    <div role="alert" aria-live="polite" className="auth-error mb-16 px-12 py-8 text-sm">
       {msg}
     </div>
   );
@@ -261,12 +257,9 @@ export default function LoginPage() {
   }, [panel, pending]);
 
   return (
-            <div className="flex min-h-screen items-center justify-center px-16 py-32"
-      style={{
-        background:
-          "radial-gradient(1100px 700px at 75% -10%, rgba(255,255,255,0.07), transparent 60%), var(--brand-deep)"
-      }}>
-                  <div className="w-full max-w-[900px]">
+            <div className="flex min-h-screen items-center justify-center px-16 py-32">
+      <div aria-hidden className="auth-bg" />
+                  <div className="auth-shell w-full max-w-[900px]">
 
         {/* Mobile-only brand plate — the RHS panel hides on small screens */}
         <div className="mb-16 flex justify-center md:hidden">
@@ -280,15 +273,14 @@ export default function LoginPage() {
           <div aria-hidden className="absolute inset-0 rounded-card"
             style={{ transform: "translate(10px, 10px)", border: "1px solid rgba(255,255,255,0.22)" }} />
 
-          <div className="sheet-in relative grid overflow-hidden rounded-card border bg-surface md:grid-cols-2"
-            style={{ borderColor: "var(--line)", boxShadow: "0 24px 64px rgba(5, 18, 26, 0.45)" }}>
+          <div className="auth-card sheet-in relative grid overflow-hidden rounded-card border md:grid-cols-2">
 
             {/* LEFT — form only. No logo here anymore. */}
             <section className="flex flex-col p-24">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--ink-soft)" }}>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "rgba(255,255,255,0.82)" }}>
                 Sign in to WAISHA
               </p>
-              <h1 className="mb-4 text-[28px] font-extrabold tracking-tight" style={{ color: "var(--ink)" }}>
+              <h1 className="mb-4 text-[28px] font-extrabold tracking-tight" style={{ color: "#ffffff" }}>
                 {greeting}.
               </h1>
               <p className="mb-16 text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: "var(--gold)" }}>
@@ -313,7 +305,7 @@ export default function LoginPage() {
                       </>)}
                       <PasswordField label="Password" name="password" required show={showPw} onToggle={() => setShowPw(v => !v)} />
                       <div className="flex justify-end">
-                        <button type="button" className="text-xs underline" style={{ color: "var(--brand)" }}
+                        <button type="button" className="auth-link text-xs underline"
                           onClick={() => { setShowReset(true); setResetDone(false); }}>
                           Forgot password?
                         </button>
@@ -342,8 +334,8 @@ export default function LoginPage() {
                       <Field label="Email" name="email" type="email" required />
                       <PasswordField label="Password" name="password" required minLength={10} show={showPw} onToggle={() => setShowPw(v => !v)} />
                       <PasswordField label="Confirm password" name="confirm" required show={showPw} onToggle={() => setShowPw(v => !v)} />
-                      <label className="flex items-start gap-8 text-xs" style={{ color: "var(--ink-soft)" }}>
-                        <input type="checkbox" name="terms" required className="mt-2" />
+                      <label className="flex items-start gap-8 text-xs" style={{ color: "rgba(255,255,255,0.86)" }}>
+                        <input type="checkbox" name="terms" required className="auth-check mt-2" />
                         <span>I accept the Terms of Service and Privacy Policy</span>
                       </label>
                       <button type="submit" disabled={busy} className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">
@@ -355,17 +347,17 @@ export default function LoginPage() {
 
                 {panel === "otp" && pending && (
                   <div key="otp" className="panel-enter">
-                    <h2 className="mb-8 text-2xl font-bold tracking-tight" style={{ color: "var(--ink)" }}>Six-digit code</h2>
-                    <p className="mb-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+                    <h2 className="mb-8 text-2xl font-bold tracking-tight" style={{ color: "#ffffff" }}>Six-digit code</h2>
+                    <p className="mb-16 text-sm" style={{ color: "rgba(255,255,255,0.82)" }}>
                       Sent by SMS to {pending.phoneMasked}. Expires in 5 minutes.
                     </p>
                     <OtpInput onComplete={verifyOtp} />
                     <div className="mt-16 flex items-center justify-between text-sm">
-                      <button type="button" disabled={cooldown > 0} className="underline disabled:opacity-50"
-                        style={{ color: "var(--brand)" }} onClick={resendCode}>
+                      <button type="button" disabled={cooldown > 0} className="auth-link underline disabled:opacity-50"
+                        onClick={resendCode}>
                         {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
                       </button>
-                      <button type="button" className="underline" style={{ color: "var(--brand)" }}
+                      <button type="button" className="auth-link underline"
                         onClick={() => { setError(null); setPanel("signup"); }}>Change phone number</button>
                     </div>
                   </div>
@@ -373,39 +365,35 @@ export default function LoginPage() {
 
                 {panel === "success" && (
                   <div key="success" className="panel-enter py-16 text-center">
-                    <div className="mx-auto mb-16 h-[2px] w-48" style={{ background: "var(--success)" }} aria-hidden />
-                    <h2 className="text-lg font-semibold" style={{ color: "var(--success)" }}>Account successfully created</h2>
-                    <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+                    <div className="mx-auto mb-16 h-[2px] w-48" style={{ background: "#7fd6ab" }} aria-hidden />
+                    <h2 className="text-lg font-semibold" style={{ color: "#8fdcbc" }}>Account successfully created</h2>
+                    <p className="mt-8 text-sm" style={{ color: "rgba(255,255,255,0.82)" }}>
                       Your account is ready. Redirecting you to the sign-in screen.
                     </p>
-                    <button type="button" className="mt-16 text-sm underline" style={{ color: "var(--brand)" }}
+                    <button type="button" className="auth-link mt-16 text-sm underline"
                       onClick={() => setPanel("login")}>Go to login now</button>
                   </div>
                 )}
               </div>
 
               {panel === "login" && (
-                <div className="mt-24 border-t pt-12 text-center text-sm" style={{ borderColor: "var(--line)" }}>
-                  <span style={{ color: "var(--ink-soft)" }}>New to WAISHA? </span>
-                  <button type="button" className="font-semibold underline" style={{ color: "var(--brand)" }}
+                <div className="mt-24 border-t pt-12 text-center text-sm" style={{ borderColor: "rgba(255,255,255,0.22)" }}>
+                  <span style={{ color: "rgba(255,255,255,0.8)" }}>New to WAISHA? </span>
+                  <button type="button" className="auth-link font-semibold underline"
                     onClick={() => { setError(null); setPanel("signup"); }}>Create an account</button>
                 </div>
               )}
               {panel === "signup" && (
-                <div className="mt-24 border-t pt-12 text-center text-sm" style={{ borderColor: "var(--line)" }}>
-                  <span style={{ color: "var(--ink-soft)" }}>Already registered? </span>
-                  <button type="button" className="font-semibold underline" style={{ color: "var(--brand)" }}
+                <div className="mt-24 border-t pt-12 text-center text-sm" style={{ borderColor: "rgba(255,255,255,0.22)" }}>
+                  <span style={{ color: "rgba(255,255,255,0.8)" }}>Already registered? </span>
+                  <button type="button" className="auth-link font-semibold underline"
                     onClick={() => { setError(null); setPanel("login"); }}>Sign in</button>
                 </div>
               )}
             </section>
 
             {/* RIGHT — the brand face. Logo is the hero here. */}
-            <aside className="relative hidden flex-col justify-between overflow-hidden p-32 md:flex"
-              style={{
-                background: "linear-gradient(160deg, var(--brand-deep) 0%, var(--brand) 130%)",
-                borderTop: "3px solid var(--gold)"
-              }}>
+            <aside className="auth-aside relative hidden flex-col justify-between overflow-hidden p-32 md:flex">
               <div aria-hidden className="absolute inset-0">
                 <div className="absolute rounded-full" style={{ width: 320, height: 320, right: -120, bottom: -110, background: "rgba(255,255,255,0.07)" }} />
                 <div className="absolute rounded-full" style={{ width: 200, height: 200, left: -80, top: -70, background: "rgba(255,255,255,0.055)" }} />
@@ -447,10 +435,10 @@ export default function LoginPage() {
           className="fixed inset-0 z-50 flex items-center justify-center p-16"
           style={{ background: "rgba(5, 18, 26, 0.6)" }}
           onClick={e => { if (e.target === e.currentTarget) setShowReset(false); }}>
-          <div className="w-full max-w-[380px] rounded-modal bg-surface p-24" style={{ border: "1px solid var(--line)" }}>
-            <h2 className="mb-16 text-base font-semibold">Reset your password</h2>
+          <div className="auth-card w-full max-w-[380px] rounded-modal border p-24">
+            <h2 className="mb-16 text-base font-semibold" style={{ color: "#ffffff" }}>Reset your password</h2>
             {resetDone ? (
-              <p className="text-sm" style={{ color: "var(--ink-soft)" }}>If that email is registered, a reset link has been sent.</p>
+              <p className="text-sm" style={{ color: "rgba(255,255,255,0.82)" }}>If that email is registered, a reset link has been sent.</p>
             ) : (
               <form onSubmit={async e => {
                 e.preventDefault();
@@ -465,7 +453,7 @@ export default function LoginPage() {
                 <button type="submit" className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">Send reset link</button>
               </form>
             )}
-            <button type="button" className="mt-16 text-sm underline" style={{ color: "var(--brand)" }}
+            <button type="button" className="auth-link mt-16 text-sm underline"
               onClick={() => setShowReset(false)}>Back</button>
           </div>
         </div>

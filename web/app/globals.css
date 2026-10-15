@@ -110,6 +110,19 @@ body {
   inset: 0;
   background: linear-gradient(180deg, var(--scrim-top), var(--scrim-bottom));
 }
+/* Signing in lands on a photo, not a blank canvas: the navy cover fades out and
+   the workspace photo is underneath it. Mirrors the login page's own scrim. */
+.ws-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: #08202f;
+  animation: shellReveal 420ms var(--ease) both;
+}
+@keyframes shellReveal {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
 
 /* -------------------------------------------------------------- the shell */
 /* The shell owns the viewport, so the marketing footer and the body scroll
@@ -683,6 +696,88 @@ body:has(.app-shell) .app-footer { display: none; }
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ----------------------------------------------------------- login/signup */
+/* Lake Nyasa fixed behind the form, exactly like the workspace photos in the
+   shell. The card keeps its size, grid and padding — only the fill turns to
+   glass, so every field stays where it was. */
+.auth-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: #08202f url("/bg/login.jpg") center / cover no-repeat;
+}
+.auth-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(8, 28, 44, 0.5), rgba(8, 28, 44, 0.45));
+}
+.auth-shell { position: relative; z-index: 1; }
+
+.auth-card {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.12)),
+    linear-gradient(rgba(8, 28, 44, 0.6), rgba(8, 28, 44, 0.6));
+  border-color: rgba(255, 255, 255, 0.28);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  color: #fff;
+  box-shadow: 0 24px 64px rgba(5, 18, 26, 0.45);
+}
+/* The brand panel keeps its navy face but lets a little of the lake through. */
+.auth-aside {
+  background: linear-gradient(160deg, rgba(9, 38, 60, 0.88) 0%, rgba(13, 51, 80, 0.6) 130%);
+  border-top: 3px solid var(--gold);
+}
+
+.auth-label {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.auth-field {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  color: #fff;
+}
+.auth-field::placeholder { color: rgba(255, 255, 255, 0.7); }
+.auth-field:disabled { opacity: 0.6; }
+select.auth-field option { color: var(--ink); }
+.auth-check {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--gold);
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+}
+
+.auth-link {
+  color: #fff;
+  text-decoration: none;
+}
+.auth-link:hover {
+  color: var(--gold);
+  text-decoration: underline;
+  text-decoration-color: var(--gold);
+  text-underline-offset: 3px;
+}
+
+.auth-error {
+  background: rgba(190, 62, 62, 0.26);
+  border-left: 4px solid #e07d7d;
+  color: #ffd2d2;
+}
+
+.auth-tab {
+  color: rgba(255, 255, 255, 0.9);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+.auth-tab[aria-selected="true"] { color: #fff; }
+.auth-tab-ink { background: var(--gold); }
+
 /* ------------------------------------------------------------ responsive */
 @media (max-width: 860px) {
   .app-shell {
@@ -733,6 +828,7 @@ body:has(.app-shell) .app-footer { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .panel-enter, .underline-slide, .sheet-in, .page-enter { animation: none; transition: none; }
+  .ws-bg::after { display: none; }
   .ws-bg-img { transition: none; }
   .flagpole-flag { animation: none; }
   .alert-dot.is-live { animation: none; }
