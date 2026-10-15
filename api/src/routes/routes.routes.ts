@@ -60,11 +60,12 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- Road routing proxy (OSRM + cache; falls back client-side) ----------
   app.get("/geo/road-route", { preHandler: [requireAuth] }, async (req: any, reply) => {
+    // Query params arrive as strings, so these must coerce rather than expect.
     const q = z.object({
-      oLat: z.number().min(-90).max(90),
-      oLng: z.number().min(-180).max(180),
-      dLat: z.number().min(-90).max(90),
-      dLng: z.number().min(-180).max(180)
+      oLat: z.coerce.number().min(-90).max(90),
+      oLng: z.coerce.number().min(-180).max(180),
+      dLat: z.coerce.number().min(-90).max(90),
+      dLng: z.coerce.number().min(-180).max(180)
     }).parse(req.query);
 
     const key = `${q.oLat.toFixed(2)},${q.oLng.toFixed(2)}|${q.dLat.toFixed(2)},${q.dLng.toFixed(2)}`;
@@ -79,16 +80,20 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
         { signal: controller.signal });
       if (!res.ok) throw new Error(`osrm ${res.status}`);
       const j: any = await res.json();
-      const coords: [number, number][] = (j.route?.[0]?.geometry?.coordinates ?? [])
+      // OSRM v1 answers under `routes`; reading `route` yields nothing and every
+      // caller silently falls back to a straight line.
+      const best = j.routes?.[0];
+      const coords: [number, number][] = (best?.geometry?.coordinates ?? [])
         .map((c: [number, number]) => [c[1], c[0]] as [number, number]);
-      const distanceKm = Math.round((j.route?.[0]?.distance ?? 0) / 1000);
-      const durationHours = Math.round((j.route?.[0]?.duration ?? 0) / 3600);
+      const distanceKm = Math.round((best?.distance ?? 0) / 1000);
+      const durationHours = Math.round((best?.duration ?? 0) / 3600);
       if (coords.length < 2 || distanceKm <= 0) throw new Error("osrm empty");
       const payload = { distanceKm, durationHours, geometry: coords };
       if (roadCache.size > 500) roadCache.clear();
       roadCache.set(key, payload);
       return reply.send(payload);
-    } catch {
+    } catch (e: any) {
+      req.log.warn({ err: e?.message ?? e }, "road routing unavailable");
       return reply.status(502).send({
         error: { code: "ROUTING_UNAVAILABLE", message: "Road routing is temporarily unavailable." }
       });

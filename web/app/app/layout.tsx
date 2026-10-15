@@ -6,6 +6,7 @@ import { apiFetch } from "./api-client";
 
 const NAV = [
   { href: "/app/dashboard", label: "Dashboard", accent: "var(--gold)" },
+  { href: "/app/board", label: "Notice board", accent: "var(--gold-green)" },
   { href: "/app/profile", label: "Profile", accent: "var(--success)" },
   { href: "/app/branches", label: "Branches", accent: "var(--brand)" },
   { href: "/app/fleet", label: "Fleet", accent: "var(--gold-green)" },

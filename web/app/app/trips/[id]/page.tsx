@@ -110,19 +110,6 @@ export default function TripDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Leaflet's default marker icons break under bundlers — re-point them.
-  useEffect(() => {
-    (async () => {
-      const L = (await import("leaflet")).default;
-      delete (L.Icon.Default.prototype as any)._getIconUrl;
-      L.Icon.Default.mergeOptions({
-        iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-        iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-        shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png"
-      });
-    })();
-  }, []);
-
   async function transition(status: string) {
     setError(null); setNotice(null); setBusy(true);
     try {

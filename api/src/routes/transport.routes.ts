@@ -10,6 +10,8 @@ import { loadJob, logActivity } from "../util/jobs.js";
 import {
   VEHICLE_TYPES, buildPreview, copyRoute, disclosureWarnings, type PreviewFields
 } from "../util/transport.js";
+import { getBoardCard } from "../util/board.js";
+import { emitBoard } from "../util/board-bus.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -216,6 +218,11 @@ export async function transportRoutes(app: FastifyInstance, _opts: unknown) {
         return { id: requestId, warnings };
       });
 
+      // Realtime. The card is re-read through the same allowlisted door a
+      // transporter would use, so a push can never carry more than a poll can.
+      const card = await getBoardCard(out.id);
+      if (card) emitBoard({ type: "request.published", card, at: new Date().toISOString() });
+
       return reply.status(201).send(out);
     });
 
@@ -268,7 +275,7 @@ export async function transportRoutes(app: FastifyInstance, _opts: unknown) {
     { preHandler: [requireAuth, requirePermission("transport.cancel")] },
     async (req: any, reply) => {
       const { id } = req.params as { id: string };
-      await withTenant(req.user.tid, async (c) => {
+      const withdrew = await withTenant(req.user.tid, async (c) => {
         const t = await c.query(
           `select id, job_id, shipment_id, status, pickup_text, dest_text
              from transport_requests
@@ -276,7 +283,7 @@ export async function transportRoutes(app: FastifyInstance, _opts: unknown) {
           [id, req.user.tid]);
         if (!t.rowCount) throw new ApiError("NOT_FOUND", "Transport request not found", 404);
         const row = t.rows[0];
-        if (row.status === "cancelled") return;
+        if (row.status === "cancelled") return false;
         if (row.status !== "open") {
           throw new ApiError("CONFLICT",
             "Only an open request can be cancelled. Once a transporter has engaged, " +
@@ -300,7 +307,11 @@ export async function transportRoutes(app: FastifyInstance, _opts: unknown) {
           action: "transport.cancelled", before: { status: row.status },
           after: { status: "cancelled" }
         });
+        return true;
       });
+
+      // Watchers lose the card. Only the id travels — nothing about why, or who.
+      if (withdrew) emitBoard({ type: "request.withdrawn", id, at: new Date().toISOString() });
       return reply.send({ ok: true });
     });
 }

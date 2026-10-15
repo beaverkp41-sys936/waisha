@@ -30,6 +30,7 @@ import { reportsRoutes } from "./routes/reports.routes.js";
 import { cargoRoutes } from "./routes/cargo.routes.js";
 import { jobsRoutes } from "./routes/jobs.routes.js";
 import { transportRoutes } from "./routes/transport.routes.js";
+import { boardRoutes } from "./routes/board.routes.js";
 import { calendarRoutes } from "./routes/calendar.routes.js";
 import { messagesRoutes } from "./routes/messages.routes.js";
 import { complianceRoutes } from "./routes/compliance.routes.js";
@@ -86,6 +87,7 @@ async function main() {
   await app.register(cargoRoutes, { prefix: "/api/v1" });
   await app.register(jobsRoutes, { prefix: "/api/v1" });
   await app.register(transportRoutes, { prefix: "/api/v1" });
+  await app.register(boardRoutes, { prefix: "/api/v1" });
   await app.register(calendarRoutes, { prefix: "/api/v1" });
   await app.register(messagesRoutes, { prefix: "/api/v1" });
   await app.register(complianceRoutes, { prefix: "/api/v1" });
