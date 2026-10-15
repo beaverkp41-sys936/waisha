@@ -52,7 +52,10 @@ const sql: [string, string, unknown[]][] = [
         where d.tenant_id = $1 and d.job_id = $3 and d.kind = k.kind
           and d.status = 'verified' and d.deleted_at is null)`, [T, ["invoice", "permit"], J]],
   ["loadJob",
-    `select j.*, s.file_number, s.shipment_type, s.status as shipment_status,
+    `select j.id, j.tenant_id, j.shipment_id, j.record_kind, j.status, j.transport_needed,
+            j.transport_consent, j.free_days, j.free_days_start::text as free_days_start,
+            j.closed_at, j.notes, j.created_at, j.updated_at,
+            s.file_number, s.shipment_type, s.status as shipment_status,
             s.eta, s.discharge_date, s.consignee_name, s.consignor_name
        from jobs j
        join cargo_shipments s on s.id = j.shipment_id

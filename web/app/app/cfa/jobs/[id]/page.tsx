@@ -43,6 +43,20 @@ const headingCls = "text-sm font-bold uppercase tracking-[0.14em]";
 const fmtDate = (v: string | null) => (v ? new Date(v).toLocaleDateString() : "—");
 const fmtWhen = (v: string) => new Date(v).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 
+// Mirrors the vehicle types the API accepts on a transport request.
+const VEHICLES = [
+  { key: "truck_head", label: "Truck head" }, { key: "trailer", label: "Trailer" },
+  { key: "tanker", label: "Tanker" }, { key: "flatbed", label: "Flatbed" },
+  { key: "tipper", label: "Tipper" }, { key: "reefer", label: "Reefer" },
+  { key: "box_truck", label: "Box truck" }, { key: "van", label: "Van" },
+  { key: "pickup", label: "Pickup" }, { key: "lowbed", label: "Lowbed" }
+];
+const CONTAINERS = [
+  { key: "20ft", label: "20 ft" }, { key: "40ft", label: "40 ft" },
+  { key: "loose_cargo", label: "Loose cargo" }, { key: "car", label: "Vehicle" }
+];
+const vecLabel = (k: string) => VEHICLES.find(v => v.key === k)?.label ?? k;
+
 interface Stage {
   id: string; stage_key: string; name: string; position: number; status: string;
   blocked_reason: string | null; required_documents: string[]; started_at: string | null;
@@ -78,6 +92,80 @@ export default function JobDetailPage() {
     handoverName: "", handoverId: "", handoverMethod: "signature", notes: ""
   });
   const [freeDays, setFreeDays] = useState({ days: "", start: "" });
+  const [treq, setTreq] = useState<any | null>(null);
+  const [prev, setPrev] = useState<any | null>(null);
+  const [pub, setPub] = useState<any | null>(null);
+  const [safe, setSafe] = useState(false);
+  const [flags, setFlags] = useState<string[] | null>(null);
+  const [forced, setForced] = useState(false);
+
+  const loadRequest = useCallback(async () => {
+    const res = await apiFetch(`/transport-requests?jobId=${id}`);
+    const rows = await res.json().catch(() => []);
+    const live = Array.isArray(rows) ? rows.find(r => r.status !== "cancelled") ?? null : null;
+    setTreq(live);
+  }, [id]);
+
+  useEffect(() => { loadRequest(); }, [loadRequest]);
+
+  async function openPreview() {
+    setError(null); setNotice(null); setBusy(true);
+    try {
+      const res = await apiFetch(`/jobs/${id}/transport-preview`, { method: "POST" });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(errorText(j, "Could not build the preview.")); return; }
+      const f = j.fields ?? {};
+      setPrev(j);
+      setSafe(false); setFlags(null); setForced(false);
+      setPub({
+        cargoLabel: f.cargoLabel ?? "", pickupText: f.pickupText ?? "", destText: f.destText ?? "",
+        viaLabel: f.viaLabel ?? "", requiredDate: f.requiredDate ?? "",
+        contactName: f.contactName ?? "", contactChannel: f.contactChannel ?? "",
+        contactUserId: f.contactUserId ?? "", publicNote: f.publicNote ?? "",
+        routeId: "", containerType: f.containerType ?? "",
+        containerCount: f.containerCount ?? "", weightTonnes: f.weightTonnes ?? "", cbm: f.cbm ?? "",
+        vehicleTypes: f.vehicleTypes ?? []
+      });
+    } finally { setBusy(false); }
+  }
+
+  async function publishTransport(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const num = (v: any) => (v === "" || v === null || v === undefined ? null : Number(v));
+    setBusy(true); setError(null); setFlags(null);
+    try {
+      const res = await apiFetch(`/jobs/${id}/transport-request`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cargoLabel: pub.cargoLabel, pickupText: pub.pickupText, destText: pub.destText,
+          viaLabel: pub.viaLabel || null, requiredDate: pub.requiredDate,
+          contactName: pub.contactName, contactChannel: pub.contactChannel,
+          contactUserId: pub.contactUserId || null, publicNote: pub.publicNote || null,
+          routeId: pub.routeId || null, containerType: pub.containerType || null,
+          containerCount: num(pub.containerCount), weightTonnes: num(pub.weightTonnes), cbm: num(pub.cbm),
+          vehicleTypes: pub.vehicleTypes, acknowledgeWarnings: forced
+        })
+      });
+      const j = await res.json().catch(() => ({}));
+      // The server re-scans the text as submitted. Only its publicText flags are a
+      // re-confirmable warning — every other 409 (consent, duplicate) is a hard stop.
+      const flagged = res.status === 409
+        ? (j?.error?.details ?? []).filter((d: any) => d.field === "publicText").map((d: any) => d.message)
+        : [];
+      if (flagged.length) { setFlags(flagged); setForced(false); return; }
+      if (!res.ok) { setError(errorText(j, "Could not publish.")); return; }
+      setNotice("Published — transporters can now see this request.");
+      setForced(false); setFlags(null); setPrev(null); setPub(null);
+      await loadRequest();
+    } finally { setBusy(false); }
+  }
+
+  function cancelTransport() {
+    if (!treq) return;
+    if (!window.confirm("Withdraw this request? Transporters will no longer see it.")) return;
+    send(`/transport-requests/${treq.id}/cancel`, "POST", undefined, "Request withdrawn.")
+      .then(ok => { if (ok) { loadRequest(); setPrev(null); } });
+  }
 
   const load = useCallback(async () => {
     const res = await apiFetch(`/jobs/${id}`);
@@ -623,6 +711,266 @@ export default function JobDetailPage() {
                   ? "Held as a record of a completed shipment — no transport prompt and no notice board."
                   : `Decision on file: transport ${job.transport_needed ? "needed" : "not needed"}, consent ${job.transport_consent.replace("_", " ")}.`}
               </p>
+            </div>
+          )}
+
+          {/* ---------- Transport request: consent preview, then publish ---------- */}
+          {workable && job.record_kind === "live" && (
+            <div className={card} style={cardStyle}>
+              <h3 className={headingCls} style={{ color: "var(--ink)" }}>Transport request</h3>
+              <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+                Publishing sends a copy of the cargo details and route to the notice board for other
+                companies to quote. Nothing is shared until you have read the preview and confirmed it.
+              </p>
+
+              {treq ? (
+                <div className="mt-16 space-y-12">
+                  <div className="rounded-input border p-16" style={{ borderColor: "var(--line)" }}>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em]"
+                      style={{ color: "var(--ink-soft)" }}>
+                      {treq.status === "open" ? "Live on the board" : `Booking ${treq.status.replace("_", " ")}`}
+                    </p>
+                    <p className="mt-8 text-sm" style={{ color: "var(--ink)" }}>
+                      {treq.pickup_text} → {treq.dest_text}
+                      {treq.via_label && ` via ${treq.via_label}`}
+                    </p>
+                    <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                      {treq.cargo_label}
+                      {treq.distance_km ? ` · ${treq.distance_km} km` : ""}
+                      {` · needed ${fmtDate(treq.required_date)}`} · {treq.contact_name} ({treq.contact_channel})
+                    </p>
+                    <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                      Published {fmtWhen(treq.disclosed_at)}
+                    </p>
+                  </div>
+                  {treq.status === "open" && (
+                    <button type="button" disabled={busy} onClick={cancelTransport}
+                      className="rounded-input border px-16 py-8 text-xs font-semibold"
+                      style={{ borderColor: "var(--line)", color: "var(--danger, var(--ink))" }}>
+                      Withdraw from the board
+                    </button>
+                  )}
+                </div>
+              ) : job.transport_consent !== "granted" ? (
+                <p className="mt-16 text-xs" style={{ color: "var(--ink)" }}>
+                  {job.transport_needed
+                    ? "Consent to use this shipment's details is not recorded as granted. Set it in the decision above."
+                    : "Record the transport decision above first — the client must allow their cargo details and route to be used."}
+                </p>
+              ) : !prev || !pub ? (
+                <button type="button" disabled={busy} onClick={openPreview}
+                  className="waisha-btn mt-16 rounded-input px-24 py-8 text-xs font-semibold disabled:opacity-60">
+                  Preview what becomes public
+                </button>
+              ) : (
+                <form onSubmit={publishTransport} className="mt-16 space-y-16">
+                  <div className="rounded-input border p-16 text-xs" style={{ borderColor: "var(--line)", color: "var(--ink)" }}>
+                    <p className="font-semibold uppercase tracking-[0.14em] text-[11px]"
+                      style={{ color: "var(--ink-soft)" }}>Company card transporters will see</p>
+                    <p className="mt-8 font-semibold">{prev.company.companyName}</p>
+                    {prev.company.description && <p className="mt-4">{prev.company.description}</p>}
+                    <p className="mt-4" style={{ color: "var(--ink-soft)" }}>
+                      {[prev.company.services, prev.company.corridors].filter(Boolean).join(" · ")}
+                      {prev.company.fleetSizeDeclared ? ` · fleet ${prev.company.fleetSizeDeclared}` : ""}
+                      {prev.company.yearEstablished ? ` · since ${prev.company.yearEstablished}` : ""}
+                      {prev.company.website ? ` · ${prev.company.website}` : ""}
+                    </p>
+                  </div>
+
+                  {(prev.warnings ?? []).length > 0 && (
+                    <div className="rounded-input border p-16 text-xs"
+                      style={{ borderColor: "var(--gold)", color: "var(--ink)" }}>
+                      <p className="font-semibold">Flagged before you edit</p>
+                      {prev.warnings.map((w: string, i: number) => <p key={i} className="mt-4">{w}</p>)}
+                    </div>
+                  )}
+
+                  <label className="block">
+                    <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Cargo description shown publicly</span>
+                    <textarea rows={2} value={pub.cargoLabel}
+                      onChange={e => setPub({ ...pub, cargoLabel: e.target.value })}
+                      className={inputCls} style={inputStyle} />
+                  </label>
+
+                  <div className="grid grid-cols-1 gap-12 md:grid-cols-3">
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Pickup point</span>
+                      <input value={pub.pickupText} required maxLength={200}
+                        onChange={e => setPub({ ...pub, pickupText: e.target.value })}
+                        className={inputCls} style={inputStyle} />
+                    </label>
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Destination</span>
+                      <input value={pub.destText} required maxLength={200}
+                        onChange={e => setPub({ ...pub, destText: e.target.value })}
+                        className={inputCls} style={inputStyle} />
+                    </label>
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Via / border</span>
+                      <input value={pub.viaLabel} maxLength={200}
+                        onChange={e => setPub({ ...pub, viaLabel: e.target.value })}
+                        className={inputCls} style={inputStyle} />
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-12 md:grid-cols-3">
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Required by</span>
+                      <input type="date" value={pub.requiredDate} required
+                        onChange={e => setPub({ ...pub, requiredDate: e.target.value })}
+                        className={inputCls} style={inputStyle} />
+                    </label>
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Your route (copies distance)</span>
+                      <select value={pub.routeId}
+                        onChange={e => setPub({ ...pub, routeId: e.target.value })}
+                        className={inputCls} style={inputStyle}>
+                        <option value="">Not linked</option>
+                        {prev.routes.map((r: any) => (
+                          <option key={r.id} value={r.id}>
+                            {r.label}{r.distance_km ? ` · ${r.distance_km} km` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Container / load</span>
+                      <select value={pub.containerType}
+                        onChange={e => setPub({ ...pub, containerType: e.target.value })}
+                        className={inputCls} style={inputStyle}>
+                        <option value="">Not stated</option>
+                        {CONTAINERS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-12 md:grid-cols-3">
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Containers</span>
+                      <input type="number" min={1} max={500} value={pub.containerCount}
+                        onChange={e => setPub({ ...pub, containerCount: e.target.value })}
+                        className={inputCls} style={inputStyle} />
+                    </label>
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Tonnes</span>
+                      <input type="number" step="0.001" min={0} value={pub.weightTonnes}
+                        onChange={e => setPub({ ...pub, weightTonnes: e.target.value })}
+                        className={inputCls} style={inputStyle} />
+                    </label>
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>CBM</span>
+                      <input type="number" step="0.001" min={0} value={pub.cbm}
+                        onChange={e => setPub({ ...pub, cbm: e.target.value })}
+                        className={inputCls} style={inputStyle} />
+                    </label>
+                  </div>
+
+                  <div>
+                    <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Vehicles wanted</span>
+                    <div className="flex flex-wrap gap-8">
+                      {VEHICLES.map(v => {
+                        const on = pub.vehicleTypes.includes(v.key);
+                        return (
+                          <button type="button" key={v.key}
+                            onClick={() => setPub({
+                              ...pub,
+                              vehicleTypes: on ? pub.vehicleTypes.filter((x: string) => x !== v.key)
+                                : [...pub.vehicleTypes, v.key].slice(0, 6)
+                            })}
+                            className="rounded-input border px-12 py-6 text-xs font-semibold"
+                            style={{
+                              borderColor: on ? "var(--brand)" : "var(--line)",
+                              color: on ? "var(--brand)" : "var(--ink-soft)",
+                              background: on ? "var(--milk)" : "transparent"
+                            }}>
+                            {v.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-12 md:grid-cols-3">
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Named contact</span>
+                      <select value={pub.contactUserId}
+                        onChange={e => {
+                          const s = prev.staff.find((x: any) => x.id === e.target.value);
+                          setPub({ ...pub, contactUserId: e.target.value,
+                            contactName: s?.full_name ?? pub.contactName,
+                            contactChannel: s?.email ?? pub.contactChannel });
+                        }}
+                        className={inputCls} style={inputStyle}>
+                        {prev.staff.map((s: any) => (
+                          <option key={s.id} value={s.id}>{s.full_name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Contact name published</span>
+                      <input value={pub.contactName} required maxLength={120}
+                        onChange={e => setPub({ ...pub, contactName: e.target.value })}
+                        className={inputCls} style={inputStyle} />
+                    </label>
+                    <label className="block">
+                      <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Reachable on (work)</span>
+                      <input value={pub.contactChannel} required maxLength={160}
+                        onChange={e => setPub({ ...pub, contactChannel: e.target.value })}
+                        className={inputCls} style={inputStyle} />
+                    </label>
+                  </div>
+
+                  <label className="block">
+                    <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Note to transporters</span>
+                    <textarea rows={2} maxLength={600} value={pub.publicNote}
+                      placeholder="e.g. 2 x 20ft, collect from ICD Tema, tail-lift needed"
+                      onChange={e => setPub({ ...pub, publicNote: e.target.value })}
+                      className={inputCls} style={inputStyle} />
+                  </label>
+
+                  <div className="rounded-input border p-16 text-xs" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+                    <p className="font-semibold uppercase tracking-[0.14em]">Never published</p>
+                    <ul className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-2">
+                      {(prev.withheld ?? []).map((w: string) => <li key={w}>· {w}</li>)}
+                    </ul>
+                  </div>
+
+                  <label className="flex items-start gap-10 text-xs" style={{ color: "var(--ink)" }}>
+                    <input type="checkbox" checked={safe}
+                      onChange={e => setSafe(e.target.checked)} className="mt-4" />
+                    <span>
+                      I have read every field above. Nothing here names my client, quotes a declaration,
+                      container or tax number, or shows costs.
+                    </span>
+                  </label>
+
+                  {flags && flags.length > 0 && (
+                    <div className="rounded-input border p-16 text-xs"
+                      style={{ borderColor: "var(--gold)", color: "var(--ink)" }}>
+                      <p className="font-semibold">Waisha will not publish this yet</p>
+                      {flags.map((w, i) => <p key={i} className="mt-4">{w}</p>)}
+                      <label className="mt-12 flex items-start gap-10">
+                        <input type="checkbox" checked={forced}
+                          onChange={e => setForced(e.target.checked)} className="mt-4" />
+                        <span>Publish anyway — I have reworded nothing and accept that these fields
+                          may name my client.</span>
+                      </label>
+                    </div>
+                  )}
+
+                  <div className="flex gap-8">
+                    <button type="submit" disabled={busy || !safe || (!!flags?.length && !forced)}
+                      className="waisha-btn rounded-input px-24 py-8 text-xs font-semibold disabled:opacity-60">
+                      Publish to the board
+                    </button>
+                    <button type="button" disabled={busy} onClick={() => { setPrev(null); setPub(null); setFlags(null); setForced(false); }}
+                      className="rounded-input border px-16 py-8 text-xs font-semibold"
+                      style={{ borderColor: "var(--line)", color: "var(--ink)" }}>
+                      Not now
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
           )}
 

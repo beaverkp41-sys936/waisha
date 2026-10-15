@@ -22,7 +22,7 @@ const STAGE_LABELS: Record<string, string> = {
   transport_decision: "9. Transport decision", closing_billing: "10. Closing and billing"
 };
 
-type Tab = "dashboard" | "board" | "mine" | "all";
+type Tab = "dashboard" | "board" | "mine" | "all" | "transport";
 
 const card = "rounded-card border bg-surface p-24";
 const cardStyle = { borderColor: "var(--line)" };
@@ -52,6 +52,8 @@ export default function JobsPage() {
   const [mineScope, setMineScope] = useState("open");
   const [rows, setRows] = useState<any[]>([]);
   const [filters, setFilters] = useState({ status: "open", recordKind: "", stageKey: "", search: "" });
+  const [trans, setTrans] = useState<any[]>([]);
+  const [transScope, setTransScope] = useState("open");
 
   const load = useCallback(async () => {
     setError(null);
@@ -70,6 +72,12 @@ export default function JobsPage() {
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setError(errorText(j, "Failed to load your tasks.")); return; }
       setMine(j);
+    } else if (tab === "transport") {
+      const q = transScope === "all" ? "" : `?status=${transScope}`;
+      const res = await apiFetch(`/transport-requests${q}`);
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(errorText(j, "Failed to load transport requests.")); return; }
+      setTrans(j);
     } else {
       const p = new URLSearchParams();
       if (filters.status) p.set("status", filters.status);
@@ -81,7 +89,7 @@ export default function JobsPage() {
       if (!res.ok) { setError(errorText(j, "Failed to load jobs.")); return; }
       setRows(j);
     }
-  }, [tab, mineScope, filters]);
+  }, [tab, mineScope, transScope, filters]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -115,7 +123,8 @@ export default function JobsPage() {
     { key: "dashboard", label: "Dashboard" },
     { key: "board", label: "Kanban board" },
     { key: "mine", label: "My tasks" },
-    { key: "all", label: "All jobs" }
+    { key: "all", label: "All jobs" },
+    { key: "transport", label: "Transport requests" }
   ];
 
   return (
@@ -162,6 +171,9 @@ export default function JobsPage() {
         <Mine tasks={mine} scope={mineScope} setScope={setMineScope} onStatus={completeTask} />
       )}
       {tab === "all" && <AllJobs rows={rows} filters={filters} setFilters={setFilters} />}
+      {tab === "transport" && (
+        <Transport rows={trans} scope={transScope} setScope={setTransScope} />
+      )}
     </div>
   );
 }
@@ -468,5 +480,85 @@ function AllJobs({ rows, filters, setFilters }: {
         )}
       </div>
     </div>
+  );
+}
+
+const TRANS_EDGE: Record<string, string> = {
+  open: "var(--success)", temp_booked: "var(--gold)", confirmed: "var(--brand)",
+  cancelled: "var(--ink-soft)"
+};
+
+function Transport({ rows, scope, setScope }:
+  { rows: any[]; scope: string; setScope: (s: string) => void }) {
+  const chips = [
+    { key: "open", label: "On the board" }, { key: "confirmed", label: "Confirmed" },
+    { key: "cancelled", label: "Withdrawn" }, { key: "all", label: "All" }
+  ];
+  return (
+    <section className="mt-24">
+      <div className="flex flex-wrap items-center gap-8">
+        {chips.map(c => (
+          <button key={c.key} type="button" onClick={() => setScope(c.key)}
+            className="rounded-input border px-12 py-6 text-[11px] font-bold uppercase tracking-[0.1em]"
+            style={{
+              borderColor: scope === c.key ? "var(--brand)" : "var(--line)",
+              color: scope === c.key ? "var(--brand)" : "var(--ink-soft)"
+            }}>
+            {c.label}
+          </button>
+        ))}
+      </div>
+
+      <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
+        Each row is the approved copy that other companies see — never the live cargo file.
+        Publish from a job at stage 9, once the client has given consent.
+      </p>
+
+      <div className="mt-16 space-y-12">
+        {rows.map(t => (
+          <div key={t.id} className={card} style={cardStyle}>
+            <div className="flex flex-wrap items-start justify-between gap-12">
+              <div className="min-w-0">
+                <p className="text-sm font-bold" style={{ color: "var(--ink)" }}>
+                  {t.pickup_text} → {t.dest_text}{t.via_label && ` via ${t.via_label}`}
+                </p>
+                <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                  {t.cargo_label}
+                  {t.container_count ? ` · ${t.container_count} × ${t.container_type?.replace("_", " ") ?? ""}` : ""}
+                  {t.weight_tonnes ? ` · ${t.weight_tonnes} t` : ""}
+                  {t.distance_km ? ` · ${t.distance_km} km` : ""}
+                </p>
+              </div>
+              <Badge label={t.status.replace("_", " ")} color={TRANS_EDGE[t.status] ?? "var(--ink-soft)"} />
+            </div>
+
+            <div className="mt-12 grid grid-cols-1 gap-8 text-xs md:grid-cols-3">
+              <p style={{ color: "var(--ink)" }}>
+                <span style={{ color: "var(--ink-soft)" }}>Needed </span>{fmtDate(t.required_date)}
+              </p>
+              <p style={{ color: "var(--ink)" }}>
+                <span style={{ color: "var(--ink-soft)" }}>Vehicles </span>
+                {t.vehicle_types?.length ? t.vehicle_types.map((v: string) => v.replace("_", " ")).join(", ") : "any"}
+              </p>
+              <p style={{ color: "var(--ink)" }}>
+                <span style={{ color: "var(--ink-soft)" }}>Contact </span>{t.contact_name}
+              </p>
+            </div>
+            <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+              Card: {t.company_name} · file {t.file_number} (visible to you only)
+            </p>
+            <Link href={`/app/cfa/jobs/${t.job_id}`}
+              className="mt-12 inline-block text-xs underline" style={{ color: "var(--brand)" }}>
+              Open the job
+            </Link>
+          </div>
+        ))}
+        {rows.length === 0 && (
+          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>
+            Nothing published under this filter yet.
+          </p>
+        )}
+      </div>
+    </section>
   );
 }

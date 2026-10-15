@@ -21,6 +21,17 @@ export function nameTokens(name: string): string[] {
   return cleaned.length ? cleaned : rawTokens;
 }
 
+/**
+ * Free text through the same normalisation as `nameTokens`, so a published
+ * sentence ("Kilimanjaro Steel LIMITED warehouse") cannot break a match by
+ * sprinkling punctuation or legal suffixes through a company name.
+ */
+export function textTokens(text: string): string[] {
+  const raw = text.toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+  if (!raw) return [];
+  return raw.split(/\s+/).filter((t) => !LEGAL_SUFFIXES.has(t));
+}
+
 export function namesMatch(a: string, b: string): boolean {
   const ta = nameTokens(a);
   const tb = nameTokens(b);
