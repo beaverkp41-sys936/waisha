@@ -23,6 +23,12 @@ const MODULES = [
     plan: "Business"
   },
   {
+    name: "Proforma & Quotations",
+    href: "/app/cfa/proforma",
+    description: "Bill from two advisement files at once — upload the primary proforma and the supporting invoice, cross-check them line by line, edit every charge inline, then issue, convert to an invoice and print on your letterhead.",
+    plan: "Business"
+  },
+  {
     name: "Financial Ledger",
     href: "/app/cfa/ledger",
     description: "Accounts receivable and payable, profit-and-loss summary cards and a monthly revenue-versus-expenses view of cash flow.",

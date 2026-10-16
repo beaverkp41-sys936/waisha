@@ -204,4 +204,46 @@ describe("reconciliation", () => {
     expect(typeof proposal!.ok).toBe("boolean");
     expect(proposal!.detail).toMatch(/Proposed total/);
   });
+
+  it("reconciles the rows with the printed total when the rows carry their own VAT", () => {
+    // A printed total is gross. Comparing only the net column of the rows to it
+    // would fail every correctly-read advisement, as the real TPA invoice shown
+    // in the office does.
+    const gross = parseReference([
+      ...TPA.slice(0, 8),
+      "Green Port Initiatives 3 TEU 397,302.00 71,514.36 468,816.36",
+      "Port Infrastructure Development 22,986.53 0.00 22,986.53",
+      "WHAFAGE SERVICES 25,559.45 CIF 1,083,177.69 194,971.98 1,278,149.67",
+      "Total Billed Amount in TZS 1,769,952.56"
+    ]);
+    expect(397302 + 22986.53 + 1083177.69 + 71514.36 + 194971.98).toBeCloseTo(1769952.56, 2);
+    const c = reconcile(gross, null, CATALOG).checks.find(k => k.kind === "primary_rows_vs_total");
+    expect(c?.ok).toBe(true);
+    expect(c?.detail).toMatch(/\+ 266,486\.34 read on the rows/);
+  });
+
+  it("still reports rows that genuinely miss the printed total", () => {
+    // The shipped fixture bills a reefer row its printed total never counts.
+    const c = reconcile(primary, null, CATALOG).checks.find(k => k.kind === "primary_rows_vs_total");
+    expect(c?.ok).toBe(false);
+    expect(c?.detail).toMatch(/53,100\.00 apart/);
+  });
+
+  it("counts a charge only the secondary bills on top of the primary total", () => {
+    const onlyPrimary = parseReference([
+      ...TPA.slice(0, 8),
+      "Green Port Initiatives 3 TEU 397,302.00 71,514.36 468,816.36",
+      "Total Billed Amount in TZS 468,816.36"
+    ]);
+    const second = parseReference([
+      ...TPA.slice(0, 8),
+      "Demurrage 5 DAYS 250,000.00 45,000.00 295,000.00",
+      "Total Billed Amount in TZS 295,000.00"
+    ]);
+    const r = reconcile(onlyPrimary, second, CATALOG);
+    expect(r.lines.map(l => l.source)).toEqual(["primary_only", "secondary_only"]);
+    const c = r.checks.find(k => k.kind === "proposed_vs_printed");
+    expect(c?.ok).toBe(true);
+    expect(c?.detail).toMatch(/plus 295,000\.00 the secondary file bills on top/);
+  });
 });

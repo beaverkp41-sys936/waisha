@@ -226,6 +226,7 @@ export function verify(
 ): Verification[] {
   const checks: Verification[] = [];
   const TOL = 0.05;
+  const f2 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   for (const [role, ex] of [["primary", primary], ["secondary", secondary]] as const) {
     if (!ex) continue;
@@ -241,13 +242,18 @@ export function verify(
       const ok = Math.abs(net + vat - printed) <= TOL;
       checks.push({ ok, kind: `${role}_internal_total`,
         label: `${role} arithmetic`,
-        detail: `${net.toLocaleString("en-US")} + ${vat.toLocaleString("en-US")} vs printed ${printed.toLocaleString("en-US")}` });
+        detail: `${f2(net)} + ${f2(vat)} vs printed ${f2(printed)}` });
     }
     if (role === "primary" && primary?.lines.length) {
-      const fromRows = money(primary.lines.reduce((a, l) => a + (l.amount ?? 0), 0));
+      // The rows are read as net + their own VAT column; the printed total is
+      // gross, so comparing net alone against it flags every correctly-read
+      // advisement as a mismatch.
+      const rowsNet = money(primary.lines.reduce((a, l) => a + (l.amount ?? 0), 0));
+      const rowsVat = money(primary.lines.reduce((a, l) => a + (l.vat ?? 0), 0));
+      const fromRows = money(rowsNet + rowsVat);
       const ok = Math.abs(fromRows - printed) <= TOL;
       checks.push({ ok, kind: "primary_rows_vs_total", label: "rows against the printed total",
-        detail: `${fromRows.toLocaleString("en-US")} read from rows vs ${printed.toLocaleString("en-US")} printed (${Math.abs(fromRows - printed).toFixed(2)} apart)` });
+        detail: `${f2(rowsNet)}${rowsVat ? ` + ${f2(rowsVat)} read on the rows` : ""} = ${f2(fromRows)} vs ${f2(printed)} printed (${f2(Math.abs(fromRows - printed))} apart)` });
     }
   }
 
@@ -258,7 +264,7 @@ export function verify(
       const ok = Math.abs(pt - st) <= TOL;
       checks.push({ ok, kind: "files_agree", label: "the two files",
         detail: ok ? "Both files bill the same total."
-          : `Primary bills ${pt.toLocaleString("en-US")}, secondary bills ${st.toLocaleString("en-US")}.` });
+          : `Primary bills ${f2(pt)}, secondary bills ${f2(st)}.` });
     }
     const conflicts = lines.filter((l) => l.source === "amount_mismatch").length;
     checks.push({ ok: conflicts === 0, kind: "line_conflicts", label: "line by line",
@@ -269,12 +275,19 @@ export function verify(
   if (lines.length) {
     const total = money(lines.reduce((a, l) => a + l.total, 0));
     const printed = primary?.header.printed_total ?? secondary?.header.printed_total ?? null;
+    // Charges only the secondary file carries belong on top of the primary's
+    // total, so the proposal reconciles once they are counted rather than
+    // reading as an unexplained difference.
+    const onTop = money(lines.filter(l => l.source === "secondary_only").reduce((a, l) => a + l.total, 0));
+    const gap = printed === null ? 0 : money(total - printed);
+    const ok = printed === null || Math.abs(gap) <= TOL || Math.abs(gap - onTop) <= TOL;
     checks.push({
-      ok: printed === null ? true : Math.abs(total - printed) <= TOL,
-      kind: "proposed_vs_printed", label: "proposed bill",
+      ok, kind: "proposed_vs_printed", label: "proposed bill",
       detail: printed === null
-        ? `Proposed total ${total.toLocaleString("en-US")}; no printed total to compare with.`
-        : `Proposed total ${total.toLocaleString("en-US")} vs ${printed.toLocaleString("en-US")} printed.`
+        ? `Proposed total ${f2(total)}; no printed total to compare with.`
+        : ok && Math.abs(gap) > TOL
+          ? `Proposed total ${f2(total)} = ${f2(printed)} printed plus ${f2(onTop)} the secondary file bills on top.`
+          : `Proposed total ${f2(total)} vs ${f2(printed)} printed.`
     });
   }
   return checks;
