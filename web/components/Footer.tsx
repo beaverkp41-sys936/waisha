@@ -10,10 +10,7 @@ async function getFooter() {
 export async function Footer() {
   const f = await getFooter();
   return (
-    <footer
-      className="app-footer w-full py-16 text-center text-[13px] tracking-[0.04em] text-white"
-      style={{ background: "var(--navy-deep)", borderTop: "1px solid rgba(255,255,255,0.18)" }}
-    >
+    <footer className="app-footer w-full py-16 text-center text-[13px] tracking-[0.04em] text-white">
       {f.brand} | {f.supportEmail} | mob. {f.phone}
     </footer>
   );

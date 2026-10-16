@@ -107,7 +107,7 @@ export default function ControlPage() {
   const cellStyle = { borderColor: "var(--line)", background: "var(--milk)" };
 
   return (
-    <div className="min-h-screen" style={{ background: "var(--milk)" }}>
+    <div className="page-shell flex-1" style={{ background: "var(--milk)" }}>
       <header className="flex items-center justify-between px-24 py-12"
         style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--gold)" }}>
         <div>

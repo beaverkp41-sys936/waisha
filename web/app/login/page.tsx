@@ -257,16 +257,17 @@ export default function LoginPage() {
   }, [panel, pending]);
 
   return (
-            <div className="flex min-h-screen items-center justify-center px-16 py-32">
+            <div className="flex flex-1 items-center justify-center px-16 py-32">
       <div aria-hidden className="auth-bg" />
                   <div className="auth-shell w-full max-w-[900px]">
 
-        {/* Mobile-only brand plate — the RHS panel hides on small screens */}
-        <div className="mb-16 flex justify-center md:hidden">
-          <div className="inline-flex items-center rounded-card bg-white px-20 py-10 shadow-sm">
-            <img src="/waisha-logo.png" alt="WAISHA — where shippers meet transporters"
-              style={{ width: 220, height: "auto", maxWidth: "100%" }} />
-          </div>
+        {/* Mobile-only brand plate — the RHS panel hides on small screens.
+            The wordmark flies on the glass, no white card under it. */}
+        <div className="mb-16 flex flex-col items-center md:hidden">
+          <img src="/brand/waisha-white@2x.png" alt="WAISHA — where shippers meet transporters"
+            width={452} height={211}
+            style={{ width: 220, height: "auto", maxWidth: "100%", filter: "drop-shadow(0 3px 12px rgba(4,16,26,0.55))" }} />
+          <span className="brand-tagline">Where shippers meet transporters</span>
         </div>
 
         <div className="relative">
@@ -401,11 +402,10 @@ export default function LoginPage() {
               </div>
 
               <div className="relative flex w-full flex-col items-center">
-                <div className="flex w-full items-center justify-center rounded-card bg-white px-24 py-16"
-                  style={{ boxShadow: "0 12px 32px rgba(5,18,26,0.28)" }}>
-                  <img src="/waisha-logo.png" alt="WAISHA — where shippers meet transporters"
-                    style={{ width: 320, height: "auto", maxWidth: "100%" }} />
-                </div>
+                <img src="/brand/waisha-white@2x.png" alt="WAISHA — where shippers meet transporters"
+                  width={452} height={211}
+                  style={{ width: 300, height: "auto", maxWidth: "100%", filter: "drop-shadow(0 4px 16px rgba(4,16,26,0.55))" }} />
+                <span className="brand-tagline">Where shippers meet transporters</span>
                 <div className="mt-16"><Chip text="Secure portal" color="var(--success)" /></div>
               </div>
 

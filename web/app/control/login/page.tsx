@@ -71,7 +71,7 @@ export default function ControlLoginPage() {
   const labelCls = "mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]";
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-16 py-32"
+    <div className="page-shell flex flex-1 items-center justify-center px-16 py-32"
       style={{ background: "var(--brand-deep)" }}>
       <div className="w-full max-w-[440px]">
         <div className="sheet-in relative overflow-hidden rounded-card border bg-surface"

@@ -50,6 +50,7 @@
      records on it read clearly while the background stays visible. */
   --pane-bg: rgba(6, 24, 38, 0.32);
   --topbar-bg: rgba(8, 28, 44, 0.6);
+  --footer-bg: rgba(8, 28, 44, 0.58);
 
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   color-scheme: light;
@@ -72,6 +73,7 @@
     --side-bottom: rgba(3, 13, 21, 0.24);
     --pane-bg: rgba(3, 13, 21, 0.46);
     --topbar-bg: rgba(2, 10, 17, 0.72);
+    --footer-bg: rgba(2, 10, 17, 0.72);
     color-scheme: dark;
   }
 }
@@ -136,6 +138,23 @@ body {
    so the body-level marketing footer steps aside on portal routes only. */
 body:has(.app-shell) { overflow: hidden; }
 body:has(.app-shell) > .app-footer { display: none; }
+
+/* Same trick for the pages that own a full-height surface of their own: the
+   login, the shipper portal and the admin/pay pages share the viewport with
+   the footer instead of pushing it below the fold. */
+body:has(.auth-shell) > main,
+body:has(.portal-shell) > main,
+body:has(.page-shell) > main { display: flex; flex-direction: column; }
+
+/* Semi-transparent bar: the photo stays faintly visible behind it while the
+   text reads clearly. */
+.app-footer {
+  background: var(--footer-bg);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  backdrop-filter: blur(10px) saturate(1.2);
+  border-top: 1px solid rgba(255, 255, 255, 0.22);
+  text-shadow: 0 1px 6px rgba(4, 16, 26, 0.5);
+}
 
 .app-shell {
   position: relative;

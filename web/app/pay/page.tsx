@@ -118,7 +118,7 @@ function PayContent() {
   const labelCls = "mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]";
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-16 py-32" style={{ background: "var(--milk)" }}>
+    <div className="page-shell flex flex-1 items-center justify-center px-16 py-32" style={{ background: "var(--milk)" }}>
       <div className="w-full max-w-[460px]">
         <h1 className="mb-24 text-center text-xl font-bold" style={{ color: "var(--brand-deep)" }}>WAISHA</h1>
         <div className="rounded-card border bg-surface p-24" style={{ borderColor: "var(--line)" }}>
@@ -245,7 +245,7 @@ function PayContent() {
 export default function PayPage() {
   return (
     <Suspense fallback={
-      <div className="flex min-h-screen items-center justify-center" style={{ background: "var(--milk)" }}>
+      <div className="page-shell flex flex-1 items-center justify-center" style={{ background: "var(--milk)" }}>
         <p className="text-sm" style={{ color: "var(--ink-soft)" }}>Loading payment page</p>
       </div>
     }>

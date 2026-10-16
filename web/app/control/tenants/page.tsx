@@ -85,7 +85,7 @@ export default function TenantsPage() {
   const labelCls = "mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]";
 
   return (
-    <div className="min-h-screen" style={{ background: "var(--milk)" }}>
+    <div className="page-shell flex-1" style={{ background: "var(--milk)" }}>
       <header className="flex items-center justify-between px-24 py-12"
         style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--gold)" }}>
         <div>

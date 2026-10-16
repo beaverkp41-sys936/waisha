@@ -33,7 +33,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
   }
 
   return (
-    <div className="min-h-screen" style={{ background: "var(--milk)" }}>
+    <div className="portal-shell flex-1" style={{ background: "var(--milk)" }}>
       <header style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--gold)" }}>
         <div className="flex flex-wrap items-center justify-between gap-12 px-16 py-12">
           <div className="flex items-baseline gap-12">
