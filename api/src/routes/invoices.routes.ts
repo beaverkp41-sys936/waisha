@@ -200,7 +200,8 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
 
         const [items, payments, letterhead] = await Promise.all([
           c.query(
-            `select id, seq, description, quantity, unit, unit_price, amount
+            `select id, seq, description, quantity, unit, unit_price, amount,
+                    section, catalog_code, basis, tax_kind, tax_rate, tax_amount
              from freight_invoice_items where invoice_id = $1 and tenant_id = $2 order by seq`,
             [id, req.user.tid]),
           c.query(
@@ -270,10 +271,11 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
             [id, req.user.tid]);
           for (let n = 0; n < body.items.length; n++) {
             await c.query(
-              `insert into freight_invoice_items (id, tenant_id, invoice_id, seq, description, quantity, unit_price, amount)
-               values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+              `insert into freight_invoice_items (id, tenant_id, invoice_id, seq, description, quantity, unit, unit_price, amount)
+               values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
               [uuidv7(), req.user.tid, id, n + 1, body.items[n].description,
-               body.items[n].quantity, body.items[n].unitPrice, totals.lines[n]]);
+               body.items[n].quantity, body.items[n].unit ?? null,
+               body.items[n].unitPrice, totals.lines[n]]);
           }
         }
 

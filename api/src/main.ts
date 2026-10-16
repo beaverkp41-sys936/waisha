@@ -21,6 +21,7 @@ import { tripsRoutes } from "./routes/trips.routes.js";
 import { usersRoutes } from "./routes/users.routes.js";
 import { documentsRoutes } from "./routes/documents.routes.js";
 import { invoicesRoutes } from "./routes/invoices.routes.js";
+import { quotationsRoutes } from "./routes/quotations.routes.js";
 import { ledgerRoutes } from "./routes/ledger.routes.js";
 import { dutyRoutes } from "./routes/duty.routes.js";
 import { fuelRoutes } from "./routes/fuel.routes.js";
@@ -87,6 +88,7 @@ async function main() {
   await app.register(usersRoutes, { prefix: "/api/v1" });
   await app.register(documentsRoutes, { prefix: "/api/v1" });
   await app.register(invoicesRoutes, { prefix: "/api/v1" });
+  await app.register(quotationsRoutes, { prefix: "/api/v1" });
   await app.register(ledgerRoutes, { prefix: "/api/v1" });
   await app.register(dutyRoutes, { prefix: "/api/v1" });
   await app.register(fuelRoutes, { prefix: "/api/v1" });
