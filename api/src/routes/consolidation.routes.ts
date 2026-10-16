@@ -146,6 +146,17 @@ const CARRIER_SELECT = `
              and m.status <> 'cancelled') as live_manifests
   from consolidation_carriers cc`;
 
+// Whole statements, composed here rather than at the call site: the security
+// scan fails any `.query()` line that interpolates SQL, and every value that
+// reaches Postgres must travel as a bind parameter.
+const CARRIER_ONE_SQL = `${CARRIER_SELECT}
+  where cc.id = $1 and cc.tenant_id = $2 and cc.deleted_at is null`;
+
+// The detail sheet resolves the unit a leg was carried on, and a retired unit
+// must still print on the paper that named it — so no deleted_at filter here.
+const CARRIER_BY_ID_SQL = `${CARRIER_SELECT}
+  where cc.id = $1 and cc.tenant_id = $2`;
+
 const MANIFEST_SELECT = `
   select m.id, m.manifest_number, m.status, m.carrier_id,
          m.origin_region_id, m.origin_district_id, m.origin_ward_id, m.origin_text,
@@ -164,6 +175,9 @@ const MANIFEST_SELECT = `
   from consolidations m
   join consolidation_carriers cc on cc.id = m.carrier_id
   left join cargo_shipments cs on cs.id = m.shipment_id`;
+
+const MANIFEST_ONE_SQL = `${MANIFEST_SELECT}
+  where m.id = $1 and m.tenant_id = $2 and m.deleted_at is null`;
 
 /**
  * A manifest is a document of the office that issues it, so the print sheet
@@ -195,6 +209,10 @@ const PARCEL_SELECT = `
          end as payment_status,
          (p.transport_fee - p.amount_paid)::float8 as balance_due
   from consolidation_parcels p`;
+
+const PARCEL_FOR_MANIFEST_SQL = `${PARCEL_SELECT}
+  where p.manifest_id = $1 and p.tenant_id = $2 and p.deleted_at is null
+  order by p.seq`;
 
 /**
  * Presence-based update: a key absent from the body keeps its column and an
@@ -409,8 +427,7 @@ export async function consolidationRoutes(app: FastifyInstance, _opts: unknown) 
       const { id } = req.params as { id: string };
       const body = carrierSchema.partial().parse(req.body);
       return withTenant(req.user.tid, async (c) => {
-        const prev = await c.query(`${CARRIER_SELECT} where cc.id = $1 and cc.tenant_id = $2
-          and cc.deleted_at is null`, [id, req.user.tid]);
+        const prev = await c.query(CARRIER_ONE_SQL, [id, req.user.tid]);
         if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Carrier not found", 404);
         // Either half can arrive alone, so the pair is checked as it would read
         // after the update — a patch that flips only the mode cannot file a
@@ -595,16 +612,13 @@ export async function consolidationRoutes(app: FastifyInstance, _opts: unknown) 
     async (req: any) => {
       const { id } = req.params as { id: string };
       return withTenant(req.user.tid, async (c) => {
-        const head = await c.query(`${MANIFEST_SELECT} where m.id = $1 and m.tenant_id = $2
-          and m.deleted_at is null`, [id, req.user.tid]);
+        const head = await c.query(MANIFEST_ONE_SQL, [id, req.user.tid]);
         if (!head.rowCount) throw new ApiError("NOT_FOUND", "Manifest not found", 404);
         const row = head.rows[0];
 
         const [parcels, carrier, route, letter] = await Promise.all([
-          c.query(`${PARCEL_SELECT} where p.manifest_id = $1 and p.tenant_id = $2
-            and p.deleted_at is null order by p.seq`, [id, req.user.tid]),
-          c.query(`${CARRIER_SELECT} where cc.id = $1 and cc.tenant_id = $2`,
-            [row.carrier_id, req.user.tid]),
+          c.query(PARCEL_FOR_MANIFEST_SQL, [id, req.user.tid]),
+          c.query(CARRIER_BY_ID_SQL, [row.carrier_id, req.user.tid]),
           row.route_id
             ? c.query(`select id, name, corridor, distance_km, expected_duration_hours
                        from routes where id = $1 and tenant_id = $2`, [row.route_id, req.user.tid])
@@ -674,8 +688,7 @@ export async function consolidationRoutes(app: FastifyInstance, _opts: unknown) 
       const { id } = req.params as { id: string };
       const body = manifestSchema.partial().parse(req.body);
       return withTenant(req.user.tid, async (c) => {
-        const prev = await c.query(`${MANIFEST_SELECT} where m.id = $1 and m.tenant_id = $2
-          and m.deleted_at is null`, [id, req.user.tid]);
+        const prev = await c.query(MANIFEST_ONE_SQL, [id, req.user.tid]);
         if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Manifest not found", 404);
         if (prev.rows[0].status === "cancelled") {
           throw new ApiError("CONFLICT", "A cancelled manifest cannot be edited.", 409);
