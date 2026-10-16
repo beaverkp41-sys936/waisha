@@ -169,7 +169,7 @@ export default function FleetPage() {
 
       {fleetLimit !== null && (
         <div role="status" className="mt-16 mb-16 px-16 py-8 text-sm font-semibold"
-          style={{ background: "var(--warning)", color: "#fff" }}>
+          style={{ background: "var(--warning)", color: "var(--on-solid)" }}>
           Trial fleet: {fleetUsed} of {fleetLimit} vessels used — Activate a licence for unlimited fleet.
         </div>
       )}

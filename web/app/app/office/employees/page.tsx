@@ -465,8 +465,7 @@ export default function OfficeEmployeesPage() {
       <div className="mt-24 flex flex-wrap gap-8">
         {TABS.map(t => (
           <button key={t.key} type="button" onClick={() => setView(t.key)}
-            className="on-photo-btn rounded-input px-16 py-8 text-xs font-semibold"
-            style={view === t.key ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
+            className={"on-photo-btn rounded-input px-16 py-8 text-xs font-semibold" + (view === t.key ? " is-on" : "")}>
             {t.label}
           </button>
         ))}

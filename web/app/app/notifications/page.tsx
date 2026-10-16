@@ -95,13 +95,12 @@ export default function NotificationsPage() {
         <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Alerts</h1>
         {unread > 0 && (
           <button type="button" onClick={markAll} disabled={busy}
-            className="badge-plain rounded-input px-12 py-4 text-xs font-semibold"
-            style={{ color: "var(--ink)" }}>
+            className="badge-plain rounded-input px-12 py-4 text-xs font-semibold">
             Mark all read
           </button>
         )}
       </div>
-      <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+      <p className="pane-note mt-8 text-sm">
         Computed live from your data — overdue invoices, expiring documents, low stock, open incidents and departures.
       </p>
       {error && <div role="alert" className="mt-16 mb-16 px-12 py-8 text-sm"
@@ -111,7 +110,7 @@ export default function NotificationsPage() {
         <div className="mt-16 flex flex-wrap gap-16 text-xs">
           {unread > 0 && (
             <span className="rounded-input px-12 py-4 font-semibold"
-              style={{ background: "color-mix(in srgb, var(--brand) 12%, transparent)", color: "var(--ink)" }}>
+              style={{ background: "var(--brand)", color: "var(--on-solid)" }}>
               {unread} unread
             </span>
           )}
@@ -133,7 +132,7 @@ export default function NotificationsPage() {
             className="flex items-start gap-12 rounded-card border bg-surface px-16 py-12 transition-colors"
             style={{ borderColor: "var(--line)",
               borderLeft: `4px solid ${SEVERITY_COLORS[n.severity] ?? "var(--ink-soft)"}`,
-              opacity: n.seen ? 0.62 : 1 }}>
+              opacity: n.seen ? 0.8 : 1 }}>
             <Link href={n.href} className="min-w-0 flex-1">
               <p className="flex items-center gap-8 text-sm" style={{ color: "var(--ink)" }}>
                 {!n.seen && (

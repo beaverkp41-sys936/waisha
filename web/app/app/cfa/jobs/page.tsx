@@ -200,8 +200,7 @@ export default function JobsPage() {
       <nav className="mt-24 flex flex-wrap gap-8" aria-label="Job views">
         {tabs.map(t => (
           <button key={t.key} type="button" onClick={() => setTab(t.key)}
-            className="on-photo-btn rounded-input px-16 py-8 text-xs font-semibold"
-            style={tab === t.key ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
+            className={"on-photo-btn rounded-input px-16 py-8 text-xs font-semibold" + (tab === t.key ? " is-on" : "")}>
             {t.label}
           </button>
         ))}
@@ -354,7 +353,7 @@ function Dashboard({ dash }: { dash: any }) {
 function Board({ board }: { board: any }) {
   return (
     <div className="mt-24">
-      <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+      <p className="pane-note text-xs">
         {board.total} open job{board.total === 1 ? "" : "s"} — each card sits in its current stage.
       </p>
       <div className="mt-16 flex gap-12 overflow-x-auto pb-16">
@@ -383,7 +382,7 @@ function Board({ board }: { board: any }) {
                 </Link>
               ))}
               {col.jobs.length === 0 && (
-                <p className="py-16 text-center text-[11px]" style={{ color: "var(--line)" }}>empty</p>
+                <p className="py-16 text-center text-[11px]" style={{ color: "var(--ink-soft)" }}>empty</p>
               )}
             </div>
           </div>
@@ -400,14 +399,10 @@ function Mine({ tasks, scope, setScope, onStatus }: {
   return (
     <div className="mt-24">
       <div className="flex flex-wrap items-center gap-12">
-        <span className={headingCls} style={{ color: "var(--ink-soft)" }}>Assigned to you</span>
+        <span className={headingCls + " pane-note"}>Assigned to you</span>
         {["open", "overdue", "all"].map(s => (
           <button key={s} type="button" onClick={() => setScope(s)}
-            className="rounded-input border px-12 py-6 text-[11px] font-semibold uppercase"
-            style={{
-              borderColor: scope === s ? "var(--gold)" : "var(--line)",
-              color: scope === s ? "var(--ink)" : "var(--ink-soft)"
-            }}>{s}</button>
+            className={"on-photo-btn rounded-input px-12 py-6 text-[11px] font-semibold uppercase" + (scope === s ? " is-on" : "")}>{s}</button>
         ))}
       </div>
       <div className="mt-16 space-y-8">
@@ -447,7 +442,7 @@ function Mine({ tasks, scope, setScope, onStatus }: {
           );
         })}
         {tasks.length === 0 && (
-          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>Nothing on your list for this filter.</p>
+          <p className="pane-note text-sm">Nothing on your list for this filter.</p>
         )}
       </div>
     </div>
@@ -465,7 +460,7 @@ function AllJobs({ rows, filters, setFilters }: {
            ["recordKind", ["", "live", "archive"]],
            ["stageKey", ["", ...STAGES]]] as [string, string[]][]).map(([key, opts]) => (
           <label key={key} className="block">
-            <span className={labelCls} style={{ color: "var(--ink-soft)" }}>{key}</span>
+            <span className={labelCls + " pane-note"}>{key}</span>
             <select value={filters[key]} onChange={e => set(key, e.target.value)}
               className="rounded-input border px-12 py-8 text-xs" style={inputStyle}>
               {opts.map(o => <option key={o} value={o}>{o || "any"}</option>)}
@@ -473,13 +468,14 @@ function AllJobs({ rows, filters, setFilters }: {
           </label>
         ))}
         <label className="block min-w-[220px] flex-1">
-          <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Search</span>
+          <span className={labelCls + " pane-note"}>Search</span>
           <input value={filters.search} onChange={e => set("search", e.target.value)}
             placeholder="file number, consignee, reference" className={inputCls} style={inputStyle} />
         </label>
       </div>
 
-      <div className="mt-24 overflow-x-auto">
+      <div className="mt-24 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
+        <div className="overflow-x-auto p-24">
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="text-left text-[11px] uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
@@ -529,6 +525,7 @@ function AllJobs({ rows, filters, setFilters }: {
             No jobs match these filters. A job opens automatically when a cargo file is created.
           </p>
         )}
+        </div>
       </div>
     </div>
   );
@@ -605,17 +602,13 @@ function Transport({ rows, scope, setScope, onChanged }:
       <div className="flex flex-wrap items-center gap-8">
         {chips.map(c => (
           <button key={c.key} type="button" onClick={() => setScope(c.key)}
-            className="rounded-input border px-12 py-6 text-[11px] font-bold uppercase tracking-[0.1em]"
-            style={{
-              borderColor: scope === c.key ? "var(--brand)" : "var(--line)",
-              color: scope === c.key ? "var(--brand)" : "var(--ink-soft)"
-            }}>
+            className={"on-photo-btn rounded-input px-12 py-6 text-[11px] font-bold uppercase tracking-[0.1em]" + (scope === c.key ? " is-on" : "")}>
             {c.label}
           </button>
         ))}
       </div>
 
-      <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
+      <p className="pane-note mt-12 text-xs">
         Each row is the approved copy that other companies see — never the live cargo file.
         Publish from a job at stage 9, once the client has given consent.
         A hold is confirmed or declined here, within 12 hours.
@@ -693,7 +686,7 @@ function Transport({ rows, scope, setScope, onChanged }:
                   <div className="mt-8 flex flex-wrap gap-8">
                     <button type="button" disabled={busy} onClick={() => act(t, "confirm")}
                       className="waisha-btn rounded-input px-12 py-6 text-xs font-semibold"
-                      style={{ background: "var(--brand)", color: "#fff", opacity: busy ? 0.6 : 1 }}>
+                      style={{ background: "var(--brand)", color: "var(--on-solid)", opacity: busy ? 0.6 : 1 }}>
                       {busy ? "Working…" : "Confirm booking"}
                     </button>
                     <button type="button" onClick={() => openPanel(t.id, "decline")}
@@ -716,7 +709,7 @@ function Transport({ rows, scope, setScope, onChanged }:
                       <button type="button" disabled={busy}
                         onClick={() => act(t, "reject", reason.trim().length >= 2 ? reason.trim() : undefined)}
                         className="mt-8 rounded-input px-12 py-6 text-xs font-semibold"
-                        style={{ background: "var(--danger)", color: "#fff", opacity: busy ? 0.6 : 1 }}>
+                        style={{ background: "var(--danger)", color: "var(--on-solid)", opacity: busy ? 0.6 : 1 }}>
                         {busy ? "Working…" : "Decline booking"}
                       </button>
                     </div>
@@ -757,7 +750,7 @@ function Transport({ rows, scope, setScope, onChanged }:
                       onClick={() => act(t, "cancel", reason.trim())}
                       className="mt-8 rounded-input px-12 py-6 text-xs font-semibold"
                       style={{
-                        background: "var(--danger)", color: "#fff",
+                        background: "var(--danger)", color: "var(--on-solid)",
                         opacity: busy || reason.trim().length < 4 ? 0.55 : 1
                       }}>
                       {busy ? "Working…" : "Cancel booking"}
@@ -781,7 +774,7 @@ function Transport({ rows, scope, setScope, onChanged }:
           </div>
         ))}
         {rows.length === 0 && (
-          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>
+          <p className="pane-note text-sm">
             Nothing published under this filter yet.
           </p>
         )}

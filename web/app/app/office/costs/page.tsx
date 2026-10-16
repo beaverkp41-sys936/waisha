@@ -438,23 +438,19 @@ export default function OfficeCostsPage() {
       <>
         <div className="mt-16 flex flex-wrap items-center gap-8">
           <button type="button" onClick={() => setStatusFilter("")}
-            className="on-photo-btn rounded-input px-12 py-4 text-xs font-semibold"
-            style={statusFilter === "" ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
+            className={"on-photo-btn rounded-input px-12 py-4 text-xs font-semibold" + (statusFilter === "" ? " is-on" : "")}>
             All {costs.length}
           </button>
           <button type="button" onClick={() => setStatusFilter("pending")}
-            className="on-photo-btn rounded-input px-12 py-4 text-xs font-semibold"
-            style={statusFilter === "pending" ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
+            className={"on-photo-btn rounded-input px-12 py-4 text-xs font-semibold" + (statusFilter === "pending" ? " is-on" : "")}>
             Pending {pendingCount}
           </button>
           <button type="button" onClick={() => setStatusFilter("approved")}
-            className="on-photo-btn rounded-input px-12 py-4 text-xs font-semibold"
-            style={statusFilter === "approved" ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
+            className={"on-photo-btn rounded-input px-12 py-4 text-xs font-semibold" + (statusFilter === "approved" ? " is-on" : "")}>
             Approved
           </button>
           <button type="button" onClick={() => setStatusFilter("rejected")}
-            className="on-photo-btn rounded-input px-12 py-4 text-xs font-semibold"
-            style={statusFilter === "rejected" ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
+            className={"on-photo-btn rounded-input px-12 py-4 text-xs font-semibold" + (statusFilter === "rejected" ? " is-on" : "")}>
             Rejected
           </button>
           {!lock && (
@@ -605,8 +601,7 @@ export default function OfficeCostsPage() {
       <div className="mt-24 flex flex-wrap gap-8">
         {TABS.map(t => (
           <button key={t.key} type="button" onClick={() => setView(t.key)}
-            className="on-photo-btn rounded-input px-16 py-8 text-xs font-semibold"
-            style={view === t.key ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
+            className={"on-photo-btn rounded-input px-16 py-8 text-xs font-semibold" + (view === t.key ? " is-on" : "")}>
             {t.label}
           </button>
         ))}

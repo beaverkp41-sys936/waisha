@@ -14,6 +14,9 @@
      scope below); the brand gold above is for the dark chrome. */
   --gold-ink: #6d540d;
   --gold-green-ink: #52601a;
+  /* Gold for text that sits on the photo-backed dark glass (the auth card).
+     The brand gold is too dim there — this is the same hue, lifted. */
+  --gold-on-photo: #f2d795;
 
   /* Aliases the existing pages already reference. They exist so the palette
      can move without rewriting 30 screens of inline var() calls. */
@@ -21,7 +24,7 @@
   /* Soft ink is tuned for the 80% white glass cards: any lighter and it washes
      out against the pane behind them. Same for the status hues when they are
      used as text. */
-  --ink-soft: #3d5a72;
+  --ink-soft: #35526a;
   --brand: var(--navy);
   --brand-deep: var(--navy-deep);
   --gold-green: var(--olive);
@@ -39,14 +42,24 @@
   --milk: #eaf1f6;
   --milk-deep: #d7e5ef;
 
-  /* Photo scrim */
-  --scrim-top: rgba(8, 28, 44, 0.5);
-  --scrim-bottom: rgba(8, 28, 44, 0.36);
-  --side-top: rgba(6, 24, 38, 0.38);
-  --side-bottom: rgba(6, 24, 38, 0.06);
+  /* Photo scrim. These alphas are the floor the white chrome needs: the sky in
+     the workspace photos is bright, and at the previous values the sidebar
+     labels and the workspace chips fell under 4.5:1. */
+  --scrim-top: rgba(8, 28, 44, 0.72);
+  --scrim-bottom: rgba(8, 28, 44, 0.62);
+  --side-top: rgba(6, 24, 38, 0.6);
+  --side-mid: rgba(6, 24, 38, 0.58);
+  --side-bottom: rgba(6, 24, 38, 0.44);
   --on-photo: #ffffff;
-  --on-photo-soft: rgba(255, 255, 255, 0.78);
+  --on-photo-soft: rgba(255, 255, 255, 0.92);
   --photo-shadow: 0 1px 14px rgba(4, 18, 28, 0.55);
+  /* Text that sits on a solid status fill (brand/success/warning/danger).
+     In this theme those fills are dark, so the text is white; the dark theme
+     flips both and this token carries the readable tone there. */
+  --on-solid: #ffffff;
+  /* Success green tuned for text on the photo/pane rather than dark chrome —
+     the brand green is too dark against the pane in this theme. */
+  --success-on-photo: #a5ecc4;
 
   /* Shell metrics */
   --sidebar-w: 272px;
@@ -54,8 +67,10 @@
   --navy-panel: rgba(9, 38, 60, 0.72);
 
   /* The right-hand pane is a partially transparent sheet over the photo so the
-     records on it read clearly while the background stays visible. */
-  --pane-bg: rgba(6, 24, 38, 0.32);
+     records on it read clearly while the background stays visible. The alpha is
+     set by the brightest part of the photos: below this, white pane text drops
+     under 4.5:1 where the sky shows through. */
+  --pane-bg: rgba(6, 24, 38, 0.58);
   --topbar-bg: rgba(8, 28, 44, 0.6);
   --footer-bg: rgba(8, 28, 44, 0.58);
 
@@ -79,11 +94,14 @@
     --gold-green-ink: #b8cc5e;
     --glass-opacity: 0.88;
     --glass-rgb: 17, 37, 53;
-    --scrim-top: rgba(4, 16, 26, 0.68);
-    --scrim-bottom: rgba(4, 16, 26, 0.56);
-    --side-top: rgba(3, 13, 21, 0.58);
-    --side-bottom: rgba(3, 13, 21, 0.24);
-    --pane-bg: rgba(3, 13, 21, 0.46);
+    --scrim-top: rgba(4, 16, 26, 0.76);
+    --scrim-bottom: rgba(4, 16, 26, 0.66);
+    --side-top: rgba(3, 13, 21, 0.68);
+    --side-mid: rgba(3, 13, 21, 0.64);
+    --side-bottom: rgba(3, 13, 21, 0.48);
+    --on-solid: #061a29;
+    --success-on-photo: #5fce93;
+    --pane-bg: rgba(3, 13, 21, 0.56);
     --topbar-bg: rgba(2, 10, 17, 0.72);
     --footer-bg: rgba(2, 10, 17, 0.72);
     color-scheme: dark;
@@ -236,7 +254,7 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   flex-direction: column;
   padding: 20px 0 calc(16px + env(safe-area-inset-bottom));
   padding-left: env(safe-area-inset-left);
-  background: linear-gradient(180deg, var(--side-top), var(--side-bottom));
+  background: linear-gradient(180deg, var(--side-top), var(--side-mid) 48%, var(--side-bottom));
   -webkit-backdrop-filter: blur(3px);
   backdrop-filter: blur(3px);
   border-right: 1px solid rgba(255, 255, 255, 0.22);
@@ -281,7 +299,7 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   margin: 0 16px 16px;
   padding: 4px;
   border-radius: 12px;
-  background: rgba(6, 24, 38, 0.34);
+  background: rgba(6, 24, 38, 0.48);
   border: 1px solid rgba(255, 255, 255, 0.16);
 }
 .workspace-switch a {
@@ -292,7 +310,7 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.72);
+  color: rgba(255, 255, 255, 0.9);
   transition: background 180ms var(--ease), color 180ms var(--ease);
   white-space: nowrap;
   overflow: hidden;
@@ -325,7 +343,7 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   border-radius: 10px;
   font-size: 13.5px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.82);
+  color: rgba(255, 255, 255, 0.88);
   text-shadow: 0 1px 4px rgba(4, 16, 26, 0.45);
   transition: background 160ms var(--ease), color 160ms var(--ease);
 }
@@ -334,7 +352,8 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 .nav-item.is-active {
   color: #fff;
   font-weight: 700;
-  background: linear-gradient(90deg, rgba(201, 168, 76, 0.3), rgba(201, 168, 76, 0.09));
+  background: linear-gradient(90deg, rgba(201, 168, 76, 0.3), rgba(201, 168, 76, 0.09)),
+    rgba(6, 24, 38, 0.55);
 }
 .nav-item.is-active svg { color: var(--gold); }
 .nav-item.is-active::before {
@@ -384,7 +403,8 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 .aegis-line {
   display: block;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.62);
+  color: rgba(255, 255, 255, 0.8);
+  text-shadow: 0 1px 4px rgba(4, 16, 26, 0.45);
 }
 
 /* ------------------------------------------------------------- the topbar */
@@ -599,7 +619,7 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
    vanishes against the photo. Only the glass hosts (bg-surface cards/modals and
    the profile body) keep ink — they are light. Inline colours (e.g. the
    licence banners) still win, so self-styled banners are untouched. */
-.app-content :is([role="status"], [role="alert"]):not(.bg-surface *, .profile-body *) {
+.app-content :is([role="status"], [role="alert"]):not(.bg-surface, .bg-surface *, .profile-body *) {
   color: var(--on-photo-soft);
   text-shadow: 0 1px 8px rgba(4, 18, 28, 0.5);
 }
@@ -676,7 +696,7 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 .licence-banner {
   border-radius: 12px;
   border-left: 4px solid #c9a84c;
-  background: rgba(201, 168, 76, 0.18);
+  background: rgba(201, 168, 76, 0.12);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
 }
@@ -763,14 +783,16 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   white-space: nowrap;
 }
 .badge svg { width: 13px; height: 13px; }
-.badge-verified { background: rgba(43, 122, 85, 0.9); color: #fff; }
+/* Solid fills, not washes: a 90% green over the light glass lifts the green
+   enough that white badge text lands at 4.4:1. Opaque keeps it at 5.2:1. */
+.badge-verified { background: #2b7a55; color: #fff; }
 .badge-trial { background: rgba(201, 168, 76, 0.92); color: var(--navy-deep); }
-.badge-plain { background: rgba(255, 255, 255, 0.16); color: #fff; border: 1px solid rgba(255, 255, 255, 0.34); }
+.badge-plain { background: rgba(6, 24, 38, 0.55); color: #fff; border: 1px solid rgba(255, 255, 255, 0.3); text-shadow: 0 1px 4px rgba(4, 16, 26, 0.45); }
 
 .on-photo-btn {
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.48);
-  background: rgba(6, 24, 38, 0.34);
+  background: rgba(6, 24, 38, 0.46);
   color: #fff;
   font-size: 12px;
   font-weight: 700;
@@ -778,6 +800,15 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   transition: background 180ms var(--ease), border-color 180ms var(--ease);
 }
 .on-photo-btn:hover { background: rgba(6, 24, 38, 0.55); border-color: #c9a84c; color: #c9a84c; }
+/* Selected state for the tab/pill rows that sit on the photo. A gold wash
+   behind white text reads at 4.5:1 only by luck of the photo, so the selected
+   tab is a solid gold plate with the navy ink instead — same in both themes. */
+.on-photo-btn.is-on {
+  background: #c9a84c;
+  border-color: #c9a84c;
+  color: var(--navy-deep);
+}
+.on-photo-btn.is-on:hover { color: var(--navy-deep); background: #d5b661; }
 
 /* Tabs */
 .tabs {
@@ -908,10 +939,13 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 }
 .auth-shell { position: relative; z-index: 1; }
 
+/* The card is a navy face over the lake photo. The alpha is set by the
+   brightest sky in login.jpg: any lighter and the white labels and the gold
+   kicker fall under 4.5:1 where the photo shows through. */
 .auth-card {
   background:
-    linear-gradient(rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.12)),
-    linear-gradient(rgba(8, 28, 44, 0.6), rgba(8, 28, 44, 0.6));
+    linear-gradient(rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.08)),
+    linear-gradient(rgba(8, 28, 44, 0.8), rgba(8, 28, 44, 0.8));
   border-color: rgba(255, 255, 255, 0.28);
   -webkit-backdrop-filter: blur(18px);
   backdrop-filter: blur(18px);
@@ -920,7 +954,7 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 }
 /* The brand panel keeps its navy face but lets a little of the lake through. */
 .auth-aside {
-  background: linear-gradient(160deg, rgba(9, 38, 60, 0.88) 0%, rgba(13, 51, 80, 0.6) 130%);
+  background: linear-gradient(160deg, rgba(9, 38, 60, 0.92) 0%, rgba(9, 30, 48, 0.82) 130%);
   border-top: 3px solid var(--gold);
 }
 

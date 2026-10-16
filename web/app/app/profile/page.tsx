@@ -307,8 +307,8 @@ export default function ProfilePage() {
             style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>Profile saved.</div>}
 
           {preview ? (
-            <section className="mt-20 rounded-card border p-20"
-              style={{ borderColor: "var(--gold)", background: "rgba(201, 168, 76, 0.08)" }}>
+            <section className="mt-20 rounded-card border bg-surface p-20"
+              style={{ borderColor: "var(--gold)", background: "color-mix(in srgb, var(--gold) 12%, var(--surface))" }}>
               <p className="text-[11px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
                 What a shipper sees
               </p>

@@ -454,7 +454,7 @@ export default function BoardPage() {
           </p>
         </div>
         <div className="flex items-center gap-8 text-[11px] font-semibold uppercase tracking-[0.12em]"
-          style={{ color: conn === "live" ? "#5fce93" : "rgba(255,255,255,0.78)", textShadow: "0 1px 8px rgba(4,18,28,0.5)" }}>
+          style={{ color: conn === "live" ? "var(--success-on-photo)" : "rgba(255,255,255,0.78)", textShadow: "0 1px 8px rgba(4,18,28,0.5)" }}>
           <span aria-hidden className="inline-block h-8 w-8 rounded-full"
             style={{ background: conn === "live" ? "#5fce93" : "rgba(255,255,255,0.6)" }} />
           {conn === "live" ? "Live" : conn === "connecting" ? "Connecting…" : "Reconnecting…"}
@@ -467,7 +467,7 @@ export default function BoardPage() {
           <button key={t} type="button" onClick={() => setTab(t)}
             className="rounded-input px-14 py-7 text-xs font-semibold"
             style={tab === t
-              ? { background: "var(--brand)", color: "#fff" }
+              ? { background: "var(--brand)", color: "var(--on-solid)" }
               : { background: "var(--milk)", border: "1px solid var(--line)", color: "var(--ink-soft)" }}>
             {t === "board" ? "Board" : `My bookings${activeBookings > 0 ? ` (${activeBookings})` : ""}`}
           </button>
@@ -536,14 +536,14 @@ export default function BoardPage() {
       )}
 
       {readiness && !readiness.ready && (
-        <div role="status" className="mt-24 rounded-card border px-16 py-12"
-          style={{ borderColor: "var(--gold)", background: "color-mix(in srgb, var(--gold) 10%, transparent)" }}>
+        <div role="status" className="mt-24 rounded-card border bg-surface px-16 py-12"
+          style={{ borderColor: "var(--gold)", background: "color-mix(in srgb, var(--gold) 12%, var(--surface))" }}>
           <div className="flex flex-wrap items-center justify-between gap-8">
             <p className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
               Finish your company profile before you book
             </p>
             <Link href="/app/profile" className="waisha-btn rounded-input px-12 py-6 text-xs font-semibold"
-              style={{ background: "var(--brand)", color: "#fff" }}>
+              style={{ background: "var(--brand)", color: "var(--on-solid)" }}>
               Open company profile
             </Link>
           </div>
@@ -684,7 +684,7 @@ export default function BoardPage() {
                   className="waisha-btn rounded-input px-12 py-6 text-xs font-semibold"
                   style={bookOpen === c.id
                     ? { background: "var(--milk)", border: "1px solid var(--line)", color: "var(--ink-soft)" }
-                    : { background: "var(--brand)", color: "#fff" }}>
+                    : { background: "var(--brand)", color: "var(--on-solid)" }}>
                   {bookOpen === c.id ? "Not now" : "Book this load"}
                 </button>
               </div>
@@ -713,7 +713,7 @@ export default function BoardPage() {
                     </ul>
                     <div className="mt-12 flex items-center gap-8">
                       <Link href="/app/profile" className="waisha-btn rounded-input px-14 py-7 text-xs font-semibold"
-                        style={{ background: "var(--brand)", color: "#fff" }}>
+                        style={{ background: "var(--brand)", color: "var(--on-solid)" }}>
                         Finish in company profile
                       </Link>
                       <button type="button" onClick={() => setBookOpen(null)}
@@ -752,7 +752,7 @@ export default function BoardPage() {
                 <div className="mt-12 flex items-center gap-8">
                   <button type="button" disabled={bookBusy} onClick={() => submitBook(c)}
                     className="waisha-btn rounded-input px-14 py-7 text-xs font-semibold"
-                    style={{ background: "var(--brand)", color: "#fff", opacity: bookBusy ? 0.6 : 1 }}>
+                    style={{ background: "var(--brand)", color: "var(--on-solid)", opacity: bookBusy ? 0.6 : 1 }}>
                     {bookBusy ? "Booking…" : "Hold this load"}
                   </button>
                   <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
@@ -928,7 +928,7 @@ export default function BoardPage() {
                               onClick={() => (b.status === "confirmed" ? cancelConfirmed(b) : releaseHold(b))}
                               className="rounded-input px-12 py-6 text-xs font-semibold"
                               style={{
-                                background: "var(--danger)", color: "#fff",
+                                background: "var(--danger)", color: "var(--on-solid)",
                                 opacity: releaseBusy || (b.status === "confirmed" && releaseReason.trim().length < 4) ? 0.55 : 1
                               }}>
                               {releaseBusy ? "Working…"

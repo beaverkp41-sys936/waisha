@@ -29,7 +29,7 @@ function useToday() {
 function Chip({ text, color }: { text: string; color: string }) {
   return (
     <span className="px-8 py-4 text-[10px] font-bold uppercase tracking-[0.14em]"
-      style={{ borderLeft: `4px solid ${color}`, background: `color-mix(in srgb, ${color} 12%, transparent)`, color }}>
+      style={{ borderLeft: `4px solid ${color}`, background: `color-mix(in srgb, ${color} 22%, transparent)`, color: "#fff" }}>
       {text}
     </span>
   );
@@ -67,7 +67,7 @@ function Segmented({ items, index, onChange }: { items: string[]; index: number;
       {items.map((label, i) => (
         <button key={label} type="button" role="tab" aria-selected={i === index}
           onClick={() => onChange(i)}
-          className={`auth-tab flex-1 pb-8 pt-4 text-xs font-semibold uppercase tracking-[0.08em] ${i === index ? "" : "opacity-60"}`}>
+          className={`auth-tab flex-1 pb-8 pt-4 text-xs font-semibold uppercase tracking-[0.08em] ${i === index ? "font-bold" : "opacity-90"}`}>
           {label}
         </button>
       ))}
@@ -284,7 +284,7 @@ export default function LoginPage() {
               <h1 className="mb-4 text-[28px] font-extrabold tracking-tight" style={{ color: "#ffffff" }}>
                 {greeting}.
               </h1>
-              <p className="mb-16 text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: "var(--gold)" }}>
+              <p className="mb-16 text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: "var(--gold-on-photo)" }}>
                 Your logistics connected
               </p>
               <ErrorChip msg={error} />

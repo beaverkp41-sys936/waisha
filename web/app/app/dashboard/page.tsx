@@ -191,7 +191,7 @@ export default function DashboardPage() {
                 <span className="rounded-full px-10 py-2 text-[9px] font-bold uppercase whitespace-nowrap"
                   style={{
                     background: unlocked ? "var(--success)" : "color-mix(in srgb, var(--gold) 20%, transparent)",
-                    color: unlocked ? "#fff" : "var(--ink)"
+                    color: unlocked ? "var(--on-solid)" : "var(--ink)"
                   }}>
                   {unlocked ? "Included" : a.planLabel}
                 </span>

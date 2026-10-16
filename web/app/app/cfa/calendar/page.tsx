@@ -116,11 +116,12 @@ export default function CalendarPage() {
                 <div key={dateStr}
                   className="min-h-[76px] rounded-input border p-4"
                   style={{
-                    borderColor: dayEvents.length ? "var(--line)" : "transparent",
-                    background: isToday ? "color-mix(in srgb, var(--gold) 12%, transparent)" : "transparent"
+                    borderColor: isToday ? "var(--gold)" : dayEvents.length ? "var(--line)" : "transparent",
+                    background: isToday ? "color-mix(in srgb, var(--gold) 12%, var(--surface))" : "transparent"
                   }}>
-                  <p className="text-[11px] font-bold tabular-nums" style={{
-                    color: isToday ? "var(--gold)" : "var(--ink-soft)"
+                  <p className={"text-[11px] font-bold tabular-nums" + (isToday ? " inline-block rounded-sm px-4" : "")} style={{
+                    color: isToday ? "var(--on-solid)" : "var(--ink-soft)",
+                    background: isToday ? "var(--gold)" : undefined
                   }}>{day}</p>
                   <div className="mt-2 space-y-2">
                     {dayEvents.slice(0, 3).map((e, n) => (

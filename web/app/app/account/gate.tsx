@@ -56,7 +56,7 @@ export function TrialBanner({ licence, onActivate }: { licence: LicenceInfo; onA
   const expired = licence.operational === false;
   return (
     <div role="status" className="flex items-center justify-between gap-16 px-16 py-8 text-sm"
-      style={{ background: "var(--warning)", color: "#fff" }}>
+      style={{ background: "var(--warning)", color: "var(--on-solid)" }}>
       <span className="font-semibold tabular-nums">
         {expired ? "Trial ended — read-only. " : `Trial: ${left} remaining — `}
       </span>
