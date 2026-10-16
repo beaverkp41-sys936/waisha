@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { AnnouncementTicker } from "@/components/AnnouncementTicker";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
@@ -116,6 +117,7 @@ export default function ControlPage() {
             Super Admin · Plans and pricing
           </p>
         </div>
+        <AnnouncementTicker />
         <div className="flex items-center gap-16">
           {me?.roles?.length ? (
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "rgba(255,255,255,0.7)" }}>
@@ -123,6 +125,7 @@ export default function ControlPage() {
             </span>
           ) : null}
           <a href="/control/tenants" className="text-xs font-semibold underline" style={{ color: "var(--adm-accent)" }}>Tenants</a>
+          <a href="/control/announcements" className="text-xs font-semibold underline" style={{ color: "var(--adm-accent)" }}>Announcements</a>
           <button type="button" onClick={logout}
             className="rounded-input border px-16 py-8 text-xs font-semibold text-white"
             style={{ borderColor: "rgba(255,255,255,0.4)" }}>

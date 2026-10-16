@@ -3,6 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { portalFetch } from "./api-client";
+import { AnnouncementTicker } from "@/components/AnnouncementTicker";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
@@ -43,6 +44,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
               {me?.tenant_name ?? "Client portal"}
             </span>
           </div>
+          <AnnouncementTicker />
           <div className="flex items-center gap-16">
             {me?.name && (
               <span className="text-[11px] font-semibold" style={{ color: "rgba(255,255,255,0.75)" }}>

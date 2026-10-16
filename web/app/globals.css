@@ -358,6 +358,7 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   box-shadow: 0 10px 24px rgba(4, 16, 26, 0.28);
 }
 .crumb {
+  flex: none;
   font-size: 13px;
   color: var(--on-photo-soft);
   text-shadow: 0 1px 6px rgba(4, 18, 28, 0.4);
@@ -367,6 +368,72 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 }
 .crumb b { color: #fff; font-weight: 700; }
 .topbar-right { display: flex; align-items: center; gap: 18px; }
+
+/* Announcement ticker — admin-posted notices scrolling mid-header on every
+   shell (app, portal, control). Two identical sequences translate -50% for a
+   seamless loop; the second copy is aria-hidden. */
+.announce-ticker {
+  flex: 1 1 0%;
+  min-width: 0;
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.announce-pin {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(13, 51, 80, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+}
+.announce-viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent);
+}
+.announce-track {
+  display: flex;
+  width: max-content;
+  animation: announceScroll var(--announce-dur, 30s) linear infinite;
+}
+.announce-viewport:hover .announce-track { animation-play-state: paused; }
+.announce-seq { display: inline-flex; align-items: center; white-space: nowrap; }
+.announce-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 6px rgba(4, 18, 28, 0.4);
+}
+.announce-kind {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.announce-dot { opacity: 0.55; }
+@keyframes announceScroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .announce-track { animation: none; }
+  .announce-seq[aria-hidden="true"] { display: none; }
+  .announce-viewport { overflow-x: auto; }
+}
 
 .alert-pill {
   display: inline-flex;

@@ -9,6 +9,7 @@ import { registerErrorHandling } from "./plugins/errors.js";
 import { authRoutes } from "./routes/auth.routes.js";
 import { contentRoutes } from "./routes/content.routes.js";
 import { controlRoutes } from "./routes/control.routes.js";
+import { announcementsRoutes } from "./routes/announcements.routes.js";
 import { licenceRoutes } from "./routes/licence.routes.js";
 import { paymentsRoutes } from "./routes/payments.routes.js";
 import { profileRoutes } from "./routes/profile.routes.js";
@@ -66,6 +67,7 @@ async function main() {
   await app.register(authRoutes, { prefix: "/api/v1" });
   await app.register(contentRoutes, { prefix: "/api/v1" });
   await app.register(controlRoutes, { prefix: "/api/v1" });
+  await app.register(announcementsRoutes, { prefix: "/api/v1" });
   await app.register(licenceRoutes, { prefix: "/api/v1" });
   await app.register(paymentsRoutes, { prefix: "/api/v1" });
   await app.register(profileRoutes, { prefix: "/api/v1" });

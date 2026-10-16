@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { AnnouncementTicker } from "@/components/AnnouncementTicker";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
@@ -94,9 +95,11 @@ export default function TenantsPage() {
             Super Admin · Tenants and licences
           </p>
         </div>
+        <AnnouncementTicker />
         <div className="flex items-center gap-16 text-xs font-semibold">
           <a href="/control" className="underline" style={{ color: "var(--adm-accent)" }}>Plans</a>
           <span className="text-white">Tenants</span>
+          <a href="/control/announcements" className="underline" style={{ color: "var(--adm-accent)" }}>Announcements</a>
           <button type="button" className="rounded-input border px-16 py-8 text-white"
             style={{ borderColor: "rgba(255,255,255,0.4)" }}
             onClick={async () => {

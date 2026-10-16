@@ -7,6 +7,7 @@ import { apiFetch } from "./api-client";
 import { CFA_NAV, OFFICE_NAV, TRANSPORTER_NAV } from "./nav";
 import type { NavItem } from "./nav";
 import { ShellFooter } from "@/components/ShellFooter";
+import { AnnouncementTicker } from "@/components/AnnouncementTicker";
 
 const WORKSPACES = [
   { key: "transporter", label: "Transporter", home: "/app/dashboard" },
@@ -107,6 +108,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <span className="crumb-area">{workspace.label} / </span>
             <b>{current?.label ?? workspace.label}</b>
           </p>
+          <AnnouncementTicker />
           <div className="topbar-right">
             <Link href="/app/notifications" className="alert-pill">
               <span className={"alert-dot" + (alertCount ? " is-live" : "")} aria-hidden />

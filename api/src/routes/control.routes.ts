@@ -26,7 +26,7 @@ function clearControlCookie(reply: FastifyReply) {
   reply.clearCookie(CONTROL_COOKIE, { path: "/api/v1/control" });
 }
 
-async function requireControl(req: any) {
+export async function requireControl(req: any) {
   const token = req.cookies[CONTROL_COOKIE];
   if (!token) throw new ApiError("TOKEN_EXPIRED", "Control sign-in required", 401);
   const r = await pool.query("select platform_auth.get_control_session($1) as s", [sha256(token)]);
@@ -35,7 +35,7 @@ async function requireControl(req: any) {
   req.control = s;
 }
 
-function hasLicenceRole(roles: string[] | undefined): boolean {
+export function hasLicenceRole(roles: string[] | undefined): boolean {
   return !!roles && (roles.includes("super_admin") || roles.includes("billing_admin"));
 }
 
