@@ -41,6 +41,62 @@ function Badge({ label, color }: { label: string; color: string }) {
     style={{ borderLeft: `4px solid ${color}`, color: "var(--ink)" }}>{label}</span>;
 }
 
+/**
+ * The booker's company profile, as captured when they booked (migration 050
+ * snapshots it onto the request — a copy, never a live join). The licence
+ * state chip is the verification at a glance before confirming a hold.
+ */
+function BookerCard({ t }: { t: any }) {
+  const exp = t.booked_licence_expiry ? new Date(`${t.booked_licence_expiry}T00:00:00`) : null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const licState =
+    !t.booked_licence_no ? "none"
+      : !exp ? "no-expiry"
+        : exp.getTime() >= today.getTime() ? "valid" : "expired";
+  const chip = {
+    valid: { label: `Licence valid to ${exp!.toLocaleDateString()}`, color: "var(--success)" },
+    expired: { label: `Licence expired ${exp!.toLocaleDateString()}`, color: "var(--danger)" },
+    "no-expiry": { label: "Licence — no expiry on file", color: "var(--warning)" },
+    none: { label: "No transport licence on file", color: "var(--warning)" }
+  }[licState]!;
+  const facts = [
+    t.booked_fleet_size != null ? `Fleet: ${t.booked_fleet_size} vehicles` : null,
+    t.booked_year_established ? `Est. ${t.booked_year_established}` : null
+  ].filter(Boolean) as string[];
+  return (
+    <div className="mt-8 rounded-card p-12" style={{ background: "var(--milk)", border: "1px solid var(--line)" }}>
+      <p className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: "var(--ink-soft)" }}>
+        Who you would be working with
+      </p>
+      <p className="mt-4 text-sm font-bold" style={{ color: "var(--ink)" }}>{t.booked_company_name}</p>
+      <div className="mt-6 flex flex-wrap items-center gap-x-12 gap-y-4">
+        <span className="rounded-input px-8 py-2 text-[10px] font-bold uppercase"
+          style={{ background: `color-mix(in srgb, ${chip.color} 12%, transparent)`, color: chip.color }}>
+          {chip.label}
+        </span>
+        {facts.map(f => (
+          <span key={f} className="text-[11px]" style={{ color: "var(--ink-soft)" }}>{f}</span>
+        ))}
+      </div>
+      {t.booked_company_description && (
+        <p className="mt-6 text-xs leading-relaxed" style={{ color: "var(--ink-soft)" }}>
+          {t.booked_company_description}
+        </p>
+      )}
+      <div className="mt-6 flex flex-wrap gap-x-16 gap-y-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+        {t.booked_company_services && <span>{t.booked_company_services}</span>}
+        {t.booked_company_corridors && <span>{t.booked_company_corridors}</span>}
+        {t.booked_company_website && <span>{t.booked_company_website}</span>}
+      </div>
+      {t.booked_licence_no && (
+        <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+          Licence no. {t.booked_licence_no}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function JobsPage() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -626,7 +682,8 @@ function Transport({ rows, scope, setScope, onChanged }:
                   <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
                     {t.booked_contact_name} · {t.booked_contact_channel}
                   </p>
-                  <p className="mt-4 text-xs font-semibold"
+                  <BookerCard t={t} />
+                  <p className="mt-8 text-xs font-semibold"
                     style={{ color: left <= 2 * 3_600_000 ? "var(--danger)" : "var(--ink)" }}>
                     Confirm within {countdown(left)} (by{" "}
                     {new Date(holdDeadline(t.temp_booked_at)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -678,6 +735,7 @@ function Transport({ rows, scope, setScope, onChanged }:
                   {t.booked_contact_name} · {t.booked_contact_channel}
                   {t.confirmed_at ? ` · confirmed ${new Date(t.confirmed_at).toLocaleString()}` : ""}
                 </p>
+                <BookerCard t={t} />
                 <button type="button" onClick={() => openPanel(t.id, "cancel")}
                   className="mt-8 rounded-input border px-12 py-6 text-xs font-semibold"
                   style={{ borderColor: "var(--line)", color: "var(--danger)" }}>

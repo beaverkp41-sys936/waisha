@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { Megaphone, ClipboardList } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { apiFetch, apiStream } from "../api-client";
@@ -76,6 +77,11 @@ interface Booking {
 /** Mirrors the server's 12-hour auto-release window. */
 const HOLD_HOURS = 12;
 const holdDeadline = (iso: string) => new Date(iso).getTime() + HOLD_HOURS * 3_600_000;
+
+/** One line of the onboarding checklist returned by GET /board/readiness. */
+interface ReadinessItem {
+  key: string; label: string; done: boolean; required: boolean; detail: string; href: string;
+}
 
 function countdown(ms: number): string {
   if (ms <= 0) return "any moment now";
@@ -180,6 +186,16 @@ export default function BoardPage() {
   const [releaseError, setReleaseError] = useState<string | null>(null);
   const [meName, setMeName] = useState("");
   const [, setClock] = useState(0);
+
+  // Onboarding readiness (spec, Part 2): the checklist the server enforces at
+  // book time. Shown on the board so nothing is a surprise at the last click.
+  const [readiness, setReadiness] = useState<{ ready: boolean; items: ReadinessItem[] } | null>(null);
+  useEffect(() => {
+    (async () => {
+      const r = await apiFetch("/board/readiness");
+      if (r.ok) setReadiness(await r.json());
+    })();
+  }, []);
 
   // One tick every 30s re-renders the countdowns without touching the server.
   useEffect(() => {
@@ -368,7 +384,11 @@ export default function BoardPage() {
       const j = await res.json().catch(() => null);
       if (!res.ok) {
         // The loser of a race gets the server's words, not a generic apology.
-        setBookError(errText(j, "The booking could not be placed. Try again."));
+        // A readiness refusal names the missing profile items in `details`.
+        const missing = Array.isArray(j?.error?.details)
+          ? j.error.details.map((d: any) => d?.message).filter(Boolean) : [];
+        setBookError(errText(j, "The booking could not be placed. Try again.") +
+          (missing.length ? ` Missing: ${missing.join("; ")}.` : ""));
         return;
       }
       setBookOpen(null); setBookChannel("");
@@ -515,6 +535,38 @@ export default function BoardPage() {
         </div>
       )}
 
+      {readiness && !readiness.ready && (
+        <div role="status" className="mt-24 rounded-card border px-16 py-12"
+          style={{ borderColor: "var(--gold)", background: "color-mix(in srgb, var(--gold) 10%, transparent)" }}>
+          <div className="flex flex-wrap items-center justify-between gap-8">
+            <p className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
+              Finish your company profile before you book
+            </p>
+            <Link href="/app/profile" className="waisha-btn rounded-input px-12 py-6 text-xs font-semibold"
+              style={{ background: "var(--brand)", color: "#fff" }}>
+              Open company profile
+            </Link>
+          </div>
+          <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+            A licence and a company name are what publishers check before handing a load
+            to another company. You can keep browsing the board meanwhile.
+          </p>
+          <ul className="mt-8 space-y-4 text-xs">
+            {readiness.items.map(it => (
+              <li key={it.key} className="flex items-start gap-8">
+                <span aria-hidden className="mt-[3px] inline-block h-[8px] w-[8px] shrink-0 rounded-full"
+                  style={{ background: it.done ? "#5fce93" : it.required ? "var(--gold)" : "var(--ink-soft)" }} />
+                <span style={{ color: it.done ? "var(--ink-soft)" : "var(--ink)" }}>
+                  <strong className="font-semibold">{it.label}</strong>
+                  {!it.required && " (recommended)"}
+                  {" — "}{it.detail}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {denied && (
         <div role="status" className="mt-24 px-16 py-12 text-sm"
           style={{ background: "color-mix(in srgb, var(--gold) 14%, transparent)", borderLeft: "4px solid var(--gold)" }}>
@@ -643,6 +695,36 @@ export default function BoardPage() {
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: "var(--ink-soft)" }}>
                   Book this load
                 </p>
+                {readiness && !readiness.ready ? (
+                  <div className="mt-6">
+                    <p className="text-xs leading-relaxed" style={{ color: "var(--ink)" }}>
+                      Booking is locked until these profile items are done:
+                    </p>
+                    <ul className="mt-8 space-y-4 text-xs">
+                      {readiness.items.filter(i => i.required && !i.done).map(i => (
+                        <li key={i.key} className="flex items-start gap-8">
+                          <span aria-hidden className="mt-[3px] inline-block h-[8px] w-[8px] shrink-0 rounded-full"
+                            style={{ background: "var(--gold)" }} />
+                          <span style={{ color: "var(--ink)" }}>
+                            <strong className="font-semibold">{i.label}</strong>{" — "}{i.detail}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="mt-12 flex items-center gap-8">
+                      <Link href="/app/profile" className="waisha-btn rounded-input px-14 py-7 text-xs font-semibold"
+                        style={{ background: "var(--brand)", color: "#fff" }}>
+                        Finish in company profile
+                      </Link>
+                      <button type="button" onClick={() => setBookOpen(null)}
+                        className="rounded-input border px-12 py-6 text-xs font-semibold"
+                        style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+                        Not now
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
                 <p className="mt-6 text-xs leading-relaxed" style={{ color: "var(--ink-soft)" }}>
                   The load leaves the board for every company immediately and is held for you up to
                   {" "}{HOLD_HOURS} hours while {c.companyName} confirms. If they decline — or do not
@@ -677,6 +759,8 @@ export default function BoardPage() {
                     One company wins — if someone books first, nothing is charged and nothing is promised.
                   </span>
                 </div>
+                  </>
+                )}
               </div>
             )}
 

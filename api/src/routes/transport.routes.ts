@@ -283,6 +283,9 @@ export async function transportRoutes(app: FastifyInstance, _opts: unknown) {
                 t.container_count, t.weight_tonnes, t.cbm, t.required_date::text as required_date,
                 t.contact_name, t.contact_channel, t.company_name, t.route_label, t.disclosed_at,
                 t.booked_company_name, t.booked_contact_name, t.booked_contact_channel,
+                t.booked_company_description, t.booked_company_services, t.booked_company_corridors,
+                t.booked_company_website, t.booked_fleet_size, t.booked_year_established,
+                t.booked_licence_no, t.booked_licence_expiry::text as booked_licence_expiry,
                 t.temp_booked_at, t.reminder_sent_at, t.released_at, t.confirmed_at,
                 t.job_id, t.shipment_id, s.file_number, s.shipment_type,
                 j.status as job_status, j.transport_consent

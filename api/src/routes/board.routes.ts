@@ -43,6 +43,75 @@ const bookSchema = z.object({
   contactChannel: z.string().trim().min(5).max(160)
 }).strict();
 
+/**
+ * Onboarding readiness (spec, Part 2: "onboarding with company profile and
+ * verification (licence, contact)"). Required to book: a company name and a
+ * transport licence that is on file and not expired. The profile extras are
+ * recommended — they shape the card the publisher reviews, but they do not
+ * block. This same list feeds GET /board/readiness and the 409 on booking.
+ */
+async function companyReadiness(c: any, tenantId: string) {
+  const p = (await c.query(
+    `select company_name, description, services_offered, corridors_served,
+            transport_licence_no, transport_licence_expiry
+       from company_profiles where tenant_id = $1`, [tenantId])).rows[0] ?? null;
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const hasName = !!p?.company_name?.trim();
+  const licNo = !!p?.transport_licence_no?.trim();
+  const licExp: number | null = p?.transport_licence_expiry
+    ? new Date(p.transport_licence_expiry).getTime() : null;
+  const licValid = licExp !== null && licExp >= startOfToday.getTime();
+  const items = [
+    {
+      key: "company_name", label: "Company name on the profile",
+      done: hasName, required: true,
+      detail: hasName ? "On file."
+        : "Transporters see this name on the load they are holding for you.",
+      href: "/app/profile"
+    },
+    {
+      key: "licence_no", label: "Transport licence number",
+      done: licNo, required: true,
+      detail: licNo ? "On file."
+        : "Publishers check the licence of the company holding their load.",
+      href: "/app/profile"
+    },
+    {
+      key: "licence_expiry", label: "Licence not expired",
+      done: licValid, required: true,
+      detail: licValid
+        ? `Valid until ${new Date(licExp!).toLocaleDateString()}.`
+        : p?.transport_licence_expiry
+          ? `Expired ${new Date(licExp!).toLocaleDateString()} — renew, then update the profile.`
+          : "Add the licence expiry date from the licence itself.",
+      href: "/app/profile"
+    },
+    {
+      key: "description", label: "About your company",
+      done: !!p?.description?.trim(), required: false,
+      detail: p?.description?.trim() ? "On file."
+        : "A short line about who you are, shown to publishers you book with.",
+      href: "/app/profile"
+    },
+    {
+      key: "services", label: "Services offered",
+      done: !!p?.services_offered?.trim(), required: false,
+      detail: p?.services_offered?.trim() ? "On file."
+        : "Tell publishers what you haul — haulage, clearing, and so on.",
+      href: "/app/profile"
+    },
+    {
+      key: "corridors", label: "Corridors served",
+      done: !!p?.corridors_served?.trim(), required: false,
+      detail: p?.corridors_served?.trim() ? "On file."
+        : "The routes you run — Dar to Arusha, and so on.",
+      href: "/app/profile"
+    }
+  ];
+  return { ready: items.every((i) => !i.required || i.done), items };
+}
+
 /** One SSE frame. The event name is the type, so clients can addEventListener. */
 function frame(e: BoardEvent) {
   return `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
@@ -59,6 +128,10 @@ export async function boardRoutes(app: FastifyInstance, _opts: unknown) {
 
   app.get("/board/count", { preHandler: [requireAuth, requirePermission("board.view")] },
     async () => boardSummary());
+
+  // ---------- Can this company book? The onboarding checklist ----------
+  app.get("/board/readiness", { preHandler: [requireAuth, requirePermission("board.view")] },
+    async (req: any) => withTenant(req.user.tid, (c) => companyReadiness(c, req.user.tid)));
 
   // ---------- One card, open requests only ----------
   app.get("/board/:id", { preHandler: [requireAuth, requirePermission("board.view")] },
@@ -82,6 +155,16 @@ export async function boardRoutes(app: FastifyInstance, _opts: unknown) {
       const { id } = req.params as { id: string };
       const body = bookSchema.parse(req.body);
       const out = await withTenant(req.user.tid, async (c) => {
+        // Onboarding gate: booking is what a licence is for. Same checklist
+        // as GET /board/readiness, refused with the missing pieces named.
+        const readiness = await companyReadiness(c, req.user.tid);
+        if (!readiness.ready) {
+          throw new ApiError("CONFLICT",
+            "Your company is not ready to book loads yet — finish these profile items first.",
+            409,
+            readiness.items.filter((i) => i.required && !i.done)
+              .map((i) => ({ field: i.key, message: i.label })));
+        }
         const r = (await c.query(
           `select transport_book_request($1,$2,$3,$4,$5) as r`,
           [id, req.user.tid, req.user.sub, body.contactName, body.contactChannel])).rows[0].r;

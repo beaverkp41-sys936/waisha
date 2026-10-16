@@ -73,6 +73,26 @@ const sql: [string, string, unknown[]][] = [
       where b.tenant_id = $1 and b.deleted_at is null
         and b.created_at > now() - interval '30 days'`, [T]],
 
+  // ---- step 7: read state, readiness checklist, booker review copy ----
+  ["alerts: this user's read keys",
+    `select alert_key from alert_reads where user_id = $1 and tenant_id = $2`, [U, T]],
+  ["alerts: mark read (idempotent by primary key)",
+    `insert into alert_reads (user_id, tenant_id, alert_key)
+     select $1, $2, k from unnest($3::text[]) as k
+     on conflict (user_id, alert_key) do nothing`, [U, T, ["booking_hold:x"]]],
+  ["readiness: the company profile checklist",
+    `select company_name, description, services_offered, corridors_served,
+            transport_licence_no, transport_licence_expiry
+       from company_profiles where tenant_id = $1`, [T]],
+  ["transport list: the booker's company copy",
+    `select t.id, t.status, t.booked_company_name, t.booked_company_description,
+            t.booked_company_services, t.booked_company_corridors, t.booked_company_website,
+            t.booked_fleet_size, t.booked_year_established, t.booked_licence_no,
+            t.booked_licence_expiry::text as booked_licence_expiry
+       from transport_requests t
+      where t.tenant_id = $1 and t.deleted_at is null
+        and t.status in ('temp_booked','confirmed')`, [T]],
+
   // ---- guards the functions rely on ----
   ["guard: tenant scope setter",
     `select set_config('app.tenant_id', $1, true)`, [T]]
@@ -189,12 +209,85 @@ async function main() {
   if (want.length) { failed++; console.log("FAIL  bookings shape -", want.join("; ")); }
   else console.log("ok    transport_bookings (rls on, select-only, one active per request)");
 
+  console.log("\n--- alert_reads: per-user seen state, append-only for the app role ---");
+  const ar = (await pool.query(
+    `select c.relrowsecurity as rls,
+            (select count(*) from pg_policies p
+              where p.tablename = 'alert_reads' and p.schemaname = 'public') as policies,
+            has_table_privilege('app_runtime','public.alert_reads','SELECT') as can_select,
+            has_table_privilege('app_runtime','public.alert_reads','INSERT') as can_insert,
+            has_table_privilege('app_runtime','public.alert_reads','UPDATE') as can_update,
+            has_table_privilege('app_runtime','public.alert_reads','DELETE') as can_delete,
+            (select count(*) from pg_constraint k
+              where k.conrelid = c.oid and k.contype = 'p'
+                and pg_get_constraintdef(k.oid) = 'PRIMARY KEY (user_id, alert_key)') as pk,
+            (select count(*) from pg_constraint k
+              where k.conrelid = c.oid and k.contype = 'f'
+                and k.confdeltype = 'c') as cascade_fk
+       from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relname = 'alert_reads'`)).rows[0];
+  const arw: string[] = [];
+  if (!ar) arw.push("table missing");
+  else {
+    if (!ar.rls) arw.push("RLS off");
+    if (Number(ar.policies) === 0) arw.push("no tenant policy");
+    if (!ar.can_select || !ar.can_insert) arw.push("app_runtime cannot read or mark keys");
+    if (ar.can_update || ar.can_delete)
+      arw.push("app_runtime can rewrite read state - it must be append-only");
+    if (Number(ar.pk) !== 1) arw.push("primary key (user_id, alert_key) missing");
+    if (Number(ar.cascade_fk) === 0) arw.push("no on-delete-cascade for the user row");
+  }
+  if (arw.length) { failed++; console.log("FAIL  alert_reads shape -", arw.join("; ")); }
+  else console.log("ok    alert_reads (rls on, select+insert only, keyed per user, cascades with the user)");
+
+  console.log("\n--- step 7 copy columns: the booker's profile rides on both rows ---");
+  const copyCols = (await pool.query(
+    `select table_name, count(*)::int as n from information_schema.columns
+      where table_schema = 'public'
+        and ((table_name = 'transport_requests' and column_name in
+                ('booked_company_description','booked_company_services','booked_company_corridors',
+                 'booked_company_website','booked_fleet_size','booked_year_established',
+                 'booked_licence_no','booked_licence_expiry'))
+          or (table_name = 'transport_bookings' and column_name in
+                ('booker_description','booker_services','booker_corridors','booker_website',
+                 'booker_fleet_size','booker_year_established','booker_licence_no',
+                 'booker_licence_expiry')))
+      group by table_name`)).rows as { table_name: string; n: number }[];
+  const reqCols = copyCols.find((r) => r.table_name === "transport_requests")?.n ?? 0;
+  const bkCols = copyCols.find((r) => r.table_name === "transport_bookings")?.n ?? 0;
+  if (reqCols !== 8 || bkCols !== 8) {
+    failed++;
+    console.log(`FAIL  copy columns - requests=${reqCols}/8, bookings=${bkCols}/8`);
+  } else {
+    console.log("ok    the 8 booked_* and 8 booker_* snapshot columns all exist");
+  }
+
+  console.log("\n--- timers: the clock leaves a record (audit + job timeline) ---");
+  const defs = (await pool.query(
+    `select p.proname, pg_get_functiondef(p.oid) as def
+       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname in ('transport_booking_reminders','transport_booking_releases',
+                          'transport_book_request')`)).rows;
+  for (const [fn, needs] of [
+    ["transport_booking_reminders", ["audit_logs", "job_activity", "'transport.booking_reminded'"]],
+    ["transport_booking_releases", ["audit_logs", "job_activity", "'transport.booking_auto_released'"]],
+    ["transport_book_request", ["company_profiles", "booked_company_description", "booker_description"]]
+  ] as [string, string[]][]) {
+    const row = defs.find((d: any) => d.proname === fn);
+    const missing = needs.filter((need) => !String(row?.def ?? "").includes(need));
+    if (!row || missing.length) {
+      failed++;
+      console.log("FAIL ", fn, "- missing", missing.join(", ") || "(function absent)");
+    } else console.log(`ok    ${fn} — writes ${needs.join(", ")}`);
+  }
+
   console.log("\n--- supabase default roles: no access to the transport surface ---");
   const leaked = await pool.query(
     `select g.table_name as obj, g.grantee, string_agg(g.privilege_type, ',' order by g.privilege_type) as privs
        from information_schema.role_table_grants g
       where g.table_schema = 'public'
-        and g.table_name in ('transport_requests','transport_bookings')
+        and g.table_name in ('transport_requests','transport_bookings','alert_reads')
         and g.grantee in ('anon','authenticated','service_role')
       group by g.table_name, g.grantee
       union all

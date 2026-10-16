@@ -183,6 +183,12 @@ const ALLOWED_COLUMNS = new Set([
   // Never client identity beyond the contact the booker chose to give.
   "booked_by_tenant_id", "booked_by", "booked_company_name", "booked_contact_name",
   "booked_contact_channel", "temp_booked_at", "reminder_sent_at", "released_at", "confirmed_at",
+  // Booker review snapshot (migration 050): the booker's own company card, copied
+  // at book time for the publisher to vet. CFA-side only — the board projection
+  // (transport_board_card) has a fixed shape and never reads these.
+  "booked_company_description", "booked_company_services", "booked_company_corridors",
+  "booked_company_website", "booked_fleet_size", "booked_year_established",
+  "booked_licence_no", "booked_licence_expiry",
   "created_by", "updated_by", "created_at", "updated_at", "deleted_at"
 ]);
 

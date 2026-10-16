@@ -87,10 +87,12 @@ async function main() {
   if (!health) { console.error("API not running on :4000 — boot it first"); process.exit(1); }
   if (!TICK_SECRET) console.error("INTERNAL_TICK_SECRET missing here — tick auth checks will fail");
 
-  const NAMES = ["Bookprobe Cargo Ltd", "Bookprobe Freight One Ltd", "Bookprobe Freight Two Ltd"];
-  const WIPE = ["transport_bookings", "transport_requests", "job_handovers", "job_documents",
-    "job_activity", "cargo_tasks", "job_stages", "jobs", "cargo_shipments", "documents", "routes",
-    "company_profiles", "sessions", "otp_codes", "password_resets"];
+  const NAMES = ["Bookprobe Cargo Ltd", "Bookprobe Freight One Ltd", "Bookprobe Freight Two Ltd",
+    "Bookprobe Cargo Unready Ltd"];
+  // alert_reads first: it references users, so it must go before them.
+  const WIPE = ["alert_reads", "transport_bookings", "transport_requests", "job_handovers",
+    "job_documents", "job_activity", "cargo_tasks", "job_stages", "jobs", "cargo_shipments",
+    "documents", "routes", "company_profiles", "sessions", "otp_codes", "password_resets"];
   const wipeAll = async (ids: string[]) => {
     if (!ids.length) return;
     for (const t of WIPE) await owner.query(`delete from ${t} where tenant_id = any($1::uuid[])`, [ids]);
@@ -104,10 +106,11 @@ async function main() {
   await wipeAll(stale);
   if (stale.length) console.log("pre-clean removed", stale.length, "stale probe tenants");
 
-  const TA = randomUUID(), T1 = randomUUID(), T2 = randomUUID();
-  const uA = randomUUID(), uT1 = randomUUID(), uT2 = randomUUID(), uBlocked = randomUUID();
+  const TA = randomUUID(), T1 = randomUUID(), T2 = randomUUID(), T3 = randomUUID();
+  const uA = randomUUID(), uT1 = randomUUID(), uT2 = randomUUID(), uBlocked = randomUUID(),
+    uT3 = randomUUID();
   const ROUTE_A = randomUUID();
-  const ids = [TA, T1, T2, uA, uT1, uT2, uBlocked];
+  const ids = [TA, T1, T2, T3, uA, uT1, uT2, uBlocked, uT3];
 
   const roleOf = async (k: string) => (await owner.query(
     `select id from roles where key = $1 and tenant_id is null`, [k])).rows[0]?.id;
@@ -118,26 +121,31 @@ async function main() {
   await oi(`insert into tenants (id, type, name) values ($1,'transporter',$2)`, [TA, NAMES[0]]);
   await oi(`insert into tenants (id, type, name) values ($1,'transporter',$2)`, [T1, NAMES[1]]);
   await oi(`insert into tenants (id, type, name) values ($1,'transporter',$2)`, [T2, NAMES[2]]);
+  await oi(`insert into tenants (id, type, name) values ($1,'transporter',$2)`, [T3, NAMES[3]]);
   for (const [t, n, code, fleet, year] of [
     [TA, NAMES[0], "BKC", 24, 2012], [T1, NAMES[1], "BK1", 9, 2018], [T2, NAMES[2], "BK2", 4, 2022]
   ] as [string, string, string, number, number][]) {
     await oi(`insert into company_profiles (id, tenant_id, company_name, company_code,
                description, services_offered, corridors_served, website,
-               fleet_size_declared, year_established)
+               fleet_size_declared, year_established,
+               transport_licence_no, transport_licence_expiry)
              values ($1,$2,$3,$4,'Freight desk for the booking smoke','Haulage, clearing',
-               'Dar - Arusha - Namanga',$3 || '.bookprobe.example',$5,$6)`,
+               'Dar - Arusha - Namanga',$3 || '.bookprobe.example',$5,$6,
+               $4 || '-TZ-LIC', now() + interval '365 days')`,
       [randomUUID(), t, n, code, fleet, year]);
   }
+  // T3 stays WITHOUT a profile on purpose — the onboarding-readiness probe.
   for (const [u, t, name, email] of [
     [uA, TA, "Cargo Director", "cargo.director@bookprobe.example"],
     [uT1, T1, "Freight One Director", "one.director@bookprobe.example"],
     [uT2, T2, "Freight Two Director", "two.director@bookprobe.example"],
-    [uBlocked, T1, "Freight One Trainee", "one.trainee@bookprobe.example"]
+    [uBlocked, T1, "Freight One Trainee", "one.trainee@bookprobe.example"],
+    [uT3, T3, "Unready Director", "unready.director@bookprobe.example"]
   ] as [string, string, string, string][]) {
     await oi(`insert into users (id, tenant_id, user_type, full_name, status, email)
               values ($1,$2,'staff',$3,'active',$4)`, [u, t, name, email]);
   }
-  for (const u of [uA, uT1, uT2]) await oi(`insert into user_roles (user_id, role_id) values ($1,$2)`, [u, directorRole]);
+  for (const u of [uA, uT1, uT2, uT3]) await oi(`insert into user_roles (user_id, role_id) values ($1,$2)`, [u, directorRole]);
   await oi(`insert into user_roles (user_id, role_id) values ($1,$2)`, [uBlocked, traineeRole]);
 
   const regions = (await owner.query(
@@ -155,9 +163,10 @@ async function main() {
   const tokT1 = await mint(uT1, T1, "director", ["director"]);
   const tokT2 = await mint(uT2, T2, "director", ["director"]);
   const tokBlocked = await mint(uBlocked, T1, "staff", ["trainee"]);
+  const tokT3 = await mint(uT3, T3, "director", ["director"]);
 
   // Two transporter lists worth of bookings, tracked so isolation is provable.
-  const t1Ids = new Set<string>(), t2Ids = new Set<string>();
+  const t1Ids = new Set<string>(), t2Ids = new Set<string>(), t3Ids = new Set<string>();
 
   async function newFile(tok: string, consignee: string) {
     const c = await call("/cargo", tok, post({
@@ -213,10 +222,16 @@ async function main() {
   const withdraw = (tok: string, id: string) => call(`/transport-requests/${id}/cancel`, tok, bare);
   const reqRow = async (id: string) => (await owner.query(
     `select status, released_at, confirmed_at, reminder_sent_at, temp_booked_at,
-            booked_company_name, booked_contact_name
+            booked_company_name, booked_contact_name,
+            booked_company_description, booked_company_services, booked_company_corridors,
+            booked_fleet_size, booked_year_established, booked_licence_no,
+            booked_licence_expiry::text as booked_licence_expiry
        from transport_requests where id = $1`, [id])).rows[0];
   const bkRow = async (id: string) => (await owner.query(
-    `select status, ended_at, ended_by, ended_reason, reminder_sent_at, temp_booked_at
+    `select status, ended_at, ended_by, ended_reason, reminder_sent_at, temp_booked_at,
+            booker_description, booker_services, booker_corridors, booker_fleet_size,
+            booker_year_established, booker_licence_no,
+            booker_licence_expiry::text as booker_licence_expiry
        from transport_bookings where id = $1`, [id])).rows[0];
 
   // ================= 1. who may book =================
@@ -233,6 +248,55 @@ async function main() {
   check("the publisher cannot book its own load", own.status === 409 && hasMsg(own.body, /own load/i),
     `[${own.status}] ${JSON.stringify(own.body)}`);
 
+  // ================= 1b. onboarding readiness: profile + licence gate booking =================
+  const readyT1 = await call("/board/readiness", tokT1);
+  check("a company with a full profile and a live licence reads ready",
+    readyT1.status === 200 && readyT1.body?.ready === true &&
+      (readyT1.body?.items ?? []).every((i: any) => i.done),
+    JSON.stringify(readyT1.body));
+  const readyAnon = await call("/board/readiness", null);
+  check("a signed-out caller cannot read a readiness checklist", readyAnon.status === 401, `[${readyAnon.status}]`);
+
+  const readyT3a = await call("/board/readiness", tokT3);
+  check("a company with no profile at all is not ready, and told what is required",
+    readyT3a.status === 200 && readyT3a.body?.ready === false &&
+      readyT3a.body?.items?.filter((i: any) => i.required && !i.done).map((i: any) => i.key)
+        .sort().join(",") === "company_name,licence_expiry,licence_no",
+    JSON.stringify(readyT3a.body));
+  const bookT3a = await call(`/board/${R4}/book`, tokT3, post(bookBody("Unready Desk", "desk@unready.bookprobe.example")));
+  check("booking without a profile is refused, naming the missing items",
+    bookT3a.status === 409 && hasMsg(bookT3a.body, /not ready/i) &&
+      (bookT3a.body?.error?.details ?? []).some((d: any) => d.field === "licence_no"),
+    `[${bookT3a.status}] ${JSON.stringify(bookT3a.body)}`);
+
+  // Profile on file, but the licence already lapsed — still not ready.
+  await oi(`insert into company_profiles (id, tenant_id, company_name,
+             transport_licence_no, transport_licence_expiry)
+           values ($1,$2,'Bookprobe Cargo Unready Ltd','BK3-TZ-LIC', now() - interval '30 days')`,
+    [randomUUID(), T3]);
+  const readyT3b = await call("/board/readiness", tokT3);
+  const expiryItem = (readyT3b.body?.items ?? []).find((i: any) => i.key === "licence_expiry");
+  check("an expired licence keeps the company unready",
+    readyT3b.body?.ready === false && expiryItem?.done === false &&
+      String(expiryItem?.detail ?? "").toLowerCase().includes("expired"),
+    JSON.stringify(readyT3b.body));
+  const bookT3b = await call(`/board/${R4}/book`, tokT3, post(bookBody("Unready Desk", "desk@unready.bookprobe.example")));
+  check("booking with an expired licence is refused too", bookT3b.status === 409, `[${bookT3b.status}]`);
+
+  await oi(`update company_profiles set transport_licence_expiry = now() + interval '200 days'
+             where tenant_id = $1`, [T3]);
+  const readyT3c = await call("/board/readiness", tokT3);
+  check("renewing the licence flips the company to ready", readyT3c.body?.ready === true,
+    JSON.stringify(readyT3c.body));
+  const bookT3c = await call(`/board/${R4}/book`, tokT3, post(bookBody("Unready Desk", "desk@unready.bookprobe.example")));
+  check("a newly ready company books on the first try", bookT3c.status === 201 && !!bookT3c.body?.bookingId,
+    `[${bookT3c.status}] ${JSON.stringify(bookT3c.body)}`);
+  const b3u: string = bookT3c.body?.bookingId ?? "";
+  if (b3u) t3Ids.add(b3u);
+  const relT3 = await call(`/bookings/${b3u}/release`, tokT3, post({}));
+  check("the readiness probe releases its hold and R4 is open again", relT3.status === 200 &&
+    (await reqRow(R4)).status === "open", `[${relT3.status}]`);
+
   // ================= 2. the hold hides the load, the latecomer is told =================
   const before = await call("/board?limit=100", tokT2);
   const b1res = await call(`/board/${R1}/book`, tokT1, post(bookBody("Book One Desk", "desk@one.bookprobe.example")));
@@ -240,6 +304,20 @@ async function main() {
     b1res.body?.company === NAMES[1], `[${b1res.status}] ${JSON.stringify(b1res.body)}`);
   const b1: string = b1res.body?.bookingId ?? "";
   if (b1) t1Ids.add(b1);
+
+  // The booker's company card is snapshotted at booking time — both on the
+  // request (for the publisher) and on the booking row (for the history).
+  const snapReq = await reqRow(R1);
+  const snapBk = await bkRow(b1);
+  check("the booker's company card is copied onto the request at book time",
+    snapReq.booked_company_description === "Freight desk for the booking smoke" &&
+      snapReq.booked_fleet_size === 9 && snapReq.booked_year_established === 2018 &&
+      snapReq.booked_licence_no === "BK1-TZ-LIC" && !!snapReq.booked_licence_expiry,
+    JSON.stringify(snapReq));
+  check("the same card is frozen onto the booking row itself",
+    snapBk.booker_description === "Freight desk for the booking smoke" &&
+      snapBk.booker_licence_no === "BK1-TZ-LIC" && !!snapBk.booker_licence_expiry,
+    JSON.stringify(snapBk));
 
   const gone = await call(`/board/${R1}`, tokT2);
   check("the held load vanishes from the board for everyone else",
@@ -266,6 +344,42 @@ async function main() {
     (alertsA.body?.items ?? []).some((i: any) =>
       i.type === "booking_hold" && String(i.title).includes(NAMES[1])),
     JSON.stringify((alertsA.body?.items ?? []).slice(0, 3)));
+
+  // ================= 2b. unread state on derived alerts =================
+  const holdItem = (alertsA.body?.items ?? []).find((i: any) =>
+    i.type === "booking_hold" && String(i.title).includes(NAMES[1]));
+  const holdKey = String(holdItem?.key ?? "booking_hold:missing");
+  check("the hold alert carries a stable key and starts unseen",
+    typeof holdItem?.key === "string" && holdItem.key.length > 8 && holdItem?.seen === false &&
+      (alertsA.body?.counts?.unread ?? 0) > 0,
+    JSON.stringify({ key: holdItem?.key, seen: holdItem?.seen, counts: alertsA.body?.counts }));
+  const anonRead = await call("/notifications/read", null, post({ all: true }));
+  check("a signed-out caller cannot mark alerts read", anonRead.status === 401, `[${anonRead.status}]`);
+  const emptyRead = await call("/notifications/read", tokA, post({}));
+  check("marking read with neither keys nor all is refused", emptyRead.status === 400, `[${emptyRead.status}]`);
+  const mark1 = await call("/notifications/read", tokA, post({ keys: [holdKey] }));
+  check("marking one key reports exactly one new read",
+    mark1.status === 200 && mark1.body?.marked === 1, `[${mark1.status}] ${JSON.stringify(mark1.body)}`);
+  const mark1again = await call("/notifications/read", tokA, post({ keys: [holdKey] }));
+  check("marking the same key again is idempotent",
+    mark1again.status === 200 && mark1again.body?.marked === 0,
+    `[${mark1again.status}] ${JSON.stringify(mark1again.body)}`);
+  const seen1 = await call("/notifications", tokA);
+  const seenHold = (seen1.body?.items ?? []).find((i: any) => i.key === holdKey);
+  check("the refetch shows the key as seen and the unread count down by one",
+    seenHold?.seen === true && seen1.body?.counts?.unread === (alertsA.body?.counts?.unread ?? 0) - 1,
+    JSON.stringify({ seen: seenHold?.seen, unread: seen1.body?.counts?.unread,
+      before: alertsA.body?.counts?.unread }));
+  const unreadAfter1 = seen1.body?.counts?.unread ?? -1;
+  const markAll = await call("/notifications/read", tokA, post({ all: true }));
+  check("mark-all-read clears every remaining unread",
+    markAll.status === 200 && markAll.body?.marked === unreadAfter1,
+    `[${markAll.status}] ${JSON.stringify(markAll.body)} unreadAfter1=${unreadAfter1}`);
+  const seen2 = await call("/notifications", tokA);
+  check("nothing is left unread afterwards", seen2.body?.counts?.unread === 0,
+    JSON.stringify(seen2.body?.counts));
+  const seenHold2 = (seen2.body?.items ?? []).find((i: any) => i.key === holdKey);
+  check("the alert itself still stands — read, not gone", seenHold2?.seen === true, JSON.stringify(seenHold2));
 
   // ================= 3. confirm, then cancel with a reason (R1) =================
   const cf = await call(`/transport-requests/${R1}/confirm`, tokA, bare);
@@ -420,6 +534,17 @@ async function main() {
   check("request and booking were stamped in the same instant — one atomic pass",
     reqStamp instanceof Date && bkStamp instanceof Date && reqStamp.getTime() === bkStamp.getTime(),
     JSON.stringify({ reqStamp, bkStamp }));
+  // The clock is an actor too: the reminder must be on the record, not just in a column.
+  const remAudit = await owner.query(
+    `select count(*)::int as n from audit_logs
+      where entity_id = $1 and action = 'transport.booking_reminded' and actor_role = 'system'`, [R3]);
+  check("the 6h reminder is written to the audit trail with the system as actor",
+    remAudit.rows[0].n === 1, `audit rows=${remAudit.rows[0].n}`);
+  const remAct = await owner.query(
+    `select count(*)::int as n from job_activity
+      where entity_id = $1 and action = 'transport.reminder_sent' and actor_role = 'system'`, [R3]);
+  check("the publisher's job timeline also sees the reminder", remAct.rows[0].n === 1,
+    `timeline rows=${remAct.rows[0].n}`);
   check("a hold at 7h is still held — nothing released early",
     (await reqRow(R3)).status === "temp_booked");
   const alertsA3 = await call("/notifications", tokA);
@@ -445,6 +570,19 @@ async function main() {
   check("the expiry carries no actor and no reason — only ended_at",
     b3fin.ended_reason === null && b3fin.ended_by === null && b3fin.ended_at !== null,
     JSON.stringify(b3fin));
+  // The silent auto-release now leaves a trace: audit trail + job timeline,
+  // both naming the booking that expired.
+  const relAudit = await owner.query(
+    `select count(*)::int as n from audit_logs
+      where entity_id = $1 and action = 'transport.booking_auto_released'
+        and actor_role = 'system' and after->>'bookingId' = $2`, [R3, b3]);
+  check("the auto-release is written to the audit trail, naming the booking",
+    relAudit.rows[0].n === 1, `audit rows=${relAudit.rows[0].n}`);
+  const relAct = await owner.query(
+    `select count(*)::int as n from job_activity
+      where entity_id = $1 and action = 'transport.hold_expired' and actor_role = 'system'`, [R3]);
+  check("the publisher's job timeline also sees the expiry", relAct.rows[0].n === 1,
+    `timeline rows=${relAct.rows[0].n}`);
   const releasedStamp = (r3fin.released_at as Date).getTime();
   const t3res = await tick(TICK_SECRET);
   const t4res = await tick(TICK_SECRET);
@@ -453,6 +591,11 @@ async function main() {
       (await reqRow(R3)).status === "open" &&
       ((await reqRow(R3)).released_at as Date).getTime() === releasedStamp,
     JSON.stringify({ t3: t3res.body, t4: t4res.body }));
+  const relAuditAfter = await owner.query(
+    `select count(*)::int as n from audit_logs
+      where entity_id = $1 and action = 'transport.booking_auto_released'`, [R3]);
+  check("the idempotent re-runs wrote no duplicate audit rows",
+    relAuditAfter.rows[0].n === 1, `audit rows=${relAuditAfter.rows[0].n}`);
   check("the auto-released load is on the board again",
     (await call(`/board/${R3}`, tokT2)).status === 200);
   const wdR3 = await withdraw(tokA, R3);
@@ -506,6 +649,12 @@ async function main() {
     mineB3?.status === "expired" && mineB3?.ended_reason === null && !!mineB3?.ended_at,
     JSON.stringify(mineB3));
 
+  const rowsT3 = (await call("/my-bookings", tokT3)).body ?? [];
+  check("the readiness probe's released booking appears in its own company's list only",
+    rowsT3.length === t3Ids.size && rowsT3.every((r: any) => t3Ids.has(r.id)) &&
+      rowsT3.every((r: any) => r.status === "released"),
+    JSON.stringify(rowsT3.map((r: any) => ({ id: r.id, status: r.status }))));
+
   const finBoard = await call("/board?limit=100", tokT2);
   check("after the run none of the probe loads are on the board",
     !(finBoard.body?.rows ?? []).some((r: any) => R.includes(r.id)),
@@ -527,6 +676,7 @@ async function main() {
   check("residue: requests gone", await residue(`select count(*)::int n from transport_requests where tenant_id = any($1::uuid[])`) === 0);
   check("residue: bookings gone", await residue(`select count(*)::int n from transport_bookings where tenant_id = any($1::uuid[])`) === 0);
   check("residue: company profiles gone", await residue(`select count(*)::int n from company_profiles where tenant_id = any($1::uuid[])`) === 0);
+  check("residue: alert reads gone", await residue(`select count(*)::int n from alert_reads where tenant_id = any($1::uuid[])`) === 0);
 
   await owner.end();
   if (failures) { console.log(`\n${failures} FAILED`); process.exit(1); }

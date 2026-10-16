@@ -44,16 +44,26 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const current = items.find(i => i.href === activeHref(pathname, items));
   const workspace = WORKSPACES.find(w => w.key === area)!;
 
-  // Header alert count — computed live from overdue/expiring/low-stock signals.
+  // Header alert count — the number of unseen alerts, refreshed on a timer
+  // and on demand (the alerts page raises "waisha:alerts" when it marks read).
   const [alertCount, setAlertCount] = useState<number | null>(null);
   useEffect(() => {
     let cancelled = false;
-    apiFetch("/notifications").then(async res => {
-      if (!res.ok || cancelled) return;
-      const j = await res.json();
-      if (!cancelled) setAlertCount((j.counts?.critical ?? 0) + (j.counts?.warning ?? 0));
-    }).catch(() => { });
-    return () => { cancelled = true; };
+    const read = () => {
+      apiFetch("/notifications").then(async res => {
+        if (!res.ok || cancelled) return;
+        const j = await res.json();
+        if (!cancelled) setAlertCount(j.counts?.unread ?? 0);
+      }).catch(() => { });
+    };
+    read();
+    const tick = setInterval(read, 60_000);
+    window.addEventListener("waisha:alerts", read);
+    return () => {
+      cancelled = true;
+      clearInterval(tick);
+      window.removeEventListener("waisha:alerts", read);
+    };
   }, []);
 
   return (
