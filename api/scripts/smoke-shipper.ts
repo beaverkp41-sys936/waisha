@@ -71,6 +71,10 @@ async function main() {
   console.log(`probe tenant ${tenant_id} as "${full_name}"`);
 
   // ---- pre-clean any stale smoke rows ----
+  // This suite signs in for real about seven times, and the login bucket is
+  // 10 per 300s per IP, so a previous suite's logins can throttle it on their
+  // own. The buckets are clock-aligned windows, not history — clear them.
+  await owner.query(`delete from rate_limits where bucket like 'login:%' or bucket like 'ip:%'`);
   await owner.query(
     `update shipper_accounts sa set deleted_at = now()
      from clients c where sa.client_id = c.id and c.tenant_id = $1
