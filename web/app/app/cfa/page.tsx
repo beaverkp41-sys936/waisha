@@ -29,6 +29,12 @@ const MODULES = [
     plan: "Business"
   },
   {
+    name: "Consolidator & Manifests",
+    href: "/app/cfa/consolidation",
+    description: "A register of every unit you carry on — mainland trucks and trailers, vessels, air freight and rail, each tagged with the cargo lanes it takes. Build an LCL leg from them, add parcel lines with their own tracking numbers, settle each parcel against its freight and print the signed manifest.",
+    plan: "Business"
+  },
+  {
     name: "Financial Ledger",
     href: "/app/cfa/ledger",
     description: "Accounts receivable and payable, profit-and-loss summary cards and a monthly revenue-versus-expenses view of cash flow.",

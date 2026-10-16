@@ -64,6 +64,18 @@ const PARCEL_SELECT = `
          (p.transport_fee - p.amount_paid)::float8 as balance_due
   from consolidation_parcels p`;
 
+// Copied from consolidation.routes.ts: the print sheet's letterhead read.
+const LETTERHEAD_SQL = `
+  select cp.company_name, cp.tin_display, cp.brela_number, cp.vat_number, cp.website,
+         b.postal_address, b.street, b.email as branch_email,
+         (select d.id from documents d
+           where d.tenant_id = $1 and d.entity_type = 'tenant'
+             and d.kind = 'logo' and d.deleted_at is null
+           order by d.created_at desc limit 1) as logo_document_id
+  from company_profiles cp
+  left join branches b on b.tenant_id = cp.tenant_id and b.kind = 'hq' and b.deleted_at is null
+  where cp.tenant_id = $1`;
+
 const gate = (perm: string) => [`gate: ${perm}`, `select 1 from user_roles ur
      join role_permissions rp on rp.role_id = ur.role_id
      where ur.user_id = $1 and rp.permission_key = $2
@@ -180,6 +192,7 @@ const statements: [string, string, unknown[]][] = [
     [FAKE_CARRIER, FAKE_TENANT]],
   ["manifests: detail route", `select id, name, corridor, distance_km, expected_duration_hours
      from routes where id = $1 and tenant_id = $2`, [FAKE_ROUTE, FAKE_TENANT]],
+  ["manifests: detail letterhead", LETTERHEAD_SQL, [FAKE_TENANT]],
 
   ["manifests: swapping the unit cannot strand cargo", `
      select p.tracking_number, p.specialisation from consolidation_parcels p

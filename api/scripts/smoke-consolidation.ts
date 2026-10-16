@@ -172,6 +172,18 @@ async function main() {
     }));
     check("the cargo lanes are the closed six", bogusLane.status === 400, bogusLane.status);
 
+    const shipOnRoad = await call("/consolidation/carriers", token, json({
+      mode: "road", unitType: "cargo_ship", displayName: "Smoke ship as a lorry"
+    }));
+    check("a vessel cannot be filed as a mainland truck",
+      shipOnRoad.status === 400 && /marine/.test(shipOnRoad.json?.error?.message ?? ""),
+      shipOnRoad.json);
+
+    const modeFlip = await call(`/consolidation/carriers/${carrierId}`, token,
+      put({ mode: "marine" }));
+    check("flipping only the mode cannot turn a trailer into a vessel",
+      modeFlip.status === 400, [modeFlip.status, modeFlip.json?.error?.message]);
+
     const listed = await call("/consolidation/carriers?mode=road", token);
     const mine = listed.json?.carriers?.find((c: any) => c.id === carrierId);
     check("the register lists the unit with its lanes and capacity",
@@ -237,6 +249,10 @@ async function main() {
     check("the capacity is stated in the unit the carrier was registered in",
       head0.json.capacity.unit === "tonnes" && head0.json.capacity.stated_in_mass === true
       && head0.json.capacity.max === 32, head0.json.capacity);
+    check("the detail carries the office letterhead the manifest prints under",
+      typeof head0.json.letterhead?.company_name === "string"
+      && head0.json.letterhead.company_name.length > 1
+      && "logo_document_id" in head0.json.letterhead, head0.json.letterhead);
 
     // ================= 3. Parcels on board =================
     const cement = await call(`/consolidation/${m1}/parcels`, token, json({
@@ -414,6 +430,12 @@ async function main() {
 
     const lateRemove = await call(`/consolidation/${m2}/parcels/${p4}`, token, { method: "DELETE" });
     check("a delivered leg's pieces cannot be quietly removed", lateRemove.status === 409, lateRemove.json);
+
+    const lateHeader = await call(`/consolidation/${m2}`, token,
+      put({ billOfLading: "SMOKE-BL-REWRITTEN" }));
+    check("a delivered leg's signed header cannot be edited either",
+      lateHeader.status === 409 && /delivered/.test(lateHeader.json?.error?.message ?? ""),
+      lateHeader.json);
 
     const lateMoney = await call(`/consolidation/${m2}/parcels/${p4}/payment`, token,
       put({ amountPaid: 60000, paymentReference: "SMOKE DEP 3" }));

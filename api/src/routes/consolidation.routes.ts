@@ -19,6 +19,7 @@ const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const e164 = z.string().regex(/^\+[1-9]\d{7,14}$/);
 
 const MODES = ["road", "marine", "air", "rail"] as const;
+type CarrierMode = typeof MODES[number];
 // Mirrors vessels.vessel_type (017/018) plus the two air types, so the carrier
 // register and the fleet table cannot drift into two vocabularies.
 const UNIT_TYPES = [
@@ -26,6 +27,24 @@ const UNIT_TYPES = [
   "van", "pickup", "lowbed", "barge", "boat", "cargo_ship", "ferry", "tank_barge",
   "rail_wagon", "air_freighter", "air_charter"
 ] as const;
+/**
+ * The register is one table for four modes of transport, so the mode has to be
+ * checked against the unit type: without it a cargo ship can be filed as a
+ * mainland truck and printed at the head of a road manifest.
+ */
+const UNIT_MODE: Record<typeof UNIT_TYPES[number], CarrierMode> = {
+  truck_head: "road", trailer: "road", tanker: "road", flatbed: "road", tipper: "road",
+  reefer: "road", box_truck: "road", van: "road", pickup: "road", lowbed: "road",
+  barge: "marine", boat: "marine", cargo_ship: "marine", ferry: "marine", tank_barge: "marine",
+  rail_wagon: "rail", air_freighter: "air", air_charter: "air"
+};
+function assertUnitMode(unitType: string, mode: string) {
+  const want = UNIT_MODE[unitType as typeof UNIT_TYPES[number]];
+  if (want === mode) return;
+  throw new ApiError("VALIDATION_FAILED",
+    `A ${unitType.replace(/_/g, " ")} is a ${want} unit, not a ${mode} one.`,
+    400, [{ field: "unitType" }]);
+}
 const CAPACITY_UNITS = ["tonnes", "kg", "teu", "m3"] as const;
 const SPECIALISATIONS = [
   "general", "dry_bulk", "liquid_bulk", "refrigerated", "hazardous", "live_animals"
@@ -145,6 +164,22 @@ const MANIFEST_SELECT = `
   from consolidations m
   join consolidation_carriers cc on cc.id = m.carrier_id
   left join cargo_shipments cs on cs.id = m.shipment_id`;
+
+/**
+ * A manifest is a document of the office that issues it, so the print sheet
+ * carries the same letterhead a proforma does — company name, the registered
+ * numbers, the head-office address and the logo the tenant last uploaded.
+ */
+const LETTERHEAD_SQL = `
+  select cp.company_name, cp.tin_display, cp.brela_number, cp.vat_number, cp.website,
+         b.postal_address, b.street, b.email as branch_email,
+         (select d.id from documents d
+           where d.tenant_id = $1 and d.entity_type = 'tenant'
+             and d.kind = 'logo' and d.deleted_at is null
+           order by d.created_at desc limit 1) as logo_document_id
+  from company_profiles cp
+  left join branches b on b.tenant_id = cp.tenant_id and b.kind = 'hq' and b.deleted_at is null
+  where cp.tenant_id = $1`;
 
 const PARCEL_SELECT = `
   select p.id, p.seq, p.tracking_number, p.consignor_name, p.consignor_email,
@@ -331,6 +366,7 @@ export async function consolidationRoutes(app: FastifyInstance, _opts: unknown) 
   app.post("/consolidation/carriers", { preHandler: [requireAuth, requirePermission("consolidation.create")] },
     async (req: any, reply) => {
       const body = carrierSchema.parse(req.body);
+      assertUnitMode(body.unitType, body.mode);
       const id = uuidv7();
       try {
         await withTenant(req.user.tid, async (c) => {
@@ -376,6 +412,12 @@ export async function consolidationRoutes(app: FastifyInstance, _opts: unknown) 
         const prev = await c.query(`${CARRIER_SELECT} where cc.id = $1 and cc.tenant_id = $2
           and cc.deleted_at is null`, [id, req.user.tid]);
         if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Carrier not found", 404);
+        // Either half can arrive alone, so the pair is checked as it would read
+        // after the update — a patch that flips only the mode cannot file a
+        // cargo ship as a road unit either.
+        if (body.mode || body.unitType) {
+          assertUnitMode(body.unitType ?? prev.rows[0].unit_type, body.mode ?? prev.rows[0].mode);
+        }
 
         // A lane cannot be withdrawn from a unit that is still carrying cargo in
         // it, or the filed manifest ends up printed against a carrier that no
@@ -558,7 +600,7 @@ export async function consolidationRoutes(app: FastifyInstance, _opts: unknown) 
         if (!head.rowCount) throw new ApiError("NOT_FOUND", "Manifest not found", 404);
         const row = head.rows[0];
 
-        const [parcels, carrier, route] = await Promise.all([
+        const [parcels, carrier, route, letter] = await Promise.all([
           c.query(`${PARCEL_SELECT} where p.manifest_id = $1 and p.tenant_id = $2
             and p.deleted_at is null order by p.seq`, [id, req.user.tid]),
           c.query(`${CARRIER_SELECT} where cc.id = $1 and cc.tenant_id = $2`,
@@ -566,7 +608,8 @@ export async function consolidationRoutes(app: FastifyInstance, _opts: unknown) 
           row.route_id
             ? c.query(`select id, name, corridor, distance_km, expected_duration_hours
                        from routes where id = $1 and tenant_id = $2`, [row.route_id, req.user.tid])
-            : null
+            : null,
+          c.query(LETTERHEAD_SQL, [req.user.tid])
         ]);
 
         // Consignor phone is PII: it is decrypted for the one manifest being
@@ -598,6 +641,7 @@ export async function consolidationRoutes(app: FastifyInstance, _opts: unknown) 
           ...row,
           origin_label: origin,
           destination_label: destination,
+          letterhead: letter.rows[0] ?? null,
           route: route?.rows[0] ?? null,
           carrier: cr,
           parcels: lines,
@@ -635,6 +679,14 @@ export async function consolidationRoutes(app: FastifyInstance, _opts: unknown) 
         if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Manifest not found", 404);
         if (prev.rows[0].status === "cancelled") {
           throw new ApiError("CONFLICT", "A cancelled manifest cannot be edited.", 409);
+        }
+        // The header is the signed part of the paper: once the load has been
+        // handed over, the lane, unit and dates are evidence. Settlement stays
+        // open on the payment door.
+        if (prev.rows[0].status === "delivered") {
+          throw new ApiError("CONFLICT",
+            "This manifest has been signed for as delivered — its cargo, unit and " +
+            "dates are fixed. Settle the outstanding parcels instead.", 409);
         }
         if (body.origin) await assertGeoChain(c, "origin", body.origin);
         if (body.destination) await assertGeoChain(c, "destination", body.destination);

@@ -1124,7 +1124,8 @@ select.auth-field option { color: var(--ink); }
   .app-main h1, .app-main h1 + p { color: var(--navy) !important; text-shadow: none; }
 }
 
-/* The proforma / quotation sheet prints as a document, not as a screen.
+/* The proforma / quotation sheet and the consolidator manifest print as a
+   document, not as a screen.
    Two things make that hard: the theme may be dark (every colour the sheet
    reads through var() would then be white-on-something), and the same sheet
    doubles as the editing surface, so it is full of inputs. The palette is
@@ -1132,7 +1133,7 @@ select.auth-field option { color: var(--ink); }
    controls are stripped to their text — a clerk can print straight from edit
    mode and the page still reads as the issued document. */
 @media print {
-  .proforma-sheet {
+  .proforma-sheet, .manifest-sheet {
     --ink: #123249;
     --ink-soft: #35526a;
     --line: rgba(13, 51, 80, 0.34);
@@ -1150,7 +1151,8 @@ select.auth-field option { color: var(--ink); }
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  .proforma-sheet :is(input, select, textarea) {
+  .proforma-sheet :is(input, select, textarea),
+  .manifest-sheet :is(input, select, textarea) {
     width: 100%;
     border: 0 !important;
     border-radius: 0;
@@ -1161,10 +1163,16 @@ select.auth-field option { color: var(--ink); }
     -webkit-appearance: none;
     appearance: none;
   }
-  .proforma-sheet :is(input, textarea)::placeholder { color: transparent !important; }
-  .proforma-sheet table { border-collapse: collapse; }
-  .proforma-sheet thead tr { background: transparent !important; }
-  .proforma-sheet thead th { border-bottom: 1px solid var(--ink); }
-  .proforma-sheet tr, .proforma-sheet tfoot tr { break-inside: avoid; }
-  .proforma-sheet h2, .proforma-sheet thead { break-after: avoid; }
+  .proforma-sheet :is(input, textarea)::placeholder,
+  .manifest-sheet :is(input, textarea)::placeholder { color: transparent !important; }
+  .proforma-sheet table, .manifest-sheet table { border-collapse: collapse; }
+  .proforma-sheet thead tr, .manifest-sheet thead tr { background: transparent !important; }
+  .proforma-sheet thead th, .manifest-sheet thead th { border-bottom: 1px solid var(--ink); }
+  .proforma-sheet tr, .proforma-sheet tfoot tr,
+  .manifest-sheet tr, .manifest-sheet tfoot tr { break-inside: avoid; }
+  .proforma-sheet h2, .proforma-sheet thead,
+  .manifest-sheet h2, .manifest-sheet thead { break-after: avoid; }
+  /* The two signature blocks sit at the foot of the paper and must not be
+     split across a page boundary. */
+  .manifest-sheet .sig-block { break-inside: avoid; }
 }
