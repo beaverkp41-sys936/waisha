@@ -5,6 +5,7 @@ import { ApiError } from "../util/errors.js";
 import { uuidv7 } from "../util/uuid.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { writeAudit } from "../audit/audit.js";
+import { requirePermission } from "../security/permissions.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -141,7 +142,7 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Create ----------
-  app.post("/routes", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.post("/routes", { preHandler: [requireAuth, requirePermission("routes.create")] }, async (req: any, reply) => {
     const body = routeSchema.parse(req.body);
     const id = uuidv7();
     await withTenant(req.user.tid, async (c) => {
@@ -174,7 +175,7 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Update ----------
-  app.put("/routes/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.put("/routes/:id", { preHandler: [requireAuth, requirePermission("routes.edit")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const body = routeSchema.parse(req.body);
     const r = await withTenant(req.user.tid, async (c) => {
@@ -212,7 +213,7 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Delete ----------
-  app.delete("/routes/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.delete("/routes/:id", { preHandler: [requireAuth, requirePermission("routes.delete")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const r = await withTenant(req.user.tid, async (c) => {
       const res = await c.query(
@@ -233,7 +234,7 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Checkpoints: add (seq auto = next) ----------
-  app.post("/routes/:id/checkpoints", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.post("/routes/:id/checkpoints", { preHandler: [requireAuth, requirePermission("checkpoints.create")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const body = z.object({
       kind: z.enum(["weighbridge","border","toll","fuel","rest","town"]),
@@ -265,7 +266,7 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Checkpoints: remove (renumbers the rest) ----------
-  app.delete("/routes/:id/checkpoints/:cpId", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.delete("/routes/:id/checkpoints/:cpId", { preHandler: [requireAuth, requirePermission("checkpoints.delete")] }, async (req: any, reply) => {
     const { id, cpId } = req.params as { id: string; cpId: string };
     await withTenant(req.user.tid, async (c) => {
       const del = await c.query(

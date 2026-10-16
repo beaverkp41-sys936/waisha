@@ -5,6 +5,7 @@ import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import { env } from "./env.js";
 import { enforceRateLimit } from "./security/ratelimit.js";
+import { requireStaffAudience } from "./security/audience.js";
 import { registerErrorHandling } from "./plugins/errors.js";
 import { authRoutes } from "./routes/auth.routes.js";
 import { contentRoutes } from "./routes/content.routes.js";
@@ -64,6 +65,12 @@ async function main() {
     if (req.method === "OPTIONS" || req.url.startsWith("/api/v1/health")) return;
     await enforceRateLimit(`ip:${req.ip}`, 600, 60);
   });
+
+  // Audience boundary: portal accounts (shipper / temporary customer) may only
+  // reach /portal and the auth plumbing — never the staff surface of the
+  // transporter tenant they live inside. Registered before the routes so every
+  // plugin inherits it.
+  app.addHook("preHandler", requireStaffAudience);
 
   app.get("/api/v1/health", async () => ({ status: "ok", time: new Date().toISOString() }));
   await app.register(authRoutes, { prefix: "/api/v1" });

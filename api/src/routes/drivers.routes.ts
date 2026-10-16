@@ -5,6 +5,7 @@ import { ApiError } from "../util/errors.js";
 import { uuidv7 } from "../util/uuid.js";
 import { encryptField, searchHash } from "../util/crypto.js";
 import { verifyAccessToken } from "../security/jwt.js";
+import { requirePermission } from "../security/permissions.js";
 import { writeAudit } from "../audit/audit.js";
 
 async function requireAuth(req: any) {
@@ -60,7 +61,7 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Create ----------
-  app.post("/drivers", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.post("/drivers", { preHandler: [requireAuth, requirePermission("drivers.create")] }, async (req: any, reply) => {
     const body = driverSchema.parse(req.body);
     const nidaSearch = body.nida ? searchHash(body.nida) : null;
 
@@ -101,7 +102,7 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Update ----------
-  app.put("/drivers/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.put("/drivers/:id", { preHandler: [requireAuth, requirePermission("drivers.edit")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const body = driverSchema.partial().parse(req.body);
 
@@ -173,7 +174,7 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Delete ----------
-  app.delete("/drivers/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.delete("/drivers/:id", { preHandler: [requireAuth, requirePermission("drivers.delete")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const r = await withTenant(req.user.tid, async (c) => {
       const res = await c.query(

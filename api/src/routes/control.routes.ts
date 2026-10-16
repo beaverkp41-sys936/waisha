@@ -299,12 +299,14 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- Plans editor (Super Admin / billing) ----------
   app.get("/control/plans", { preHandler: [requireControl] }, async (req: any) => {
+    if (!hasLicenceRole(req.control.roles ?? [])) throw new ApiError("FORBIDDEN", "Not permitted", 403);
     const { rows } = await pool.query(
       "select id, key, name, seat_limit, price_monthly, price_quarterly, price_annual, vat_rate, is_active from plans order by price_monthly");
     return rows;
   });
 
   app.put("/control/plans/:key", { preHandler: [requireControl] }, async (req: any, reply) => {
+    if (!hasLicenceRole(req.control.roles ?? [])) throw new ApiError("FORBIDDEN", "Not permitted", 403);
     const { key } = req.params as { key: string };
     const body = z.object({
       name: z.string().min(2).max(60).optional(),

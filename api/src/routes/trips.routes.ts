@@ -6,6 +6,7 @@ import { uuidv7 } from "../util/uuid.js";
 import { encryptField, searchHash } from "../util/crypto.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { writeAudit } from "../audit/audit.js";
+import { requirePermission } from "../security/permissions.js";
 import {
   TRIP_STATUSES,
   tripCanTransition,
@@ -166,7 +167,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Create (trial cap, tenant-owned resources, double-booking) ----------
-  app.post("/trips", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.post("/trips", { preHandler: [requireAuth, requirePermission("trips.create")] }, async (req: any, reply) => {
     const body = tripSchema.parse(req.body);
 
     const l = await getLicence(req.user.tid);
@@ -284,7 +285,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Update (presence-based) ----------
-  app.put("/trips/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.put("/trips/:id", { preHandler: [requireAuth, requirePermission("trips.edit")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const body = tripSchema.partial().parse(req.body);
 
@@ -371,7 +372,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Status change: enforced lifecycle ----------
-  app.put("/trips/:id/status", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.put("/trips/:id/status", { preHandler: [requireAuth, requirePermission("trips.edit")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const body = tripStatusSchema.parse(req.body);
 
@@ -434,7 +435,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Delete (blocked while in transit) ----------
-  app.delete("/trips/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.delete("/trips/:id", { preHandler: [requireAuth, requirePermission("trips.delete")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const r = await withTenant(req.user.tid, async (c) => {
       const prev = await c.query(
@@ -466,7 +467,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Shipments: add ----------
-  app.post("/trips/:id/shipments", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.post("/trips/:id/shipments", { preHandler: [requireAuth, requirePermission("trips.edit")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const body = shipmentSchema.parse(req.body);
 
@@ -501,7 +502,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Shipments: update (presence-based, phone keeps stored when blank) ----------
-  app.put("/trips/:id/shipments/:sid", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.put("/trips/:id/shipments/:sid", { preHandler: [requireAuth, requirePermission("trips.edit")] }, async (req: any, reply) => {
     const { id, sid } = req.params as { id: string; sid: string };
     const body = shipmentSchema.partial().parse(req.body);
 
@@ -556,7 +557,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Shipments: remove ----------
-  app.delete("/trips/:id/shipments/:sid", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.delete("/trips/:id/shipments/:sid", { preHandler: [requireAuth, requirePermission("trips.edit")] }, async (req: any, reply) => {
     const { id, sid } = req.params as { id: string; sid: string };
     const r = await withTenant(req.user.tid, async (c) => {
       const trip = await c.query(
@@ -584,7 +585,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Checkpoint logs: append ----------
-  app.post("/trips/:id/checkpoint-logs", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.post("/trips/:id/checkpoint-logs", { preHandler: [requireAuth, requirePermission("checkpoints.create")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const body = logSchema.parse(req.body);
 
@@ -626,7 +627,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Checkpoint logs: remove (ledger correction) ----------
-  app.delete("/trips/:id/checkpoint-logs/:logId", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.delete("/trips/:id/checkpoint-logs/:logId", { preHandler: [requireAuth, requirePermission("checkpoints.delete")] }, async (req: any, reply) => {
     const { id, logId } = req.params as { id: string; logId: string };
     const r = await withTenant(req.user.tid, async (c) => {
       const res = await c.query(

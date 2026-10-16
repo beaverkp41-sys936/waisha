@@ -6,6 +6,7 @@ import { uuidv7 } from "../util/uuid.js";
 import { encryptField, searchHash } from "../util/crypto.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { writeAudit } from "../audit/audit.js";
+import { requirePermission } from "../security/permissions.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -73,7 +74,7 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
     return { tenant_id: req.user.tid, company_name: t.rows[0]?.name ?? "", isNew: true };
   });
 
-  app.put("/profile", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.put("/profile", { preHandler: [requireAuth, requirePermission("profile.edit")] }, async (req: any, reply) => {
     const body = z.object({
       companyName: z.string().trim().min(2).max(120),
       brelaNumber: z.string().max(60).optional(),
@@ -154,7 +155,7 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
     return rows;
   });
 
-  app.post("/branches", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.post("/branches", { preHandler: [requireAuth, requirePermission("profile.create")] }, async (req: any, reply) => {
     const body = branchSchema.parse(req.body);
     if (body.kind === "hq") {
       const hq = await withTenant(req.user.tid, (c) => c.query(
@@ -191,7 +192,7 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
     return reply.status(201).send({ id, ward: wardName });
   });
 
-  app.put("/branches/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.put("/branches/:id", { preHandler: [requireAuth, requirePermission("profile.edit")] }, async (req: any, reply) => {
     const body = branchSchema.parse(req.body);
     const { id } = req.params as { id: string };
     const wardName = await wardNameOf(body.wardId);
@@ -225,7 +226,7 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
     return reply.send({ ok: true, ward: wardName });
   });
 
-  app.delete("/branches/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.delete("/branches/:id", { preHandler: [requireAuth, requirePermission("profile.delete")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const r = await withTenant(req.user.tid, async (c) => {
       const res = await c.query(

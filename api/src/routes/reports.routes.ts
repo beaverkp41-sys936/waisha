@@ -3,6 +3,7 @@ import { z } from "zod";
 import { withTenant } from "../db/pool.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { ApiError } from "../util/errors.js";
+import { requirePermission } from "../security/permissions.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -19,7 +20,7 @@ const summarySchema = z.object({
 export async function reportsRoutes(app: FastifyInstance, _opts: unknown) {
 
   /** Cargo-specific period report: file summary, payment status, delays. */
-  app.get("/reports/cargo", { preHandler: [requireAuth] }, async (req: any) => {
+  app.get("/reports/cargo", { preHandler: [requireAuth, requirePermission("reports.view")] }, async (req: any) => {
     const q = summarySchema.parse(req.query);
     const to = q.to ?? new Date().toISOString().slice(0, 10);
     const from = q.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
@@ -87,7 +88,7 @@ export async function reportsRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   /** Period-filtered operational + financial summary. Defaults: last 30 days. */
-  app.get("/reports/summary", { preHandler: [requireAuth] }, async (req: any) => {
+  app.get("/reports/summary", { preHandler: [requireAuth, requirePermission("reports.view")] }, async (req: any) => {
     const q = summarySchema.parse(req.query);
     const to = q.to ?? new Date().toISOString().slice(0, 10);
     const from = q.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);

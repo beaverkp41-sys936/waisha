@@ -6,6 +6,7 @@ import { searchHash } from "../util/crypto.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
 import { writeAudit } from "../audit/audit.js";
+import { requirePermission } from "../security/permissions.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -26,7 +27,7 @@ export async function licenceRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // Start the 48-hour trial (spec 5.3) — one per TIN, per phone, enforced server-side
-  app.post("/licence/trial", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.post("/licence/trial", { preHandler: [requireAuth, requirePermission("billing.edit")] }, async (req: any, reply) => {
     await enforceRateLimit(`trial:uid:${req.user.sub}`, 5, 3600);
 
     // The caller's TIN/phone searches come from their own tenant row — never from input

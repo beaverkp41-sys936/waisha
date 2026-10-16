@@ -1,0 +1,62 @@
+import type { FastifyRequest } from "fastify";
+import { withTenant } from "../db/pool.js";
+import { ApiError } from "../util/errors.js";
+import { verifyAccessToken } from "./jwt.js";
+
+/**
+ * Audience boundary. A shipper portal account lives inside the transporter's
+ * tenant (migration 040), so tenant scoping alone cannot keep it out of the
+ * staff API: with only `portal.view`/`portal.upload` it still passed every
+ * `requireAuth`-only route and could create drivers (NIDA numbers), delete
+ * trips or start a licence trial in somebody else's company. Permission keys
+ * gate individual modules; this gate decides WHICH SURFACE a token may knock
+ * on at all.
+ */
+
+/** Roles that exist only to serve an external account — never a staff surface. */
+export const PORTAL_ONLY_ROLES = ["shipper", "shipper_portal", "customer_temp"];
+
+/** Pure so the matrix can be unit-tested without a database. */
+export function rolesArePortalOnly(roles: string[] | undefined | null): boolean {
+  const list = roles ?? [];
+  return !list.some((r) => !PORTAL_ONLY_ROLES.includes(r));
+}
+
+/**
+ * Surfaces an external account legitimately reaches: its own portal, the auth
+ * lifecycle it signs in through, and the pre-auth/public plumbing. `/auth/me`
+ * and `/auth/sessions` stay open — they read only the caller's own row.
+ */
+const OPEN_PREFIXES = [
+  "/api/v1/auth/", "/api/v1/portal/", "/api/v1/health", "/api/v1/content/",
+  "/api/v1/announcements", "/api/v1/control/", "/api/v1/internal/",
+  "/api/v1/payments/mock", "/api/v1/payments/webhook"
+];
+
+export function isOpenSurface(url: string): boolean {
+  const path = url.split("?")[0];
+  return OPEN_PREFIXES.some((p) => path.startsWith(p));
+}
+
+export async function requireStaffAudience(req: FastifyRequest & { user?: any }) {
+  if (isOpenSurface(req.url)) return;
+  const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+  // No/invalid token: leave it to the route's own requireAuth so the response
+  // shape stays what clients already expect (401 TOKEN_EXPIRED).
+  if (!bearer) return;
+  const claims = await verifyAccessToken(bearer);
+  if (!claims) return;
+  if (!rolesArePortalOnly(claims.roles)) return; // staff fast path, no extra query
+
+  // The claim set looks portal-only. Confirm against the database before
+  // denying, so a freshly promoted account whose token still carries the old
+  // role set is not locked out of the staff surface.
+  const result = await withTenant(claims.tid, (c) => c.query(
+    `select coalesce(array_agg(r.key), '{}') as roles
+     from user_roles ur join roles r on r.id = ur.role_id
+     where ur.user_id = $1 and (ur.expires_at is null or ur.expires_at > now())`,
+    [claims.sub]));
+  const live: string[] = result.rows[0]?.roles ?? [];
+  if (!rolesArePortalOnly(live)) return;
+  throw new ApiError("FORBIDDEN", "This surface is not available to portal accounts.", 403);
+}

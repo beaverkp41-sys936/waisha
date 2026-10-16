@@ -10,6 +10,7 @@ import { writeAudit } from "../audit/audit.js";
 import { computeAmounts, detectProvider, type Cycle } from "../payments/amounts.js";
 import { getProvider } from "../payments/provider.js";
 import { env } from "../env.js";
+import { requirePermission } from "../security/permissions.js";
 
 const PENDING_TIMEOUT_MINUTES = 10;
 
@@ -23,7 +24,7 @@ async function requireAuth(req: any) {
 export async function paymentsRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- Create a payment intent (spec 5.2) ----------
-  app.post("/payments/intent", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.post("/payments/intent", { preHandler: [requireAuth, requirePermission("billing.edit")] }, async (req: any, reply) => {
     await enforceRateLimit(`pay:uid:${req.user.sub}`, 10, 3600);
     const body = z.object({
       planKey: z.enum(["starter", "business", "enterprise"]),

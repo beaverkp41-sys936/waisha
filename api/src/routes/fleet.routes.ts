@@ -5,6 +5,7 @@ import { ApiError } from "../util/errors.js";
 import { uuidv7 } from "../util/uuid.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { writeAudit } from "../audit/audit.js";
+import { requirePermission } from "../security/permissions.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -81,7 +82,7 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Create (trial cap enforced server-side) ----------
-  app.post("/vessels", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.post("/vessels", { preHandler: [requireAuth, requirePermission("fleet.create")] }, async (req: any, reply) => {
     const body = vesselSchema.parse(req.body);
 
     const licence = await pool.query("select platform_auth.get_licence($1) as l", [req.user.tid]);
@@ -139,7 +140,7 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Update (presence-based): absent key keeps, explicit null clears ----------
-  app.put("/vessels/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.put("/vessels/:id", { preHandler: [requireAuth, requirePermission("fleet.edit")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const body = vesselSchema.partial().parse(req.body);
 
@@ -198,7 +199,7 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   // ---------- Status change: DEDICATED endpoint (spec 6.3, static SQL) ----------
-  app.put("/vessels/:id/status", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.put("/vessels/:id/status", { preHandler: [requireAuth, requirePermission("fleet.edit")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const body = statusSchema.parse(req.body);
 
@@ -229,7 +230,7 @@ export async function fleetRoutes(app: FastifyInstance, _opts: unknown) {
     return reply.send({ ok: true });
   });
 
-  app.delete("/vessels/:id", { preHandler: [requireAuth] }, async (req: any, reply) => {
+  app.delete("/vessels/:id", { preHandler: [requireAuth, requirePermission("fleet.delete")] }, async (req: any, reply) => {
     const { id } = req.params as { id: string };
     const r = await withTenant(req.user.tid, async (c) => {
       const res = await c.query(

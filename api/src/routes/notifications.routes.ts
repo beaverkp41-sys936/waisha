@@ -4,6 +4,7 @@ import { withTenant } from "../db/pool.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { ApiError } from "../util/errors.js";
 import { namesMatch } from "../util/name-match.js";
+import { checkPermission } from "../security/permissions.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -54,9 +55,18 @@ const COST_CATEGORY_LABELS: Record<string, string> = {
  * pending staff invites and imminent departures. Read state is the ONE thing
  * that is stored, per user, in alert_reads (migration 050) — keyed by the
  * stable `key` each item carries.
+ *
+ * Money-bearing alerts (invoice and supplier balances, office costs and budgets)
+ * are only built for callers who hold the matching finance permission — the same
+ * role check the financial tables themselves use. RLS alone would not do it:
+ * every staff member of a tenant can read those rows' tenant scope, but not
+ * necessarily their amounts.
  */
-async function buildAlerts(c: any, tenantId: string): Promise<Notification[]> {
+async function buildAlerts(c: any, tenantId: string, userId: string): Promise<Notification[]> {
   const items: Notification[] = [];
+  const seesInvoices = await checkPermission(c, userId, "invoices.view");
+  const seesCosts = await checkPermission(c, userId, "costs.view");
+  const seesOfficeCosts = await checkPermission(c, userId, "office_costs.view");
   // pg DATE columns arrive at local midnight, so count days from the start
   // of today — otherwise a date falling today reads as a negative fraction.
   const startOfToday = new Date();
@@ -64,21 +74,23 @@ async function buildAlerts(c: any, tenantId: string): Promise<Notification[]> {
   const today = startOfToday.getTime();
 
   // Overdue customer invoices
-  const overdueInv = await c.query(
-    `select id, invoice_number, customer_name, due_date, (total - amount_paid)::float8 as balance
-     from freight_invoices
-     where tenant_id = $1 and deleted_at is null and status not in ('draft','cancelled')
-       and due_date < current_date and amount_paid < total
-     order by due_date`, [tenantId]);
-  for (const r of overdueInv.rows) {
-    const days = Math.floor((today - new Date(r.due_date).getTime()) / DAY);
-    items.push({
-      key: `invoice_overdue:${r.id}`,
-      type: "invoice_overdue", severity: "critical",
-      title: `Invoice ${r.invoice_number} overdue ${days} day${days === 1 ? "" : "s"}`,
-      detail: `${r.customer_name} owes ${Number(r.balance).toLocaleString()}`,
-      href: "/app/cfa/invoices", date: r.due_date
-    });
+  if (seesInvoices) {
+    const overdueInv = await c.query(
+      `select id, invoice_number, customer_name, due_date, (total - amount_paid)::float8 as balance
+       from freight_invoices
+       where tenant_id = $1 and deleted_at is null and status not in ('draft','cancelled')
+         and due_date < current_date and amount_paid < total
+       order by due_date`, [tenantId]);
+    for (const r of overdueInv.rows) {
+      const days = Math.floor((today - new Date(r.due_date).getTime()) / DAY);
+      items.push({
+        key: `invoice_overdue:${r.id}`,
+        type: "invoice_overdue", severity: "critical",
+        title: `Invoice ${r.invoice_number} overdue ${days} day${days === 1 ? "" : "s"}`,
+        detail: `${r.customer_name} owes ${Number(r.balance).toLocaleString()}`,
+        href: "/app/cfa/invoices", date: r.due_date
+      });
+    }
   }
 
   // Vessel documents (insurance, inspection, road licence)
@@ -225,20 +237,22 @@ async function buildAlerts(c: any, tenantId: string): Promise<Notification[]> {
   }
 
   // Overdue supplier expenses
-  const overdueExp = await c.query(
-    `select id, supplier_name, due_date, (amount - amount_paid)::float8 as balance
-     from freight_expenses
-     where tenant_id = $1 and deleted_at is null and status <> 'cancelled'
-       and due_date < current_date and amount_paid < amount
-     order by due_date`, [tenantId]);
-  for (const r of overdueExp.rows) {
-    items.push({
-      key: `expense_overdue:${r.id}`,
-      type: "expense_overdue", severity: "warning",
-      title: `Supplier payment overdue: ${r.supplier_name}`,
-      detail: `Balance ${Number(r.balance).toLocaleString()} since ${new Date(r.due_date).toLocaleDateString()}`,
-      href: "/app/cfa/ledger", date: r.due_date
-    });
+  if (seesCosts) {
+    const overdueExp = await c.query(
+      `select id, supplier_name, due_date, (amount - amount_paid)::float8 as balance
+       from freight_expenses
+       where tenant_id = $1 and deleted_at is null and status <> 'cancelled'
+         and due_date < current_date and amount_paid < amount
+       order by due_date`, [tenantId]);
+    for (const r of overdueExp.rows) {
+      items.push({
+        key: `expense_overdue:${r.id}`,
+        type: "expense_overdue", severity: "warning",
+        title: `Supplier payment overdue: ${r.supplier_name}`,
+        detail: `Balance ${Number(r.balance).toLocaleString()} since ${new Date(r.due_date).toLocaleDateString()}`,
+        href: "/app/cfa/ledger", date: r.due_date
+      });
+    }
   }
 
   // Pending staff invites
@@ -367,57 +381,59 @@ async function buildAlerts(c: any, tenantId: string): Promise<Notification[]> {
     });
   }
 
-  // Office costs awaiting approval
-  const pendingCosts = await c.query(
-    `select count(*)::int as n,
-            coalesce(sum(amount), 0)::float8 as total,
-            count(*) filter (where created_at < now() - interval '7 days')::int as stale
-     from office_costs
-     where tenant_id = $1 and deleted_at is null and status = 'pending'`, [tenantId]);
-  const pc = pendingCosts.rows[0];
-  if (pc && Number(pc.n) > 0) {
-    items.push({
-      key: `office_cost_pending:${pc.n}:${pc.stale}`,
-      type: "office_cost_pending",
-      severity: Number(pc.stale) > 0 ? "warning" : "info",
-      title: `${pc.n} office cost${Number(pc.n) === 1 ? "" : "s"} awaiting approval`,
-      detail: `Total ${Number(pc.total).toLocaleString()} to review`,
-      href: "/app/office/costs", date: new Date().toISOString().slice(0, 10)
-    });
-  }
+  // Office costs awaiting approval, and current-month budgets against approved
+  // spend — both name amounts, so both stay with the office-costs permission.
+  if (seesOfficeCosts) {
+    const pendingCosts = await c.query(
+      `select count(*)::int as n,
+              coalesce(sum(amount), 0)::float8 as total,
+              count(*) filter (where created_at < now() - interval '7 days')::int as stale
+       from office_costs
+       where tenant_id = $1 and deleted_at is null and status = 'pending'`, [tenantId]);
+    const pc = pendingCosts.rows[0];
+    if (pc && Number(pc.n) > 0) {
+      items.push({
+        key: `office_cost_pending:${pc.n}:${pc.stale}`,
+        type: "office_cost_pending",
+        severity: Number(pc.stale) > 0 ? "warning" : "info",
+        title: `${pc.n} office cost${Number(pc.n) === 1 ? "" : "s"} awaiting approval`,
+        detail: `Total ${Number(pc.total).toLocaleString()} to review`,
+        href: "/app/office/costs", date: new Date().toISOString().slice(0, 10)
+      });
+    }
 
-  // Current-month office budgets against approved spend
-  const budgets = await c.query(
-    `select b.id, b.category, b.period, b.amount::float8 as budget,
-            coalesce(sum(c.amount) filter (where c.status = 'approved'), 0)::float8 as spent
-     from office_budgets b
-     left join office_costs c
-       on c.tenant_id = b.tenant_id and c.category = b.category and c.deleted_at is null
-       and c.cost_date >= b.period and c.cost_date < (b.period + interval '1 month')
-     where b.tenant_id = $1 and b.deleted_at is null
-       and b.period = date_trunc('month', current_date)::date
-     group by b.id`, [tenantId]);
-  for (const b of budgets.rows) {
-    const budget = Number(b.budget);
-    const spent = Number(b.spent);
-    if (budget <= 0) continue;
-    const label = COST_CATEGORY_LABELS[b.category] ?? b.category;
-    if (spent > budget) {
-      items.push({
-        key: `office_budget:${b.id}:${dayKey(b.period)}:over`,
-        type: "office_budget_over", severity: "critical",
-        title: `Office budget exceeded: ${label}`,
-        detail: `Spent ${spent.toLocaleString()} of ${budget.toLocaleString()} this month`,
-        href: "/app/office/costs", date: new Date().toISOString().slice(0, 10)
-      });
-    } else if (spent >= budget * 0.9) {
-      items.push({
-        key: `office_budget:${b.id}:${dayKey(b.period)}:near`,
-        type: "office_budget_near", severity: "warning",
-        title: `Office budget nearly used: ${label}`,
-        detail: `Spent ${spent.toLocaleString()} of ${budget.toLocaleString()} this month`,
-        href: "/app/office/costs", date: new Date().toISOString().slice(0, 10)
-      });
+    const budgets = await c.query(
+      `select b.id, b.category, b.period, b.amount::float8 as budget,
+              coalesce(sum(c.amount) filter (where c.status = 'approved'), 0)::float8 as spent
+       from office_budgets b
+       left join office_costs c
+         on c.tenant_id = b.tenant_id and c.category = b.category and c.deleted_at is null
+         and c.cost_date >= b.period and c.cost_date < (b.period + interval '1 month')
+       where b.tenant_id = $1 and b.deleted_at is null
+         and b.period = date_trunc('month', current_date)::date
+       group by b.id`, [tenantId]);
+    for (const b of budgets.rows) {
+      const budget = Number(b.budget);
+      const spent = Number(b.spent);
+      if (budget <= 0) continue;
+      const label = COST_CATEGORY_LABELS[b.category] ?? b.category;
+      if (spent > budget) {
+        items.push({
+          key: `office_budget:${b.id}:${dayKey(b.period)}:over`,
+          type: "office_budget_over", severity: "critical",
+          title: `Office budget exceeded: ${label}`,
+          detail: `Spent ${spent.toLocaleString()} of ${budget.toLocaleString()} this month`,
+          href: "/app/office/costs", date: new Date().toISOString().slice(0, 10)
+        });
+      } else if (spent >= budget * 0.9) {
+        items.push({
+          key: `office_budget:${b.id}:${dayKey(b.period)}:near`,
+          type: "office_budget_near", severity: "warning",
+          title: `Office budget nearly used: ${label}`,
+          detail: `Spent ${spent.toLocaleString()} of ${budget.toLocaleString()} this month`,
+          href: "/app/office/costs", date: new Date().toISOString().slice(0, 10)
+        });
+      }
     }
   }
 
@@ -630,7 +646,7 @@ const readSchema = z.object({
 export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) {
   app.get("/notifications", { preHandler: [requireAuth] }, async (req: any) => {
     return withTenant(req.user.tid, async (c) => {
-      const items = await buildAlerts(c, req.user.tid);
+      const items = await buildAlerts(c, req.user.tid, req.user.sub);
       const reads = await c.query(
         `select alert_key from alert_reads where user_id = $1 and tenant_id = $2`,
         [req.user.sub, req.user.tid]);
@@ -657,7 +673,7 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
     const body = readSchema.parse(req.body);
     return withTenant(req.user.tid, async (c) => {
       const keys = body.all
-        ? (await buildAlerts(c, req.user.tid)).map((i) => i.key)
+        ? (await buildAlerts(c, req.user.tid, req.user.sub)).map((i) => i.key)
         : body.keys!;
       if (!keys.length) return { ok: true, marked: 0 };
       const r = await c.query(
