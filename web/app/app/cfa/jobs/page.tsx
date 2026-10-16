@@ -167,7 +167,7 @@ export default function JobsPage() {
       )}
       {tab === "all" && <AllJobs rows={rows} filters={filters} setFilters={setFilters} />}
       {tab === "transport" && (
-        <Transport rows={trans} scope={transScope} setScope={setTransScope} />
+        <Transport rows={trans} scope={transScope} setScope={setTransScope} onChanged={load} />
       )}
     </div>
   );
@@ -483,12 +483,67 @@ const TRANS_EDGE: Record<string, string> = {
   cancelled: "var(--ink-soft)"
 };
 
-function Transport({ rows, scope, setScope }:
-  { rows: any[]; scope: string; setScope: (s: string) => void }) {
+const TRANS_LABEL: Record<string, string> = {
+  open: "On the board", temp_booked: "Being booked", confirmed: "Confirmed",
+  cancelled: "Withdrawn"
+};
+
+/** Mirrors the server's 12-hour auto-release window. */
+const HOLD_HOURS = 12;
+const holdDeadline = (iso: string) => new Date(iso).getTime() + HOLD_HOURS * 3_600_000;
+function countdown(ms: number): string {
+  if (ms <= 0) return "any moment now";
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m} min`;
+}
+
+function Transport({ rows, scope, setScope, onChanged }:
+  { rows: any[]; scope: string; setScope: (s: string) => void; onChanged: () => void }) {
   const chips = [
-    { key: "open", label: "On the board" }, { key: "confirmed", label: "Confirmed" },
+    { key: "open", label: "On the board" }, { key: "temp_booked", label: "Being booked" },
+    { key: "confirmed", label: "Confirmed" },
     { key: "cancelled", label: "Withdrawn" }, { key: "all", label: "All" }
   ];
+  const [panel, setPanel] = useState<{ id: string; kind: "decline" | "cancel" } | null>(null);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [actError, setActError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [, setClock] = useState(0);
+
+  // Countdowns re-render without touching the server.
+  useEffect(() => {
+    const t = window.setInterval(() => setClock(c => c + 1), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  async function act(t: any, kind: "confirm" | "reject" | "cancel", reasonText?: string) {
+    setBusy(true); setActError(null); setNotice(null);
+    try {
+      const path = kind === "confirm" ? "confirm" : kind === "reject" ? "reject" : "cancel-booking";
+      const res = await apiFetch(`/transport-requests/${t.id}/${path}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(reasonText ? { reason: reasonText } : {})
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { setActError(errorText(j, "That action could not be completed. Try again.")); return; }
+      setPanel(null); setReason("");
+      setNotice(kind === "confirm"
+        ? `Booking confirmed with ${t.booked_company_name} — they have been told to proceed.`
+        : kind === "reject"
+          ? "Declined — the load is back on the board."
+          : "Booking cancelled — the load is back on the board.");
+      onChanged();
+    } catch { setActError("That action could not be completed. Try again."); }
+    finally { setBusy(false); }
+  }
+
+  function openPanel(id: string, kind: "decline" | "cancel") {
+    const next = panel?.id === id && panel.kind === kind ? null : { id, kind };
+    setPanel(next); setReason(""); setActError(null);
+  }
+
   return (
     <section className="mt-24">
       <div className="flex flex-wrap items-center gap-8">
@@ -507,7 +562,21 @@ function Transport({ rows, scope, setScope }:
       <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
         Each row is the approved copy that other companies see — never the live cargo file.
         Publish from a job at stage 9, once the client has given consent.
+        A hold is confirmed or declined here, within 12 hours.
       </p>
+
+      {notice && (
+        <div role="status" className="mt-12 px-16 py-12 text-sm"
+          style={{ background: "color-mix(in srgb, #5fce93 14%, transparent)", borderLeft: "4px solid #5fce93" }}>
+          {notice}
+        </div>
+      )}
+      {actError && !panel && (
+        <div role="alert" className="mt-12 px-12 py-8 text-sm"
+          style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>
+          {actError}
+        </div>
+      )}
 
       <div className="mt-16 space-y-12">
         {rows.map(t => (
@@ -524,7 +593,7 @@ function Transport({ rows, scope, setScope }:
                   {t.distance_km ? ` · ${t.distance_km} km` : ""}
                 </p>
               </div>
-              <Badge label={t.status.replace("_", " ")} color={TRANS_EDGE[t.status] ?? "var(--ink-soft)"} />
+              <Badge label={TRANS_LABEL[t.status] ?? t.status.replace("_", " ")} color={TRANS_EDGE[t.status] ?? "var(--ink-soft)"} />
             </div>
 
             <div className="mt-12 grid grid-cols-1 gap-8 text-xs md:grid-cols-3">
@@ -542,6 +611,111 @@ function Transport({ rows, scope, setScope }:
             <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
               Card: {t.company_name} · file {t.file_number} (visible to you only)
             </p>
+
+            {t.status === "temp_booked" && (() => {
+              const left = holdDeadline(t.temp_booked_at) - Date.now();
+              return (
+                <div className="mt-12 rounded-card p-12"
+                  style={{
+                    background: "color-mix(in srgb, var(--gold) 10%, transparent)",
+                    border: "1px solid var(--line)"
+                  }}>
+                  <p className="text-xs font-semibold" style={{ color: "var(--ink)" }}>
+                    {t.booked_company_name} is holding this load
+                  </p>
+                  <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                    {t.booked_contact_name} · {t.booked_contact_channel}
+                  </p>
+                  <p className="mt-4 text-xs font-semibold"
+                    style={{ color: left <= 2 * 3_600_000 ? "var(--danger)" : "var(--ink)" }}>
+                    Confirm within {countdown(left)} (by{" "}
+                    {new Date(holdDeadline(t.temp_booked_at)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    ) — without an answer it goes back on the board automatically
+                    {t.reminder_sent_at ? " · 6h reminder sent" : ""}.
+                  </p>
+                  <div className="mt-8 flex flex-wrap gap-8">
+                    <button type="button" disabled={busy} onClick={() => act(t, "confirm")}
+                      className="waisha-btn rounded-input px-12 py-6 text-xs font-semibold"
+                      style={{ background: "var(--brand)", color: "#fff", opacity: busy ? 0.6 : 1 }}>
+                      {busy ? "Working…" : "Confirm booking"}
+                    </button>
+                    <button type="button" onClick={() => openPanel(t.id, "decline")}
+                      className="rounded-input border px-12 py-6 text-xs font-semibold"
+                      style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+                      {panel !== null && panel.id === t.id && panel.kind === "decline" ? "Keep the hold" : "Decline…"}
+                    </button>
+                  </div>
+                  {panel !== null && panel.id === t.id && panel.kind === "decline" && (
+                    <div className="mt-8">
+                      <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                        Declining puts the load straight back on the board. A note is optional.
+                      </p>
+                      <input value={reason} maxLength={300} placeholder="Note for the company (optional)"
+                        onChange={e => setReason(e.target.value)}
+                        className="mt-6 w-full rounded-input border px-12 py-8 text-sm" style={inputStyle} />
+                      {actError && (
+                        <p role="alert" className="mt-6 text-xs" style={{ color: "var(--danger)" }}>{actError}</p>
+                      )}
+                      <button type="button" disabled={busy}
+                        onClick={() => act(t, "reject", reason.trim().length >= 2 ? reason.trim() : undefined)}
+                        className="mt-8 rounded-input px-12 py-6 text-xs font-semibold"
+                        style={{ background: "var(--danger)", color: "#fff", opacity: busy ? 0.6 : 1 }}>
+                        {busy ? "Working…" : "Decline booking"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {t.status === "confirmed" && (
+              <div className="mt-12 rounded-card p-12"
+                style={{ background: "var(--milk)", border: "1px solid var(--line)" }}>
+                <p className="text-xs font-semibold" style={{ color: "var(--ink)" }}>
+                  Confirmed with {t.booked_company_name}
+                </p>
+                <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                  {t.booked_contact_name} · {t.booked_contact_channel}
+                  {t.confirmed_at ? ` · confirmed ${new Date(t.confirmed_at).toLocaleString()}` : ""}
+                </p>
+                <button type="button" onClick={() => openPanel(t.id, "cancel")}
+                  className="mt-8 rounded-input border px-12 py-6 text-xs font-semibold"
+                  style={{ borderColor: "var(--line)", color: "var(--danger)" }}>
+                  {panel !== null && panel.id === t.id && panel.kind === "cancel" ? "Keep the booking" : "Cancel booking…"}
+                </button>
+                {panel !== null && panel.id === t.id && panel.kind === "cancel" && (
+                  <div className="mt-8">
+                    <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                      Cancelling a confirmed booking needs a reason — it is logged and shared with
+                      {" "}{t.booked_company_name}. The load goes back on the board.
+                    </p>
+                    <input value={reason} maxLength={300} placeholder="Why is this booking being cancelled?"
+                      onChange={e => setReason(e.target.value)}
+                      className="mt-6 w-full rounded-input border px-12 py-8 text-sm" style={inputStyle} />
+                    {actError && (
+                      <p role="alert" className="mt-6 text-xs" style={{ color: "var(--danger)" }}>{actError}</p>
+                    )}
+                    <button type="button" disabled={busy || reason.trim().length < 4}
+                      onClick={() => act(t, "cancel", reason.trim())}
+                      className="mt-8 rounded-input px-12 py-6 text-xs font-semibold"
+                      style={{
+                        background: "var(--danger)", color: "#fff",
+                        opacity: busy || reason.trim().length < 4 ? 0.55 : 1
+                      }}>
+                      {busy ? "Working…" : "Cancel booking"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {t.status === "open" && t.released_at && (
+              <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+                Back on the board since {new Date(t.released_at).toLocaleString()}
+                {t.booked_company_name ? ` — the hold by ${t.booked_company_name} ended.` : "."}
+              </p>
+            )}
+
             <Link href={`/app/cfa/jobs/${t.job_id}`}
               className="mt-12 inline-block text-xs underline" style={{ color: "var(--brand)" }}>
               Open the job

@@ -18,6 +18,7 @@ const J = "22222222-2222-7222-8222-222222222222";  // job
 const S = "33333333-3333-7333-8333-333333333333";  // shipment
 const R = "99999999-9999-7999-8999-999999999999";  // transport request
 const RT = "aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa"; // route
+const B = "bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb";  // booking
 
 const sql: [string, string, unknown[]][] = [
   // ---- util/transport.ts ----
@@ -84,8 +85,9 @@ const sql: [string, string, unknown[]][] = [
        and deleted_at is null and status = 'active' limit 1`, [U, T]],
 
   // ---- publish ----
+  // No `status` column: migration 048 made 'open' the only way in (the default).
   ["publish: insert request",
-    `insert into transport_requests (id, tenant_id, job_id, shipment_id, status,
+    `insert into transport_requests (id, tenant_id, job_id, shipment_id,
        cargo_label, container_type, container_count, weight_tonnes, cbm, vehicle_types,
        route_id, route_label, distance_km, expected_duration_hours,
        pickup_text, pickup_region_id, dest_text, dest_region_id, via_label, required_date,
@@ -93,7 +95,7 @@ const sql: [string, string, unknown[]][] = [
        company_name, company_description, company_services, company_corridors,
        company_website, fleet_size_declared, year_established,
        disclosed_by, disclosed_at, created_by, updated_by)
-     values ($1,$2,$3,$4,'open',
+     values ($1,$2,$3,$4,
        'Steel coils',$5,6,24.5,18::numeric,$6::text[],
        $7,'Dar - Iringa',610,14,
        'ICD Tema',$8,'Iringa',$9,'Mlimba','2026-10-20'::date,
@@ -113,7 +115,9 @@ const sql: [string, string, unknown[]][] = [
     `select t.id, t.status, t.cargo_label, t.pickup_text, t.dest_text, t.via_label,
             t.distance_km, t.expected_duration_hours, t.vehicle_types, t.container_type,
             t.container_count, t.weight_tonnes, t.cbm, t.required_date::text as required_date,
-            t.contact_name, t.company_name, t.route_label, t.disclosed_at,
+            t.contact_name, t.contact_channel, t.company_name, t.route_label, t.disclosed_at,
+            t.booked_company_name, t.booked_contact_name, t.booked_contact_channel,
+            t.temp_booked_at, t.reminder_sent_at, t.released_at, t.confirmed_at,
             t.job_id, t.shipment_id, s.file_number, s.shipment_type,
             j.status as job_status, j.transport_consent
        from transport_requests t
@@ -138,10 +142,31 @@ const sql: [string, string, unknown[]][] = [
     `select id, job_id, shipment_id, status, pickup_text, dest_text
        from transport_requests
       where id = $1 and tenant_id = $2 and deleted_at is null`, [R, T]],
-  ["cancel: write",
-    `update transport_requests set status = 'cancelled', cancelled_by = $2,
-       cancelled_at = now(), updated_by = $2, updated_at = now()
-      where id = $1 and tenant_id = $3 and status = 'open'`, [R, U, T]]
+  ["cancel: call state machine",
+    `select transport_withdraw_request($1,$2,$3) as r`, [R, T, U]],
+
+  // ---- booking transitions (all via SECURITY DEFINER functions) ----
+  ["confirm: call state machine",
+    `select transport_confirm_booking($1,$2,$3) as r`, [R, T, U]],
+  ["reject: call state machine",
+    `select transport_reject_booking($1,$2,$3,$4) as r`, [R, T, U, null]],
+  ["cancel-booking: call state machine",
+    `select transport_cancel_booking($1,$2,$3,$4) as r`, [R, T, U, "The client changed the plan"]],
+  ["release: resolve own booking",
+    `select request_id from transport_bookings
+      where id = $1 and tenant_id = $2 and deleted_at is null`, [B, T]],
+  ["release: call state machine",
+    `select transport_release_booking($1,$2,$3,$4) as r`, [R, T, U, null]],
+  ["my-bookings: list",
+    `select id, status, cargo_label, container_type, container_count, weight_tonnes, cbm,
+            vehicle_types, route_label, distance_km, expected_duration_hours,
+            pickup_text, dest_text, via_label, required_date::text as required_date,
+            company_name, contact_name, contact_channel,
+            temp_booked_at, reminder_sent_at, confirmed_at, ended_at, ended_reason,
+            created_at
+       from transport_bookings
+      where tenant_id = $1 and deleted_at is null
+      order by created_at desc limit 200`, [T]]
 ];
 
 /** Every column the board may ever read. Anything else fails this script. */
@@ -154,6 +179,10 @@ const ALLOWED_COLUMNS = new Set([
   "company_name", "company_description", "company_services", "company_corridors",
   "company_website", "fleet_size_declared", "year_established",
   "disclosed_by", "disclosed_at", "cancelled_by", "cancelled_at",
+  // Booking summary (migration 048): the booker's company and the server clocks.
+  // Never client identity beyond the contact the booker chose to give.
+  "booked_by_tenant_id", "booked_by", "booked_company_name", "booked_contact_name",
+  "booked_contact_channel", "temp_booked_at", "reminder_sent_at", "released_at", "confirmed_at",
   "created_by", "updated_by", "created_at", "updated_at", "deleted_at"
 ]);
 
@@ -228,13 +257,38 @@ async function main() {
     const want: string[] = [];
     if (!r.rls) want.push("RLS off");
     if (Number(r.policies) === 0) want.push("no tenant policy");
+    // After 048 the only table-level privilege left is SELECT: INSERT is
+    // column-level (no `status`) and UPDATE is gone — transitions live in the
+    // SECURITY DEFINER functions. table_privileges cannot see column grants,
+    // so the shape is asserted with has_*_privilege below.
     const grants: string[] = (r.app_grants ?? "").split(",").filter(Boolean);
-    const expected = ["INSERT", "SELECT", "UPDATE"];
+    const expected = ["SELECT"];
     if (grants.slice().sort().join(",") !== expected.join(","))
-      want.push(`grants are "${r.app_grants ?? "none"}", want ${expected.join("/")}`);
+      want.push(`table grants are "${r.app_grants ?? "none"}", want ${expected.join("/")} only`);
     if (Number(r.live_uq) !== 1) want.push("one-live-request-per-job index missing");
     if (want.length) { failed++; console.log("FAIL  transport_requests -", want.join("; ")); }
     else console.log(`ok    transport_requests (rls=${r.rls} policies=${r.policies} grants=${r.app_grants})`);
+  }
+
+  const priv = (await pool.query(
+    `select has_table_privilege('app_runtime','public.transport_requests','UPDATE') as req_update,
+            has_column_privilege('app_runtime','public.transport_requests','status','INSERT') as ins_status,
+            has_column_privilege('app_runtime','public.transport_requests','cargo_label','INSERT') as ins_label,
+            has_table_privilege('app_runtime','public.transport_bookings','SELECT') as book_select,
+            has_table_privilege('app_runtime','public.transport_bookings','INSERT') as book_insert,
+            has_table_privilege('app_runtime','public.transport_bookings','UPDATE') as book_update`)).rows[0];
+  const shapeProblems: string[] = [];
+  if (priv.req_update) shapeProblems.push("app_runtime can UPDATE transport_requests directly");
+  if (priv.ins_status) shapeProblems.push("app_runtime can INSERT transport_requests.status - clients must not set the state");
+  if (!priv.ins_label) shapeProblems.push("app_runtime cannot INSERT transport_requests.cargo_label - publish is broken");
+  if (!priv.book_select) shapeProblems.push("app_runtime cannot SELECT transport_bookings");
+  if (priv.book_insert) shapeProblems.push("app_runtime can INSERT transport_bookings - writes must go through the functions");
+  if (priv.book_update) shapeProblems.push("app_runtime can UPDATE transport_bookings - writes must go through the functions");
+  if (shapeProblems.length) {
+    failed++;
+    for (const p of shapeProblems) console.log("FAIL ", p);
+  } else {
+    console.log("ok    column-level grants: INSERT without status, no UPDATE, bookings read-only");
   }
 
   await pool.end();

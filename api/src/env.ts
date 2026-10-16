@@ -22,7 +22,10 @@ const schema = z.object({
   AZAMPAY_WEBHOOK_SECRET: z.string().optional().default(""),
   SUPABASE_URL: z.string().optional().default(""),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional().default(""),
-  DOCUMENTS_BUCKET: z.string().default("waisha-documents")
+  DOCUMENTS_BUCKET: z.string().default("waisha-documents"),
+  // Shared secret for the internal scheduler endpoint (booking timers).
+  // Never sent to a browser; the in-process loop calls the same functions.
+  INTERNAL_TICK_SECRET: z.string().optional().default("")
 });
 
 const parsed = schema.safeParse(process.env);

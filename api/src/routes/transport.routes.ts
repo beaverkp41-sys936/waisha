@@ -55,6 +55,50 @@ const listSchema = z.object({
   search: z.string().trim().max(120).optional()
 });
 
+/** Reason on a decline or a release — optional, but bounded. */
+const optionalReason = z.object({
+  reason: z.string().trim().min(2).max(300).optional()
+}).strict();
+
+/** Cancelling a confirmed booking always carries a reason (spec, Part 2). */
+const cancelBookingSchema = z.object({
+  reason: z.string().trim().min(4).max(300)
+}).strict();
+
+/** Typed reason from a booking transition function → the API's error shape. */
+function bookingConflict(r: any, action: string): ApiError {
+  if (r?.reason === "missing") return new ApiError("NOT_FOUND", "Transport request not found", 404);
+  if (r?.reason === "not_allowed") return new ApiError("FORBIDDEN", "Not allowed.", 403);
+  if (r?.reason === "reason_required") {
+    return new ApiError("VALIDATION_FAILED", "Give a reason — at least a few words.", 400,
+      [{ field: "reason" }]);
+  }
+  if (r?.reason === "confirmed") {
+    return new ApiError("CONFLICT",
+      "The booking is already confirmed — cancel it with a reason instead.", 409);
+  }
+  if (r?.reason === "not_temp") {
+    if (r.status === "confirmed") {
+      return new ApiError("CONFLICT",
+        "The booking is already confirmed — cancel it with a reason instead.", 409);
+    }
+    if (r.status === "cancelled") {
+      return new ApiError("CONFLICT", "That request was withdrawn by its publisher.", 409);
+    }
+    return new ApiError("CONFLICT",
+      "That hold has already ended — it was released, declined or expired.", 409);
+  }
+  if (r?.reason === "not_confirmed") {
+    if (r.status === "temp_booked") {
+      return new ApiError("CONFLICT",
+        "The booking is still awaiting confirmation — decline it instead.", 409);
+    }
+    return new ApiError("CONFLICT", "That booking is not confirmed any more.", 409);
+  }
+  return new ApiError("CONFLICT",
+    `The booking changed while you were trying to ${action} it. Reload and try again.`, 409);
+}
+
 export async function transportRoutes(app: FastifyInstance, _opts: unknown) {
   // ---------- Consent preview: what would become visible, nothing stored ----------
   app.post("/jobs/:id/transport-preview",
@@ -157,7 +201,9 @@ export async function transportRoutes(app: FastifyInstance, _opts: unknown) {
 
         try {
           await c.query(
-          `insert into transport_requests (id, tenant_id, job_id, shipment_id, status,
+          // No `status` here: migration 048 revoked INSERT on that column, so
+          // the database default 'open' is the only way a request can start.
+          `insert into transport_requests (id, tenant_id, job_id, shipment_id,
              cargo_label, container_type, container_count, weight_tonnes, cbm, vehicle_types,
              route_id, route_label, distance_km, expected_duration_hours,
              pickup_text, pickup_region_id, dest_text, dest_region_id, via_label, required_date,
@@ -165,7 +211,7 @@ export async function transportRoutes(app: FastifyInstance, _opts: unknown) {
              company_name, company_description, company_services, company_corridors,
              company_website, fleet_size_declared, year_established,
              disclosed_by, disclosed_at, created_by, updated_by)
-           values ($1,$2,$3,$4,'open',
+           values ($1,$2,$3,$4,
              $5,$6,$7,$8,$9,$10::text[],
              $11,$12,$13,$14,
              $15,$16,$17,$18,$19,$20::date,
@@ -236,6 +282,8 @@ export async function transportRoutes(app: FastifyInstance, _opts: unknown) {
                 t.distance_km, t.expected_duration_hours, t.vehicle_types, t.container_type,
                 t.container_count, t.weight_tonnes, t.cbm, t.required_date::text as required_date,
                 t.contact_name, t.contact_channel, t.company_name, t.route_label, t.disclosed_at,
+                t.booked_company_name, t.booked_contact_name, t.booked_contact_channel,
+                t.temp_booked_at, t.reminder_sent_at, t.released_at, t.confirmed_at,
                 t.job_id, t.shipment_id, s.file_number, s.shipment_type,
                 j.status as job_status, j.transport_consent
            from transport_requests t
@@ -270,48 +318,199 @@ export async function transportRoutes(app: FastifyInstance, _opts: unknown) {
       });
     });
 
-  // ---------- Cancel an open request ----------
+  // ---------- Cancel an open request (open → cancelled, via the state machine) ----------
   app.post("/transport-requests/:id/cancel",
     { preHandler: [requireAuth, requirePermission("transport.cancel")] },
     async (req: any, reply) => {
       const { id } = req.params as { id: string };
-      const withdrew = await withTenant(req.user.tid, async (c) => {
-        const t = await c.query(
-          `select id, job_id, shipment_id, status, pickup_text, dest_text
-             from transport_requests
-            where id = $1 and tenant_id = $2 and deleted_at is null`,
-          [id, req.user.tid]);
-        if (!t.rowCount) throw new ApiError("NOT_FOUND", "Transport request not found", 404);
-        const row = t.rows[0];
-        if (row.status === "cancelled") return false;
-        if (row.status !== "open") {
-          throw new ApiError("CONFLICT",
-            "Only an open request can be cancelled. Once a transporter has engaged, " +
-            "handle it from the booking.", 409);
+      const out = await withTenant(req.user.tid, async (c) => {
+        const r = (await c.query(
+          `select transport_withdraw_request($1,$2,$3) as r`,
+          [id, req.user.tid, req.user.sub])).rows[0].r;
+        if (r.ok && !r.already) {
+          await writeAudit(c, {
+            tenantId: req.user.tid, actorUserId: req.user.sub, actorRole: actorRole(req),
+            ip: req.ip, requestId: req.requestId, entity: "transport_requests", entityId: id,
+            action: "transport.cancelled", before: { status: "open" },
+            after: { status: "cancelled" }
+          });
         }
-        await c.query(
-          `update transport_requests set status = 'cancelled', cancelled_by = $2,
-             cancelled_at = now(), updated_by = $2, updated_at = now()
-            where id = $1 and tenant_id = $3 and status = 'open'`,
-          [id, req.user.sub, req.user.tid]);
-        await logActivity(c, {
-          tenantId: req.user.tid, jobId: row.job_id, shipmentId: row.shipment_id,
-          actorUserId: req.user.sub, actorRole: actorRole(req),
-          action: "transport.cancelled",
-          summary: `Transport request withdrawn — ${row.pickup_text} to ${row.dest_text}`,
-          entity: "transport_requests", entityId: id
-        });
-        await writeAudit(c, {
-          tenantId: req.user.tid, actorUserId: req.user.sub, actorRole: actorRole(req),
-          ip: req.ip, requestId: req.requestId, entity: "transport_requests", entityId: id,
-          action: "transport.cancelled", before: { status: row.status },
-          after: { status: "cancelled" }
-        });
-        return true;
+        return r;
       });
+      if (!out.ok) {
+        if (out.reason === "missing") {
+          throw new ApiError("NOT_FOUND", "Transport request not found", 404);
+        }
+        throw new ApiError("CONFLICT",
+          "Only an open request can be cancelled. Once a transporter has engaged, " +
+          "handle it from the booking.", 409);
+      }
 
       // Watchers lose the card. Only the id travels — nothing about why, or who.
-      if (withdrew) emitBoard({ type: "request.withdrawn", id, at: new Date().toISOString() });
+      if (!out.already) emitBoard({ type: "request.withdrawn", id, at: new Date().toISOString() });
+      return reply.send({ ok: true });
+    });
+
+  // ---------- The publisher's side of a booking: confirm / decline / cancel ----------
+
+  app.post("/transport-requests/:id/confirm",
+    { preHandler: [requireAuth, requirePermission("transport.confirm_booking")] },
+    async (req: any, reply) => {
+      const { id } = req.params as { id: string };
+      const out = await withTenant(req.user.tid, async (c) => {
+        const r = (await c.query(
+          `select transport_confirm_booking($1,$2,$3) as r`,
+          [id, req.user.tid, req.user.sub])).rows[0].r;
+        if (r.ok) {
+          await writeAudit(c, {
+            tenantId: req.user.tid, actorUserId: req.user.sub, actorRole: actorRole(req),
+            ip: req.ip, requestId: req.requestId, entity: "transport_requests", entityId: id,
+            action: "transport.booking_confirmed",
+            after: { status: "confirmed", bookingId: r.bookingId, company: r.company }
+          });
+        }
+        return r;
+      });
+      if (!out.ok) throw bookingConflict(out, "confirm");
+      return reply.send({ ok: true, bookingId: out.bookingId });
+    });
+
+  app.post("/transport-requests/:id/reject",
+    { preHandler: [requireAuth, requirePermission("transport.confirm_booking")] },
+    async (req: any, reply) => {
+      const { id } = req.params as { id: string };
+      const body = optionalReason.parse(req.body ?? {});
+      const out = await withTenant(req.user.tid, async (c) => {
+        const r = (await c.query(
+          `select transport_reject_booking($1,$2,$3,$4) as r`,
+          [id, req.user.tid, req.user.sub, body.reason ?? null])).rows[0].r;
+        if (r.ok) {
+          await writeAudit(c, {
+            tenantId: req.user.tid, actorUserId: req.user.sub, actorRole: actorRole(req),
+            ip: req.ip, requestId: req.requestId, entity: "transport_requests", entityId: id,
+            action: "transport.booking_rejected",
+            after: { status: "open", bookingId: r.bookingId, reason: body.reason ?? null }
+          });
+        }
+        return r;
+      });
+      if (!out.ok) throw bookingConflict(out, "decline");
+      // Back on the board, so watchers get the card again.
+      const card = await getBoardCard(id);
+      if (card) emitBoard({ type: "request.published", card, at: new Date().toISOString() });
+      return reply.send({ ok: true });
+    });
+
+  app.post("/transport-requests/:id/cancel-booking",
+    { preHandler: [requireAuth, requirePermission("transport.cancel_booking")] },
+    async (req: any, reply) => {
+      const { id } = req.params as { id: string };
+      const body = cancelBookingSchema.parse(req.body);
+      const out = await withTenant(req.user.tid, async (c) => {
+        const r = (await c.query(
+          `select transport_cancel_booking($1,$2,$3,$4) as r`,
+          [id, req.user.tid, req.user.sub, body.reason])).rows[0].r;
+        if (r.ok) {
+          await writeAudit(c, {
+            tenantId: req.user.tid, actorUserId: req.user.sub, actorRole: actorRole(req),
+            ip: req.ip, requestId: req.requestId, entity: "transport_requests", entityId: id,
+            action: "transport.booking_cancelled",
+            after: { status: "open", bookingId: r.bookingId, side: r.side, reason: body.reason }
+          });
+        }
+        return r;
+      });
+      if (!out.ok) throw bookingConflict(out, "cancel");
+      const card = await getBoardCard(id);
+      if (card) emitBoard({ type: "request.published", card, at: new Date().toISOString() });
+      return reply.send({ ok: true });
+    });
+
+  // ---------- The booking company's own records ----------
+
+  app.get("/my-bookings",
+    { preHandler: [requireAuth, requirePermission("board.book")] },
+    async (req: any) => withTenant(req.user.tid, (c) => c.query(
+      `select id, status, cargo_label, container_type, container_count, weight_tonnes, cbm,
+              vehicle_types, route_label, distance_km, expected_duration_hours,
+              pickup_text, dest_text, via_label, required_date::text as required_date,
+              company_name, contact_name, contact_channel,
+              temp_booked_at, reminder_sent_at, confirmed_at, ended_at, ended_reason,
+              created_at
+         from transport_bookings
+        where tenant_id = $1 and deleted_at is null
+        order by created_at desc limit 200`, [req.user.tid])).then((r) => r.rows));
+
+  app.post("/bookings/:id/release",
+    { preHandler: [requireAuth, requirePermission("board.book")] },
+    async (req: any, reply) => {
+      const { id } = req.params as { id: string };
+      const body = optionalReason.parse(req.body ?? {});
+      const out = await withTenant(req.user.tid, async (c) => {
+        const b = await c.query(
+          `select request_id from transport_bookings
+            where id = $1 and tenant_id = $2 and deleted_at is null`, [id, req.user.tid]);
+        if (!b.rowCount) return { ok: false, reason: "not_yours" } as any;
+        const requestId = b.rows[0].request_id as string;
+        const r = (await c.query(
+          `select transport_release_booking($1,$2,$3,$4) as r`,
+          [requestId, req.user.tid, req.user.sub, body.reason ?? null])).rows[0].r;
+        if (r.ok) {
+          await writeAudit(c, {
+            tenantId: req.user.tid, actorUserId: req.user.sub, actorRole: actorRole(req),
+            ip: req.ip, requestId: req.requestId, entity: "transport_bookings", entityId: id,
+            action: "board.booking_released",
+            after: { status: "released", requestId, reason: body.reason ?? null }
+          });
+        }
+        return { ...r, requestId } as any;
+      });
+      if (!out.ok) {
+        if (out.reason === "not_yours" || out.reason === "missing") {
+          throw new ApiError("NOT_FOUND", "Booking not found", 404);
+        }
+        throw bookingConflict(out, "release");
+      }
+      // The load is back on the board.
+      const card = await getBoardCard(out.requestId);
+      if (card) emitBoard({ type: "request.published", card, at: new Date().toISOString() });
+      return reply.send({ ok: true });
+    });
+
+  // The booker cancelling a booking that was already confirmed — same
+  // transition as the publisher's, reason required, but from their own row.
+  app.post("/bookings/:id/cancel-booking",
+    { preHandler: [requireAuth, requirePermission("board.book")] },
+    async (req: any, reply) => {
+      const { id } = req.params as { id: string };
+      const body = cancelBookingSchema.parse(req.body);
+      const out = await withTenant(req.user.tid, async (c) => {
+        const b = await c.query(
+          `select request_id from transport_bookings
+            where id = $1 and tenant_id = $2 and deleted_at is null`, [id, req.user.tid]);
+        if (!b.rowCount) return { ok: false, reason: "not_yours" } as any;
+        const requestId = b.rows[0].request_id as string;
+        const r = (await c.query(
+          `select transport_cancel_booking($1,$2,$3,$4) as r`,
+          [requestId, req.user.tid, req.user.sub, body.reason])).rows[0].r;
+        if (r.ok) {
+          await writeAudit(c, {
+            tenantId: req.user.tid, actorUserId: req.user.sub, actorRole: actorRole(req),
+            ip: req.ip, requestId: req.requestId, entity: "transport_bookings", entityId: id,
+            action: "board.booking_cancelled",
+            after: { status: "cancelled", requestId, side: r.side, reason: body.reason }
+          });
+        }
+        return { ...r, requestId } as any;
+      });
+      if (!out.ok) {
+        if (out.reason === "not_yours" || out.reason === "missing") {
+          throw new ApiError("NOT_FOUND", "Booking not found", 404);
+        }
+        throw bookingConflict(out, "cancel");
+      }
+      const card = await getBoardCard(out.requestId);
+      if (card) emitBoard({ type: "request.published", card, at: new Date().toISOString() });
       return reply.send({ ok: true });
     });
 }

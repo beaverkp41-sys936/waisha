@@ -456,8 +456,112 @@ export async function notificationsRoutes(app: FastifyInstance, _opts: unknown) 
         });
       }
 
-      const rank = { critical: 0, warning: 1, info: 2 };
       const pad = (n: number) => String(n).padStart(2, "0");
+
+      // Bookings on the publisher's own requests: a hold runs on a 12h clock,
+      // so the countdown is the alert. Confirmed bookings stay visible too.
+      const holds = await c.query(
+        `select t.id, t.status, t.booked_company_name, t.booked_contact_name,
+                t.booked_contact_channel, t.temp_booked_at, t.reminder_sent_at, t.confirmed_at
+           from transport_requests t
+          where t.tenant_id = $1 and t.deleted_at is null
+            and t.status in ('temp_booked','confirmed')`, [req.user.tid]);
+      for (const h of holds.rows) {
+        if (h.status === "temp_booked") {
+          const deadline = new Date(h.temp_booked_at).getTime() + 12 * 3_600_000;
+          const leftMs = Math.max(0, deadline - Date.now());
+          const leftH = Math.floor(leftMs / 3_600_000);
+          const leftM = Math.floor((leftMs % 3_600_000) / 60_000);
+          items.push({
+            type: "booking_hold",
+            severity: leftMs <= 2 * 3_600_000 ? "critical" : "warning",
+            title: `Confirm within ${leftH}h ${pad(leftM)}m — ${h.booked_company_name} is holding a load`,
+            detail: `${h.booked_contact_name} · ${h.booked_contact_channel} · auto-releases at ` +
+              `${new Date(deadline).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` +
+              (h.reminder_sent_at ? " · 6h reminder sent" : ""),
+            href: "/app/cfa/jobs", date: h.temp_booked_at
+          });
+        } else {
+          items.push({
+            type: "booking_confirmed", severity: "info",
+            title: `Booking confirmed — ${h.booked_company_name} will move the load`,
+            detail: `Contact ${h.booked_contact_name} on ${h.booked_contact_channel}`,
+            href: "/app/cfa/jobs", date: h.confirmed_at
+          });
+        }
+      }
+
+      // Holds that ended recently: the load is open to every company again.
+      const backOnBoard = await c.query(
+        `select id, booked_company_name, released_at from transport_requests
+          where tenant_id = $1 and deleted_at is null and status = 'open'
+            and released_at > now() - interval '7 days'`, [req.user.tid]);
+      for (const r of backOnBoard.rows) {
+        items.push({
+          type: "booking_released", severity: "info",
+          title: "A load is back on the board",
+          detail: `${r.booked_company_name ?? "A transporter"}'s hold ended ` +
+            `${new Date(r.released_at).toLocaleString()} — other companies can book it again.`,
+          href: "/app/cfa/jobs", date: r.released_at
+        });
+      }
+
+      // The booker's side, from their own booking rows. Self-releases are
+      // skipped — you do not need an alert for something you just did.
+      const myBookings = await c.query(
+        `select b.id, b.status, b.cargo_label, b.dest_text, b.company_name, b.ended_reason,
+                b.temp_booked_at, b.confirmed_at, b.ended_at,
+                not exists (select 1 from users u
+                             where u.id = b.ended_by and u.tenant_id = b.tenant_id) as ended_by_other
+           from transport_bookings b
+          where b.tenant_id = $1 and b.deleted_at is null
+            and b.created_at > now() - interval '30 days'`, [req.user.tid]);
+      const lane = (b: any) => `${b.cargo_label} → ${b.dest_text}`;
+      for (const b of myBookings.rows) {
+        if (b.status === "temp_booked") {
+          const deadline = new Date(b.temp_booked_at).getTime() + 12 * 3_600_000;
+          const leftMs = Math.max(0, deadline - Date.now());
+          items.push({
+            type: "booking_mine_hold",
+            severity: leftMs <= 2 * 3_600_000 ? "warning" : "info",
+            title: `You are holding the load: ${lane(b)}`,
+            detail: `${b.company_name} has until ` +
+              `${new Date(deadline).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} ` +
+              "to confirm, or it goes back on the board.",
+            href: "/app/board", date: b.temp_booked_at
+          });
+        } else if (b.status === "confirmed") {
+          items.push({
+            type: "booking_mine_confirmed", severity: "info",
+            title: `Booking confirmed by ${b.company_name}: ${lane(b)}`,
+            detail: "You can release it from My bookings if plans change.",
+            href: "/app/board", date: b.confirmed_at
+          });
+        } else if (b.status === "rejected") {
+          items.push({
+            type: "booking_mine_rejected", severity: "warning",
+            title: `Declined by ${b.company_name}: ${lane(b)}`,
+            detail: b.ended_reason ? `Reason: ${b.ended_reason}` : "The hold was declined.",
+            href: "/app/board", date: b.ended_at
+          });
+        } else if (b.status === "expired") {
+          items.push({
+            type: "booking_mine_expired", severity: "warning",
+            title: `Hold expired: ${lane(b)}`,
+            detail: "No confirmation came within 12 hours — the load went back on the board.",
+            href: "/app/board", date: b.ended_at
+          });
+        } else if (b.status === "cancelled" && b.ended_by_other) {
+          items.push({
+            type: "booking_mine_cancelled", severity: "warning",
+            title: `Booking cancelled by ${b.company_name}: ${lane(b)}`,
+            detail: b.ended_reason ? `Reason: ${b.ended_reason}` : "The booking was cancelled.",
+            href: "/app/board", date: b.ended_at
+          });
+        }
+      }
+
+      const rank = { critical: 0, warning: 1, info: 2 };
       // pg DATE columns arrive as JS Dates at local midnight; normalise to day
       // strings so mixed Date/string sources can be compared.
       const dayKey = (v: unknown) =>

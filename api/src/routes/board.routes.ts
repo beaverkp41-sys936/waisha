@@ -1,12 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { withTenant } from "../db/pool.js";
 import { ApiError } from "../util/errors.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { requirePermission } from "../security/permissions.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
+import { writeAudit } from "../audit/audit.js";
 import { VEHICLE_TYPES } from "../util/transport.js";
 import { boardSummary, getBoardCard, listBoard } from "../util/board.js";
-import { openBoardChannel, type BoardEvent } from "../util/board-bus.js";
+import { emitBoard, openBoardChannel, type BoardEvent } from "../util/board-bus.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -14,6 +16,8 @@ async function requireAuth(req: any) {
   if (!claims) throw new ApiError("TOKEN_EXPIRED", "Sign in to continue", 401);
   req.user = claims;
 }
+
+const actorRole = (req: any): string | null => req.user?.roles?.[0] ?? null;
 
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -31,7 +35,13 @@ const boardQuery = z.object({
   { message: "The date range is reversed.", path: ["from"] }
 );
 
-const HEARTBEAT_MS = 25_000;
+  const HEARTBEAT_MS = 25_000;
+
+/** The book body is closed: a contact name and a channel, nothing else. */
+const bookSchema = z.object({
+  contactName: z.string().trim().min(2).max(120),
+  contactChannel: z.string().trim().min(5).max(160)
+}).strict();
 
 /** One SSE frame. The event name is the type, so clients can addEventListener. */
 function frame(e: BoardEvent) {
@@ -61,6 +71,64 @@ export async function boardRoutes(app: FastifyInstance, _opts: unknown) {
         throw new ApiError("NOT_FOUND", "That load is no longer on the board.", 404);
       }
       return card;
+    });
+
+  // ---------- Book: the load leaves the board and a timer starts ----------
+  // The transition itself is transport_book_request (migration 048): a guarded
+  // UPDATE that makes two simultaneous books resolve to exactly one winner.
+  app.post("/board/:id/book",
+    { preHandler: [requireAuth, requirePermission("board.book")] },
+    async (req: any, reply) => {
+      const { id } = req.params as { id: string };
+      const body = bookSchema.parse(req.body);
+      const out = await withTenant(req.user.tid, async (c) => {
+        const r = (await c.query(
+          `select transport_book_request($1,$2,$3,$4,$5) as r`,
+          [id, req.user.tid, req.user.sub, body.contactName, body.contactChannel])).rows[0].r;
+        if (r.ok) {
+          await writeAudit(c, {
+            tenantId: req.user.tid, actorUserId: req.user.sub, actorRole: actorRole(req),
+            ip: req.ip, requestId: req.requestId,
+            entity: "transport_bookings", entityId: r.bookingId,
+            action: "board.booked",
+            after: { requestId: id, status: "temp_booked", company: r.company }
+          });
+        }
+        return r;
+      });
+
+      if (!out.ok) {
+        if (out.reason === "missing") {
+          throw new ApiError("NOT_FOUND", "That load is no longer on the board.", 404);
+        }
+        if (out.reason === "own_request") {
+          throw new ApiError("CONFLICT", "This is your own load — you cannot book it.", 409);
+        }
+        if (out.reason === "contact") {
+          throw new ApiError("VALIDATION", "A contact name and a way to reach you are required.", 400);
+        }
+        if (out.reason === "not_allowed") {
+          throw new ApiError("FORBIDDEN", "Your role does not allow this action.", 403);
+        }
+        // not_open: either somebody won the race, or the load was withdrawn
+        // between the card render and this click. Both read as a lost race.
+        if (out.status === "temp_booked" || out.status === "confirmed") {
+          throw new ApiError("CONFLICT",
+            "Another company booked this load moments before you. " +
+            "It is held while the publishing company confirms.", 409);
+        }
+        throw new ApiError("CONFLICT", "That load is no longer on the board.", 409);
+      }
+
+      // Every other watcher loses the card at once. Id only — the board never
+      // learns who booked, or why it vanished.
+      emitBoard({ type: "request.withdrawn", id, at: new Date().toISOString() });
+      // `at` lets the client start the 12h hold countdown without a round trip;
+      // /my-bookings stays the authoritative source for the exact stamp.
+      return reply.code(201).send({
+        ok: true, bookingId: out.bookingId, company: out.company,
+        at: new Date().toISOString()
+      });
     });
 
   // ---------- Realtime: new loads appear without a refresh ----------

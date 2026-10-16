@@ -39,6 +39,8 @@ import { employeesRoutes } from "./routes/employees.routes.js";
 import { officeCostsRoutes } from "./routes/office-costs.routes.js";
 import { shipperAccountsRoutes } from "./routes/shipper-accounts.routes.js";
 import { portalRoutes } from "./routes/portal.routes.js";
+import { internalRoutes } from "./routes/internal.routes.js";
+import { startBookingTimerLoop } from "./util/booking-timer.js";
 
 async function main() {
   const app = Fastify({
@@ -97,7 +99,9 @@ async function main() {
   await app.register(officeCostsRoutes, { prefix: "/api/v1" });
   await app.register(shipperAccountsRoutes, { prefix: "/api/v1" });
   await app.register(portalRoutes, { prefix: "/api/v1" });
+  await app.register(internalRoutes, { prefix: "/api/v1" });
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
+  startBookingTimerLoop(app.log);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

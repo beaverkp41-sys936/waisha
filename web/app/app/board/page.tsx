@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from "react";
 import dynamic from "next/dynamic";
-import { Megaphone } from "lucide-react";
+import { Megaphone, ClipboardList } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { apiFetch, apiStream } from "../api-client";
 
@@ -44,6 +44,58 @@ interface Card {
   fleetSizeDeclared: number | null;
   yearEstablished: number | null;
   disclosedAt: string;
+}
+
+interface Booking {
+  id: string;
+  status: "temp_booked" | "confirmed" | "rejected" | "expired" | "released" | "cancelled";
+  cargo_label: string;
+  container_type: string | null;
+  container_count: number | null;
+  weight_tonnes: number | null;
+  cbm: number | null;
+  vehicle_types: string[];
+  route_label: string | null;
+  distance_km: number | null;
+  expected_duration_hours: number | null;
+  pickup_text: string;
+  dest_text: string;
+  via_label: string | null;
+  required_date: string;
+  company_name: string;
+  contact_name: string;
+  contact_channel: string;
+  temp_booked_at: string;
+  reminder_sent_at: string | null;
+  confirmed_at: string | null;
+  ended_at: string | null;
+  ended_reason: string | null;
+  created_at: string;
+}
+
+/** Mirrors the server's 12-hour auto-release window. */
+const HOLD_HOURS = 12;
+const holdDeadline = (iso: string) => new Date(iso).getTime() + HOLD_HOURS * 3_600_000;
+
+function countdown(ms: number): string {
+  if (ms <= 0) return "any moment now";
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m} min`;
+}
+
+const STATUS_META: Record<string, { label: string; tone: string }> = {
+  temp_booked: { label: "Held — awaiting confirmation", tone: "var(--gold)" },
+  confirmed: { label: "Confirmed", tone: "#5fce93" },
+  rejected: { label: "Declined", tone: "var(--danger)" },
+  expired: { label: "Expired", tone: "var(--danger)" },
+  released: { label: "Released by you", tone: "var(--ink-soft)" },
+  cancelled: { label: "Cancelled", tone: "var(--danger)" }
+};
+
+/** Normalise a paragraph of API error into one line. */
+function errText(json: any, fallback: string): string {
+  return json?.error?.message ?? fallback;
 }
 
 const VEHICLE_LABELS: Record<string, string> = {
@@ -109,6 +161,37 @@ export default function BoardPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [geometry, setGeometry] = useState<Record<string, [number, number][]>>({});
   const [noRoute, setNoRoute] = useState<Set<string>>(new Set());
+
+  // ---- booking: the board tab books, the bookings tab manages ----
+  const [tab, setTab] = useState<"board" | "bookings">("board");
+  const [bookOpen, setBookOpen] = useState<string | null>(null);
+  const [bookName, setBookName] = useState("");
+  const [bookChannel, setBookChannel] = useState("");
+  const [bookBusy, setBookBusy] = useState(false);
+  const [bookError, setBookError] = useState<string | null>(null);
+  const [booked, setBooked] = useState<{ company: string; at: string } | null>(null);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [bookingsLoading, setBookingsLoading] = useState(false);
+  const [bookingsError, setBookingsError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [releaseOpen, setReleaseOpen] = useState<string | null>(null);
+  const [releaseReason, setReleaseReason] = useState("");
+  const [releaseBusy, setReleaseBusy] = useState(false);
+  const [releaseError, setReleaseError] = useState<string | null>(null);
+  const [meName, setMeName] = useState("");
+  const [, setClock] = useState(0);
+
+  // One tick every 30s re-renders the countdowns without touching the server.
+  useEffect(() => {
+    const t = window.setInterval(() => setClock(c => c + 1), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
+  useEffect(() => {
+    (async () => {
+      const r = await apiFetch("/auth/me");
+      if (r.ok) setMeName((await r.json())?.full_name ?? "");
+    })();
+  }, []);
 
   const rawQuery = useMemo(() => {
     const q = new URLSearchParams();
@@ -256,6 +339,90 @@ export default function BoardPage() {
     } catch { mark(c.id, true); }
   }
 
+  const loadBookings = useCallback(async () => {
+    setBookingsLoading(true); setBookingsError(null);
+    try {
+      const res = await apiFetch("/my-bookings");
+      if (!res.ok) { setBookingsError("Your bookings could not be loaded. Try again."); return; }
+      setBookings(await res.json());
+    } catch (e: any) {
+      if (e.message !== "session ended") setBookingsError("Your bookings could not be loaded. Try again.");
+    } finally { setBookingsLoading(false); }
+  }, []);
+
+  useEffect(() => { if (tab === "bookings") loadBookings(); }, [tab, loadBookings]);
+
+  function openBook(c: Card) {
+    setBookOpen(c.id); setBookError(null); setBookChannel("");
+    setBookName(prev => prev || meName);
+  }
+
+  async function submitBook(c: Card) {
+    setBookBusy(true); setBookError(null);
+    try {
+      const res = await apiFetch(`/board/${c.id}/book`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contactName: bookName.trim(), contactChannel: bookChannel.trim() })
+      });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) {
+        // The loser of a race gets the server's words, not a generic apology.
+        setBookError(errText(j, "The booking could not be placed. Try again."));
+        return;
+      }
+      setBookOpen(null); setBookChannel("");
+      setBooked({ company: c.companyName, at: j?.at ?? new Date().toISOString() });
+      // The load is off the board for every company this second — mirror that.
+      setCards(prev => prev.filter(x => x.id !== c.id));
+      setOpen(n => (n === null ? null : Math.max(0, n - 1)));
+      setTotal(t => Math.max(0, t - 1));
+      loadRef.current(true);
+    } catch (e: any) {
+      if (e.message !== "session ended") setBookError("The booking could not be placed. Try again.");
+    } finally { setBookBusy(false); }
+  }
+
+  async function releaseHold(b: Booking) {
+    setReleaseBusy(true); setReleaseError(null);
+    try {
+      const reason = releaseReason.trim();
+      const res = await apiFetch(`/bookings/${b.id}/release`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(reason.length >= 2 ? { reason } : {})
+      });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) { setReleaseError(errText(j, "The hold could not be released. Try again.")); return; }
+      setReleaseOpen(null); setReleaseReason("");
+      setNotice("Hold released — the load is back on the board.");
+      loadBookings();
+    } catch (e: any) {
+      if (e.message !== "session ended") setReleaseError("The hold could not be released. Try again.");
+    } finally { setReleaseBusy(false); }
+  }
+
+  async function cancelConfirmed(b: Booking) {
+    setReleaseBusy(true); setReleaseError(null);
+    try {
+      const res = await apiFetch(`/bookings/${b.id}/cancel-booking`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: releaseReason.trim() })
+      });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) { setReleaseError(errText(j, "The booking could not be cancelled. Try again.")); return; }
+      setReleaseOpen(null); setReleaseReason("");
+      setNotice("Booking cancelled — the load is back on the board.");
+      loadBookings();
+    } catch (e: any) {
+      if (e.message !== "session ended") setReleaseError("The booking could not be cancelled. Try again.");
+    } finally { setReleaseBusy(false); }
+  }
+
+  const activeBookings = bookings.filter(
+    b => b.status === "temp_booked" || b.status === "confirmed").length;
+
   return (
     <div className="mx-auto max-w-[1100px] px-16 py-32">
       <div className="flex flex-wrap items-start justify-between gap-12">
@@ -275,6 +442,35 @@ export default function BoardPage() {
         </div>
       </div>
 
+      <div className="mt-20 flex flex-wrap items-center gap-8">
+        {(["board", "bookings"] as const).map(t => (
+          <button key={t} type="button" onClick={() => setTab(t)}
+            className="rounded-input px-14 py-7 text-xs font-semibold"
+            style={tab === t
+              ? { background: "var(--brand)", color: "#fff" }
+              : { background: "var(--milk)", border: "1px solid var(--line)", color: "var(--ink-soft)" }}>
+            {t === "board" ? "Board" : `My bookings${activeBookings > 0 ? ` (${activeBookings})` : ""}`}
+          </button>
+        ))}
+      </div>
+
+      {booked && (
+        <div role="status" className="mt-24 flex flex-wrap items-center justify-between gap-12 px-16 py-12 text-sm"
+          style={{ background: "color-mix(in srgb, #5fce93 14%, transparent)", borderLeft: "4px solid #5fce93" }}>
+          <span style={{ color: "var(--ink)" }}>
+            Load held — <strong>{booked.company}</strong> has 12 hours to confirm, by{" "}
+            <strong>{new Date(holdDeadline(booked.at)).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" })}</strong>.
+            If they do not answer in time it goes back on the board automatically.
+          </span>
+          <button type="button" onClick={() => setBooked(null)}
+            className="rounded-input border px-12 py-6 text-xs font-semibold"
+            style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      <div style={{ display: tab === "board" ? undefined : "none" }}>
       <div className="mt-24 grid grid-cols-2 gap-12 rounded-card border bg-surface p-16 md:grid-cols-5"
         style={{ borderColor: "var(--line)" }}>
         <label className="block">
@@ -431,13 +627,58 @@ export default function BoardPage() {
                     {expanded === c.id ? "Hide route" : "Show route"}
                   </button>
                 )}
-                <button type="button" disabled title="Bookings open with the next release"
-                  className="rounded-input px-12 py-6 text-xs font-semibold"
-                  style={{ background: "var(--milk)", border: "1px solid var(--line)", color: "var(--ink-soft)" }}>
-                  Book — coming soon
+                <button type="button"
+                  onClick={() => (bookOpen === c.id ? setBookOpen(null) : openBook(c))}
+                  className="waisha-btn rounded-input px-12 py-6 text-xs font-semibold"
+                  style={bookOpen === c.id
+                    ? { background: "var(--milk)", border: "1px solid var(--line)", color: "var(--ink-soft)" }
+                    : { background: "var(--brand)", color: "#fff" }}>
+                  {bookOpen === c.id ? "Not now" : "Book this load"}
                 </button>
               </div>
             </div>
+
+            {bookOpen === c.id && (
+              <div className="mt-16 rounded-card p-16" style={{ background: "var(--milk)", border: "1px solid var(--line)" }}>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: "var(--ink-soft)" }}>
+                  Book this load
+                </p>
+                <p className="mt-6 text-xs leading-relaxed" style={{ color: "var(--ink-soft)" }}>
+                  The load leaves the board for every company immediately and is held for you up to
+                  {" "}{HOLD_HOURS} hours while {c.companyName} confirms. If they decline — or do not
+                  answer in time — it goes back on the board automatically.
+                </p>
+                <div className="mt-12 grid gap-12 sm:grid-cols-2">
+                  <label className="block">
+                    <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Your contact name</span>
+                    <input value={bookName} maxLength={120}
+                      onChange={e => setBookName(e.target.value)}
+                      className={inputCls} style={inputStyle} />
+                  </label>
+                  <label className="block">
+                    <span className={labelCls} style={{ color: "var(--ink-soft)" }}>
+                      How {c.companyName} reaches you
+                    </span>
+                    <input value={bookChannel} maxLength={160} placeholder="+255 … or name@company.co.tz"
+                      onChange={e => setBookChannel(e.target.value)}
+                      className={inputCls} style={inputStyle} />
+                  </label>
+                </div>
+                {bookError && (
+                  <p role="alert" className="mt-8 text-xs" style={{ color: "var(--danger)" }}>{bookError}</p>
+                )}
+                <div className="mt-12 flex items-center gap-8">
+                  <button type="button" disabled={bookBusy} onClick={() => submitBook(c)}
+                    className="waisha-btn rounded-input px-14 py-7 text-xs font-semibold"
+                    style={{ background: "var(--brand)", color: "#fff", opacity: bookBusy ? 0.6 : 1 }}>
+                    {bookBusy ? "Booking…" : "Hold this load"}
+                  </button>
+                  <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                    One company wins — if someone books first, nothing is charged and nothing is promised.
+                  </span>
+                </div>
+              </div>
+            )}
 
             {expanded === c.id && c.pickupLat !== null && c.destLat !== null && (
               <div className="mt-16 overflow-hidden rounded-card" style={{ height: 280, border: "1px solid var(--line)" }}>
@@ -476,6 +717,149 @@ export default function BoardPage() {
           style={{ borderColor: "var(--line)", color: "var(--brand)" }}>
           Load {Math.min(PAGE, total - cards.length)} more
         </button>
+      )}
+      </div>
+
+      {tab === "bookings" && (
+        <div className="mt-24">
+          {notice && (
+            <div role="status" className="mb-16 px-16 py-12 text-sm"
+              style={{ background: "color-mix(in srgb, #5fce93 14%, transparent)", borderLeft: "4px solid #5fce93" }}>
+              {notice}
+            </div>
+          )}
+          {bookingsError && (
+            <div role="alert" className="mb-16 px-12 py-8 text-sm"
+              style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>
+              {bookingsError}
+            </div>
+          )}
+
+          <div className="pane-note flex flex-wrap items-center justify-between gap-8 text-xs">
+            <span>{bookingsLoading ? "Loading…" : `${bookings.length} booking${bookings.length === 1 ? "" : "s"}`}</span>
+            <span>Holds auto-release after {HOLD_HOURS} hours if the publisher does not confirm.</span>
+          </div>
+
+          {!bookingsLoading && bookings.length === 0 && (
+            <div className="mt-24">
+              <EmptyState icon={ClipboardList}
+                title="No bookings yet"
+                hint="Book a load from the board and it will appear here with its countdown." />
+            </div>
+          )}
+
+          <div className="mt-12 grid gap-16 lg:grid-cols-2">
+            {bookings.map(b => {
+              const meta = STATUS_META[b.status] ?? { label: b.status, tone: "var(--ink-soft)" };
+              const leftMs = b.status === "temp_booked" ? holdDeadline(b.temp_booked_at) - Date.now() : 0;
+              const canAct = b.status === "temp_booked" || b.status === "confirmed";
+              return (
+                <article key={b.id} className="rounded-card border bg-surface p-20"
+                  style={{ borderColor: "var(--line)" }}>
+                  <div className="flex items-start justify-between gap-12">
+                    <div>
+                      <h2 className="text-[15px] font-bold leading-snug" style={{ color: "var(--ink)" }}>
+                        {b.cargo_label}
+                      </h2>
+                      <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                        {b.pickup_text}{" → "}{b.dest_text}{b.via_label ? ` via ${b.via_label}` : ""}
+                      </p>
+                      <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                        Offered by <strong style={{ color: "var(--ink)" }}>{b.company_name}</strong>
+                        {" — "}{b.contact_name} · {b.contact_channel}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-input px-10 py-4 text-[11px] font-bold uppercase tracking-[0.1em]"
+                      style={{ background: `color-mix(in srgb, ${meta.tone} 12%, transparent)`, color: meta.tone }}>
+                      {meta.label}
+                    </span>
+                  </div>
+
+                  {b.status === "temp_booked" && (
+                    <p className="mt-12 text-xs font-semibold"
+                      style={{ color: leftMs <= 2 * 3_600_000 ? "var(--danger)" : "var(--ink)" }}>
+                      Auto-releases in {countdown(leftMs)} (at{" "}
+                      {new Date(holdDeadline(b.temp_booked_at)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})
+                      {b.reminder_sent_at ? " · 6h reminder already sent to the publisher" : ""}
+                    </p>
+                  )}
+                  {b.status === "confirmed" && b.confirmed_at && (
+                    <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
+                      Confirmed {new Date(b.confirmed_at).toLocaleString()} — the publisher knows you are moving it.
+                    </p>
+                  )}
+                  {!canAct && b.ended_at && (
+                    <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
+                      Ended {new Date(b.ended_at).toLocaleString()}
+                      {b.ended_reason ? ` — ${b.ended_reason}` : ""}
+                    </p>
+                  )}
+
+                  <div className="mt-12 flex flex-wrap items-center gap-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                    <span>{dayLabel(b.required_date)}</span>
+                    {b.distance_km !== null && <span>· {b.distance_km} km</span>}
+                    {b.weight_tonnes !== null && <span>· {b.weight_tonnes} t</span>}
+                    {b.container_count !== null && (
+                      <span>· {b.container_count} × {b.container_type ?? "unit"}</span>
+                    )}
+                  </div>
+
+                  {canAct && (
+                    <div className="mt-12">
+                      <button type="button"
+                        onClick={() => {
+                          const next = releaseOpen === b.id ? null : b.id;
+                          setReleaseOpen(next); setReleaseReason(""); setReleaseError(null);
+                        }}
+                        className="rounded-input border px-12 py-6 text-xs font-semibold"
+                        style={{
+                          borderColor: "var(--line)",
+                          color: b.status === "confirmed" ? "var(--danger)" : "var(--brand)"
+                        }}>
+                        {releaseOpen === b.id ? "Keep it"
+                          : b.status === "confirmed" ? "Cancel booking…" : "Release hold…"}
+                      </button>
+                      {releaseOpen === b.id && (
+                        <div className="mt-8 rounded-card p-12"
+                          style={{ background: "var(--milk)", border: "1px solid var(--line)" }}>
+                          <p className="text-xs leading-relaxed" style={{ color: "var(--ink-soft)" }}>
+                            {b.status === "confirmed"
+                              ? `Cancelling a confirmed booking needs a reason — it is logged and shared with ${b.company_name}. The load goes back on the board.`
+                              : "Releasing puts the load straight back on the board for other companies. A reason is optional."}
+                          </p>
+                          <input value={releaseReason} maxLength={300}
+                            placeholder={b.status === "confirmed"
+                              ? "Why is this booking being cancelled?"
+                              : "Reason (optional)"}
+                            onChange={e => setReleaseReason(e.target.value)}
+                            className="mt-8 w-full rounded-input border px-12 py-8 text-sm" style={inputStyle} />
+                          {releaseError && (
+                            <p role="alert" className="mt-6 text-xs" style={{ color: "var(--danger)" }}>
+                              {releaseError}
+                            </p>
+                          )}
+                          <div className="mt-8 flex gap-8">
+                            <button type="button"
+                              disabled={releaseBusy || (b.status === "confirmed" && releaseReason.trim().length < 4)}
+                              onClick={() => (b.status === "confirmed" ? cancelConfirmed(b) : releaseHold(b))}
+                              className="rounded-input px-12 py-6 text-xs font-semibold"
+                              style={{
+                                background: "var(--danger)", color: "#fff",
+                                opacity: releaseBusy || (b.status === "confirmed" && releaseReason.trim().length < 4) ? 0.55 : 1
+                              }}>
+                              {releaseBusy ? "Working…"
+                                : b.status === "confirmed" ? "Cancel booking" : "Release hold"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        </div>
       )}
     </div>
   );
