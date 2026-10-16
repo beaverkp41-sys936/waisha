@@ -10,18 +10,25 @@
   --gold: #c9a84c;
   --green: #2b7a55;
   --olive: #8a9a3a;
+  /* Gold/green tuned for text and icons on the light glass (see .app-content
+     scope below); the brand gold above is for the dark chrome. */
+  --gold-ink: #6d540d;
+  --gold-green-ink: #52601a;
 
   /* Aliases the existing pages already reference. They exist so the palette
      can move without rewriting 30 screens of inline var() calls. */
   --ink: #123249;
-  --ink-soft: #52718a;
+  /* Soft ink is tuned for the 80% white glass cards: any lighter and it washes
+     out against the pane behind them. Same for the status hues when they are
+     used as text. */
+  --ink-soft: #3d5a72;
   --brand: var(--navy);
   --brand-deep: var(--navy-deep);
   --gold-green: var(--olive);
   --gold-green-dark: #6f7d2c;
-  --success: var(--green);
-  --warning: #a8791c;
-  --danger: #a33a3a;
+  --success: #1f6344;
+  --warning: #7d5508;
+  --danger: #94332f;
 
   /* Surfaces. --surface is the frosted card fill; --line stays neutral enough
      to read on both the light and dark glass. */
@@ -65,6 +72,11 @@
     --line: rgba(255, 255, 255, 0.16);
     --milk: #071824;
     --milk-deep: #0f2a3a;
+    --success: #5fce93;
+    --warning: #e2b45f;
+    --danger: #ef8a86;
+    --gold-ink: #e0c375;
+    --gold-green-ink: #b8cc5e;
     --glass-opacity: 0.88;
     --glass-rgb: 17, 37, 53;
     --scrim-top: rgba(4, 16, 26, 0.68);
@@ -147,8 +159,14 @@ body:has(.portal-shell) > main,
 body:has(.page-shell) > main { display: flex; flex-direction: column; }
 
 /* Semi-transparent bar: the photo stays faintly visible behind it while the
-   text reads clearly. */
+   text reads clearly. Sticky to the bottom of whichever scroller owns it —
+   short pages (the office hub) pin it to the viewport edge instead of letting
+   it float mid-screen, tall pages keep it in sight while they scroll. */
 .app-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  flex: 0 0 auto;
   background: var(--footer-bg);
   -webkit-backdrop-filter: blur(10px) saturate(1.2);
   backdrop-filter: blur(10px) saturate(1.2);
@@ -185,6 +203,8 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   background: var(--pane-bg);
+  display: flex;
+  flex-direction: column;
 }
 
 /* Brand lockup — the artwork carries no tagline, so it is live text. */
@@ -435,7 +455,9 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 }
 
 /* --------------------------------------------------------- page furniture */
-.app-content { padding-bottom: 48px; }
+/* Grows to fill the pane so the footer below it lands on the viewport edge
+   even when a page is one card tall. */
+.app-content { flex: 1 0 auto; padding-bottom: 48px; }
 
 /* Page headings sit on the photo, not on glass. The pages set their colour
    inline, so the override has to win the cascade. */
@@ -449,6 +471,32 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   color: var(--on-photo-soft) !important;
   text-shadow: 0 1px 10px rgba(4, 18, 28, 0.5);
 }
+
+/* Notes that sit directly on the pane (not on a glass card). The pane is
+   photo-backed and dark, so soft ink vanishes there — these use the on-photo
+   palette instead. */
+.pane-note {
+  color: var(--on-photo-soft) !important;
+  text-shadow: 0 1px 8px rgba(4, 18, 28, 0.5);
+}
+.pane-note a { color: var(--on-photo) !important; text-underline-offset: 2px; }
+
+/* Status and error banners render straight on the pane and inherit ink, which
+   vanishes against the photo. Only the glass hosts (bg-surface cards/modals and
+   the profile body) keep ink — they are light. Inline colours (e.g. the
+   licence banners) still win, so self-styled banners are untouched. */
+.app-content :is([role="status"], [role="alert"]):not(.bg-surface *, .profile-body *) {
+  color: var(--on-photo-soft);
+  text-shadow: 0 1px 8px rgba(4, 18, 28, 0.5);
+}
+
+/* Brand gold is drawn for the dark chrome; on the light glass it washes out.
+   Inside the pane, gold text and icons resolve to the readable tone while the
+   elements that were designed for brand gold on their own dark fill (buttons,
+   the empty-state tile, the licence banner, the on-photo button) keep it. */
+.app-content { --gold: var(--gold-ink); --gold-green: var(--gold-green-ink); }
+.app-content .waisha-btn { background: #c9a84c; }
+.app-content .waisha-btn:hover { background: #b8963d; }
 
 /* Every card in the portal is bg-surface + a 1px border, so the glass lives on
    the utility itself rather than in 30 call sites. */
@@ -495,13 +543,16 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   width: 64px;
   height: 64px;
   border-radius: 16px;
-  color: var(--gold);
+  color: #c9a84c;
   background: rgba(201, 168, 76, 0.16);
   border: 1px solid rgba(201, 168, 76, 0.42);
 }
 .empty-icon svg { width: 30px; height: 30px; }
 .empty-title { font-size: 15px; font-weight: 700; color: #fff; text-shadow: var(--photo-shadow); }
 .empty-hint { font-size: 13px; color: rgba(255, 255, 255, 0.76); max-width: 42ch; }
+/* Inside a glass card the 28% wash turns light and the white text dies.
+   Deepen the tile so the empty state reads the same on glass as on the photo. */
+.bg-surface .empty-state { background: rgba(9, 38, 60, 0.78); }
 
 /* Progress ring */
 .ring-track { stroke: rgba(255, 255, 255, 0.26); }
@@ -510,7 +561,7 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 /* Licence banner stays solid — it is a status, not chrome. */
 .licence-banner {
   border-radius: 12px;
-  border-left: 4px solid var(--gold);
+  border-left: 4px solid #c9a84c;
   background: rgba(201, 168, 76, 0.18);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
@@ -612,7 +663,7 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   padding: 8px 14px;
   transition: background 180ms var(--ease), border-color 180ms var(--ease);
 }
-.on-photo-btn:hover { background: rgba(6, 24, 38, 0.55); border-color: var(--gold); color: var(--gold); }
+.on-photo-btn:hover { background: rgba(6, 24, 38, 0.55); border-color: #c9a84c; color: #c9a84c; }
 
 /* Tabs */
 .tabs {
@@ -805,6 +856,52 @@ select.auth-field option { color: var(--ink); }
 }
 .auth-tab[aria-selected="true"] { color: #fff; }
 .auth-tab-ink { background: var(--gold); }
+
+/* ------------------------------------------------- admin control (dark) */
+/* One scope carries the whole dark layout from the reference the admin
+   uploaded: the control pages keep referencing the same tokens they always
+   have — inside .control-shell they resolve to the admin palette, so any
+   future screen dropped in here inherits the theme without extra classes. */
+.control-shell {
+  color-scheme: dark;
+  --adm-bg: #0b0e13;
+  --adm-panel: rgba(20, 25, 32, 0.94);
+  --adm-panel-2: #151a21;
+  --adm-line: #2a323c;
+  --adm-text: #e9eef3;
+  --adm-muted: #a2afbd;
+  --adm-accent: #4fd0d8;
+  --adm-accent-soft: rgba(79, 208, 216, 0.14);
+
+  --ink: var(--adm-text);
+  --ink-soft: var(--adm-muted);
+  --line: var(--adm-line);
+  --milk: var(--adm-panel-2);
+  --milk-deep: rgba(255, 255, 255, 0.035);
+  --surface: var(--adm-panel);
+  --brand-deep: #05080c;
+  --brand: var(--adm-accent);
+  --navy: #0f141b;
+  --navy-deep: #05080c;
+  --success: #3fbf7f;
+  --warning: #d9a441;
+  --danger: #e05b5b;
+
+  background: var(--adm-bg);
+  color: var(--ink);
+}
+.control-shell input::placeholder { color: rgba(162, 175, 189, 0.62); }
+.control-shell .waisha-btn { background: var(--adm-accent); color: #05262a; }
+.control-shell .waisha-btn:hover { background: #6adde4; }
+
+/* Translucent sheet over the admin backdrop — the login card. */
+.control-card {
+  background: rgba(14, 19, 25, 0.72);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  backdrop-filter: blur(14px) saturate(1.2);
+  border: 1px solid var(--adm-line);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
 
 /* ------------------------------------------------------------ responsive */
 @media (max-width: 860px) {

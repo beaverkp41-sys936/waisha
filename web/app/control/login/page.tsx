@@ -71,15 +71,18 @@ export default function ControlLoginPage() {
   const labelCls = "mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]";
 
   return (
-    <div className="page-shell flex flex-1 items-center justify-center px-16 py-32"
-      style={{ background: "var(--brand-deep)" }}>
-      <div className="w-full max-w-[440px]">
-        <div className="sheet-in relative overflow-hidden rounded-card border bg-surface"
-          style={{ borderColor: "var(--line)", boxShadow: "0 24px 64px rgba(5,18,26,0.45)" }}>
+    <div className="control-shell page-shell relative flex flex-1 items-center justify-center px-16 py-32">
+      <div aria-hidden className="absolute inset-0"
+        style={{ backgroundImage: "url(/bg/office.jpg)", backgroundSize: "cover", backgroundPosition: "center" }} />
+      <div aria-hidden className="absolute inset-0"
+        style={{ background: "linear-gradient(180deg, rgba(5, 8, 12, 0.85) 0%, rgba(5, 8, 12, 0.72) 100%)" }} />
 
-          <header className="px-24 py-12" style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--gold)" }}>
+      <div className="relative w-full max-w-[440px]">
+        <div className="control-card sheet-in relative overflow-hidden rounded-card">
+
+          <header className="px-24 py-12" style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--adm-accent)" }}>
             <p className="text-sm font-bold tracking-[0.08em] text-white">T ENGO AEGIS Control</p>
-            <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "var(--gold)" }}>
+            <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "var(--adm-accent)" }}>
               Restricted access
             </p>
           </header>

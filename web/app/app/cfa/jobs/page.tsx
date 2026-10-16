@@ -136,7 +136,7 @@ export default function JobsPage() {
             Every cargo file is a job through ten clearing stages — documents gate each stage.
           </p>
         </div>
-        <Link href="/app/cfa/cargo" className="text-xs underline" style={{ color: "var(--brand)" }}>
+        <Link href="/app/cfa/cargo" className="pane-note text-xs underline">
           Cargo files
         </Link>
       </div>
@@ -144,18 +144,13 @@ export default function JobsPage() {
       <nav className="mt-24 flex flex-wrap gap-8" aria-label="Job views">
         {tabs.map(t => (
           <button key={t.key} type="button" onClick={() => setTab(t.key)}
-            className="rounded-input border px-16 py-8 text-xs font-semibold"
-            style={{
-              borderColor: tab === t.key ? "var(--brand)" : "var(--line)",
-              background: tab === t.key ? "color-mix(in srgb, var(--brand) 12%, transparent)" : "transparent",
-              color: tab === t.key ? "var(--ink)" : "var(--ink-soft)"
-            }}>
+            className="on-photo-btn rounded-input px-16 py-8 text-xs font-semibold"
+            style={tab === t.key ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
             {t.label}
           </button>
         ))}
         <button type="button" onClick={load}
-          className="ml-auto rounded-input border px-16 py-8 text-xs font-semibold"
-          style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>Reload</button>
+          className="on-photo-btn ml-auto px-16 py-8 text-xs font-semibold">Reload</button>
       </nav>
 
       {error && (

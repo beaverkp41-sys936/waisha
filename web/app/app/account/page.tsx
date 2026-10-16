@@ -216,8 +216,7 @@ export default function PostLogin() {
       </section>
 
       <button type="button"
-        className="mt-24 rounded-input border px-24 py-8 text-sm font-semibold"
-        style={{ borderColor: "var(--line)", color: "var(--danger)" }}
+        className="on-photo-btn mt-24 px-24 py-8 text-sm font-semibold"
         onClick={signOut}>
         Sign out
       </button>

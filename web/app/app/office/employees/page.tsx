@@ -453,7 +453,7 @@ export default function OfficeEmployeesPage() {
             contracts with renewal countdowns and the trainee register.
           </p>
         </div>
-        <Link href="/app/office" className="text-xs underline" style={{ color: "var(--ink-soft)" }}>
+        <Link href="/app/office" className="pane-note text-xs underline">
           ← Office area
         </Link>
       </div>
@@ -465,8 +465,8 @@ export default function OfficeEmployeesPage() {
       <div className="mt-24 flex flex-wrap gap-8">
         {TABS.map(t => (
           <button key={t.key} type="button" onClick={() => setView(t.key)}
-            className={view === t.key ? "waisha-btn rounded-input px-16 py-8 text-xs font-semibold" : "rounded-input border px-16 py-8 text-xs font-semibold"}
-            style={view === t.key ? {} : { borderColor: "var(--line)", color: "var(--ink)" }}>
+            className="on-photo-btn rounded-input px-16 py-8 text-xs font-semibold"
+            style={view === t.key ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
             {t.label}
           </button>
         ))}
@@ -504,7 +504,7 @@ export default function OfficeEmployeesPage() {
           </section>
 
           <section className="mt-32">
-            <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Leaderboard — by completed tasks</h2>
+            <h2 className={`${h2Cls} pane-note`}>Leaderboard — by completed tasks</h2>
             <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
               <table className="w-full text-sm">
                 <thead>
@@ -557,7 +557,7 @@ export default function OfficeEmployeesPage() {
       {view === "roster" && (
         <section className="mt-24">
           <div className="flex items-end justify-between gap-12">
-            <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Roster</h2>
+            <h2 className={`${h2Cls} pane-note`}>Roster</h2>
             {editingEmp && (
               <button type="button" className="text-xs underline" style={{ color: "var(--ink-soft)" }}
                 onClick={() => { setEditingEmp(null); setEmpForm(EMPTY_EMP); }}>
@@ -747,8 +747,8 @@ export default function OfficeEmployeesPage() {
         <section className="mt-24">
           <div className="flex items-end justify-between gap-12">
             <div>
-              <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Tasks &amp; Files</h2>
-              <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+              <h2 className={`${h2Cls} pane-note`}>Tasks &amp; Files</h2>
+              <p className="pane-note mt-4 text-xs">
                 Daily assignments — link a cargo file, set a priority and a deadline. Completed in time counts toward the leaderboard.
               </p>
             </div>
@@ -915,8 +915,8 @@ export default function OfficeEmployeesPage() {
         <section className="mt-24">
           <div className="flex items-end justify-between gap-12">
             <div>
-              <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Evaluations</h2>
-              <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+              <h2 className={`${h2Cls} pane-note`}>Evaluations</h2>
+              <p className="pane-note mt-4 text-xs">
                 Score each member monthly (1–5) across the four dimensions — the latest evaluation is the roster rating.
               </p>
             </div>
@@ -1025,8 +1025,8 @@ export default function OfficeEmployeesPage() {
       {/* ================= Contracts ================= */}
       {view === "contracts" && (
         <section className="mt-24">
-          <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Contracts — permanent &amp; fixed-term</h2>
-          <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+          <h2 className={`${h2Cls} pane-note`}>Contracts — permanent &amp; fixed-term</h2>
+          <p className="pane-note mt-4 text-xs">
             Renewal countdowns alert 30 days before the end date, in Alerts and the calendar. Attach the signed contract to keep it in the vault.
           </p>
           <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={{ ...cardStyle }}>
@@ -1118,7 +1118,7 @@ export default function OfficeEmployeesPage() {
               </tbody>
             </table>
           </div>
-          <p className="mt-16 text-xs" style={{ color: "var(--ink-soft)" }}>
+          <p className="pane-note mt-16 text-xs">
             Contract scans are stored in the <Link href="/app/documents" className="underline">documents vault</Link> under the employee.
           </p>
         </section>
@@ -1127,8 +1127,8 @@ export default function OfficeEmployeesPage() {
       {/* ================= Trainees ================= */}
       {view === "trainees" && (
         <section className="mt-24">
-          <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Trainees — internship register</h2>
-          <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+          <h2 className={`${h2Cls} pane-note`}>Trainees — internship register</h2>
+          <p className="pane-note mt-4 text-xs">
             Interns with their supervisor and internship dates. Absorb a trainee on completion to take them on as staff.
           </p>
           <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
@@ -1199,7 +1199,7 @@ export default function OfficeEmployeesPage() {
       {view === "reports" && (
         <>
           <section className="mt-24">
-            <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Payroll summary — active staff</h2>
+            <h2 className={`${h2Cls} pane-note`}>Payroll summary — active staff</h2>
             <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
               <table className="w-full text-sm">
                 <thead>
@@ -1239,7 +1239,7 @@ export default function OfficeEmployeesPage() {
           </section>
 
           <section className="mt-32">
-            <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Graded task performance</h2>
+            <h2 className={`${h2Cls} pane-note`}>Graded task performance</h2>
             <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
               <table className="w-full text-sm">
                 <thead>
@@ -1292,7 +1292,7 @@ export default function OfficeEmployeesPage() {
         </>
       )}
 
-      <p className="mt-24 text-xs" style={{ color: "var(--ink-soft)" }}>
+      <p className="pane-note mt-24 text-xs">
         Contract renewals and overdue tasks alert in <Link href="/app/notifications" className="underline">Alerts</Link> and the{" "}
         <Link href="/app/cfa/calendar" className="underline">calendar</Link>. Signed contracts live in the{" "}
         <Link href="/app/documents" className="underline">documents vault</Link>.

@@ -190,8 +190,8 @@ export default function DashboardPage() {
                 </p>
                 <span className="rounded-full px-10 py-2 text-[9px] font-bold uppercase whitespace-nowrap"
                   style={{
-                    background: unlocked ? "color-mix(in srgb, var(--success) 16%, transparent)" : "color-mix(in srgb, var(--gold) 20%, transparent)",
-                    color: unlocked ? "var(--success)" : "var(--ink)"
+                    background: unlocked ? "var(--success)" : "color-mix(in srgb, var(--gold) 20%, transparent)",
+                    color: unlocked ? "#fff" : "var(--ink)"
                   }}>
                   {unlocked ? "Included" : a.planLabel}
                 </span>
@@ -208,7 +208,7 @@ export default function DashboardPage() {
         })}
       </section>
 
-      <p className="mt-24 text-xs" style={{ color: "var(--ink-soft)" }}>
+      <p className="mt-24 text-xs pane-note">
       <Link href="/app/account" className="underline">Account settings</Link> · sessions, devices and sign out
       </p>
     </div>

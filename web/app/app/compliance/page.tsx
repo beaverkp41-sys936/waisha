@@ -148,7 +148,7 @@ export default function CompliancePage() {
         </table>
       </div>
 
-      <p className="mt-16 text-xs" style={{ color: "var(--ink-soft)" }}>
+      <p className="pane-note mt-16 text-xs">
         Update expiry dates on the Fleet, Drivers and Profile pages. Alerts fire automatically from here 30 days out.
       </p>
     </div>

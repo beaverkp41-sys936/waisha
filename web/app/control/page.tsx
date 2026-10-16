@@ -28,12 +28,12 @@ function ChangePassword() {
   }
 
   if (!open) return (
-    <button type="button" className="text-xs underline" style={{ color: "var(--gold)" }}
+    <button type="button" className="text-xs underline" style={{ color: "var(--adm-accent)" }}
       onClick={() => setOpen(true)}>Change password</button>
   );
 
   return (
-    <form onSubmit={submit} className="mb-24 space-y-12 rounded-card border p-16" style={{ borderColor: "var(--gold)" }}>
+    <form onSubmit={submit} className="mb-24 space-y-12 rounded-card border p-16" style={{ borderColor: "var(--adm-line)" }}>
       <input name="cur" type="password" required placeholder="Current password"
         className="w-full rounded-input border px-12 py-8 text-sm"
         style={{ borderColor: "var(--line)", background: "var(--milk)" }} />
@@ -107,12 +107,12 @@ export default function ControlPage() {
   const cellStyle = { borderColor: "var(--line)", background: "var(--milk)" };
 
   return (
-    <div className="page-shell flex-1" style={{ background: "var(--milk)" }}>
+    <div className="control-shell page-shell flex-1">
       <header className="flex items-center justify-between px-24 py-12"
-        style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--gold)" }}>
+        style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--adm-accent)" }}>
         <div>
           <p className="text-sm font-bold tracking-[0.08em] text-white">T ENGO AEGIS Control</p>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "var(--gold)" }}>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "var(--adm-accent)" }}>
             Super Admin · Plans and pricing
           </p>
         </div>
@@ -122,7 +122,7 @@ export default function ControlPage() {
               {me.roles.join(" · ")}
             </span>
           ) : null}
-          <a href="/control/tenants" className="text-xs font-semibold underline" style={{ color: "var(--gold)" }}>Tenants</a>
+          <a href="/control/tenants" className="text-xs font-semibold underline" style={{ color: "var(--adm-accent)" }}>Tenants</a>
           <button type="button" onClick={logout}
             className="rounded-input border px-16 py-8 text-xs font-semibold text-white"
             style={{ borderColor: "rgba(255,255,255,0.4)" }}>

@@ -438,23 +438,23 @@ export default function OfficeCostsPage() {
       <>
         <div className="mt-16 flex flex-wrap items-center gap-8">
           <button type="button" onClick={() => setStatusFilter("")}
-            className={statusFilter === "" ? "waisha-btn rounded-input px-12 py-4 text-xs font-semibold" : "rounded-input border px-12 py-4 text-xs font-semibold"}
-            style={statusFilter === "" ? {} : { borderColor: "var(--line)", color: "var(--ink)" }}>
+            className="on-photo-btn rounded-input px-12 py-4 text-xs font-semibold"
+            style={statusFilter === "" ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
             All {costs.length}
           </button>
           <button type="button" onClick={() => setStatusFilter("pending")}
-            className={statusFilter === "pending" ? "waisha-btn rounded-input px-12 py-4 text-xs font-semibold" : "rounded-input border px-12 py-4 text-xs font-semibold"}
-            style={statusFilter === "pending" ? {} : { borderColor: "var(--line)", color: "var(--ink)" }}>
+            className="on-photo-btn rounded-input px-12 py-4 text-xs font-semibold"
+            style={statusFilter === "pending" ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
             Pending {pendingCount}
           </button>
           <button type="button" onClick={() => setStatusFilter("approved")}
-            className={statusFilter === "approved" ? "waisha-btn rounded-input px-12 py-4 text-xs font-semibold" : "rounded-input border px-12 py-4 text-xs font-semibold"}
-            style={statusFilter === "approved" ? {} : { borderColor: "var(--line)", color: "var(--ink)" }}>
+            className="on-photo-btn rounded-input px-12 py-4 text-xs font-semibold"
+            style={statusFilter === "approved" ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
             Approved
           </button>
           <button type="button" onClick={() => setStatusFilter("rejected")}
-            className={statusFilter === "rejected" ? "waisha-btn rounded-input px-12 py-4 text-xs font-semibold" : "rounded-input border px-12 py-4 text-xs font-semibold"}
-            style={statusFilter === "rejected" ? {} : { borderColor: "var(--line)", color: "var(--ink)" }}>
+            className="on-photo-btn rounded-input px-12 py-4 text-xs font-semibold"
+            style={statusFilter === "rejected" ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
             Rejected
           </button>
           {!lock && (
@@ -592,7 +592,7 @@ export default function OfficeCostsPage() {
           <input type="month" value={month}
             onChange={e => e.target.value && setMonth(e.target.value)}
             className="rounded-input border px-12 py-4 text-xs" style={inputStyle} />
-          <Link href="/app/office" className="text-xs underline" style={{ color: "var(--ink-soft)" }}>
+          <Link href="/app/office" className="pane-note text-xs underline">
             ← Office area
           </Link>
         </div>
@@ -605,8 +605,8 @@ export default function OfficeCostsPage() {
       <div className="mt-24 flex flex-wrap gap-8">
         {TABS.map(t => (
           <button key={t.key} type="button" onClick={() => setView(t.key)}
-            className={view === t.key ? "waisha-btn rounded-input px-16 py-8 text-xs font-semibold" : "rounded-input border px-16 py-8 text-xs font-semibold"}
-            style={view === t.key ? {} : { borderColor: "var(--line)", color: "var(--ink)" }}>
+            className="on-photo-btn rounded-input px-16 py-8 text-xs font-semibold"
+            style={view === t.key ? { borderColor: "#c9a84c", background: "rgba(201,168,76,0.24)" } : undefined}>
             {t.label}
           </button>
         ))}
@@ -666,7 +666,7 @@ export default function OfficeCostsPage() {
           </section>
 
           <section className="mt-32">
-            <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Spend — last 6 months</h2>
+            <h2 className={`${h2Cls} pane-note`}>Spend — last 6 months</h2>
             <div className={card} style={{ ...cardStyle, marginTop: 16 }}>
               <div className="flex items-end gap-16" style={{ height: 140 }}>
                 {summary.months.map(m => (
@@ -692,7 +692,7 @@ export default function OfficeCostsPage() {
           </section>
 
           <section className="mt-32">
-            <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Categories this month</h2>
+            <h2 className={`${h2Cls} pane-note`}>Categories this month</h2>
             <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
               <table className="w-full text-sm">
                 <thead>
@@ -748,7 +748,7 @@ export default function OfficeCostsPage() {
       {/* ================= Daily costs ================= */}
       {view === "daily" && (
         <section className="mt-24">
-          <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>
+          <h2 className={`${h2Cls} pane-note`}>
             Daily costs — {monthLabel} · {fmtMoney(summary?.totals.spent ?? 0)} TZS approved
           </h2>
           {costForm(null)}
@@ -759,7 +759,7 @@ export default function OfficeCostsPage() {
       {/* ================= Allowances ================= */}
       {view === "allowances" && (
         <section className="mt-24">
-          <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Allowances — {monthLabel}</h2>
+          <h2 className={`${h2Cls} pane-note`}>Allowances — {monthLabel}</h2>
           {byEmployee.length > 0 && (
             <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
               <table className="w-full text-sm">
@@ -792,7 +792,7 @@ export default function OfficeCostsPage() {
       {/* ================= Meals & refreshments ================= */}
       {view === "meals" && (
         <section className="mt-24">
-          <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Meals & refreshments — {monthLabel}</h2>
+          <h2 className={`${h2Cls} pane-note`}>Meals & refreshments — {monthLabel}</h2>
           <div className="mt-16 grid grid-cols-2 gap-16 md:grid-cols-3">
             <div className={card} style={cardStyle}>
               <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Approved this month</p>
@@ -839,7 +839,7 @@ export default function OfficeCostsPage() {
       {/* ================= File costs ================= */}
       {view === "filecosts" && (
         <section className="mt-24">
-          <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>File costs against revenue</h2>
+          <h2 className={`${h2Cls} pane-note`}>File costs against revenue</h2>
           <section className="mt-16 grid grid-cols-2 gap-16 md:grid-cols-3">
             <div className={card} style={cardStyle}>
               <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Files carrying office costs</p>
@@ -898,7 +898,7 @@ export default function OfficeCostsPage() {
               </tbody>
             </table>
           </div>
-          <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+          <p className="pane-note mt-8 text-xs">
             Margin = payment amount − processing cost − approved office costs allocated to the file.
           </p>
         </section>
@@ -907,7 +907,7 @@ export default function OfficeCostsPage() {
       {/* ================= Budgets ================= */}
       {view === "budgets" && summary && (
         <section className="mt-24">
-          <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Budgets — {monthLabel} · budget versus spend</h2>
+          <h2 className={`${h2Cls} pane-note`}>Budgets — {monthLabel} · budget versus spend</h2>
           <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
             <table className="w-full text-sm">
               <thead>
@@ -965,7 +965,7 @@ export default function OfficeCostsPage() {
               </tbody>
             </table>
           </div>
-          <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+          <p className="pane-note mt-8 text-xs">
             Budgets are per category and month — overruns raise alerts in the notifications centre.
           </p>
         </section>

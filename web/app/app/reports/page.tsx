@@ -134,8 +134,7 @@ export default function ReportsPage() {
         </div>
         <div className="flex gap-8">
           <button type="button" onClick={downloadCsv} disabled={!data}
-            className="rounded-input border px-16 py-8 text-xs font-semibold disabled:opacity-50"
-            style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Export CSV</button>
+            className="on-photo-btn px-16 py-8 text-xs font-semibold disabled:opacity-50">Export CSV</button>
           <button type="button" onClick={() => window.print()} disabled={!data}
             className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold disabled:opacity-50">
             Print / PDF

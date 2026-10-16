@@ -106,7 +106,7 @@ export default function InvoiceDetailPage() {
   if (error && !inv) {
     return (
       <div className="mx-auto max-w-[900px] px-16 py-32">
-        <div role="alert" className="px-12 py-8 text-sm"
+        <div role="alert" className="pane-note px-12 py-8 text-sm"
           style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>
           {error} <Link href="/app/cfa/invoices" className="underline">Back to invoices</Link>
         </div>
@@ -114,7 +114,7 @@ export default function InvoiceDetailPage() {
     );
   }
   if (!inv) {
-    return <div className="mx-auto max-w-[900px] px-16 py-32 text-sm" style={{ color: "var(--ink-soft)" }}>Loading invoice…</div>;
+    return <div className="pane-note mx-auto max-w-[900px] px-16 py-32 text-sm">Loading invoice…</div>;
   }
 
   const balance = Math.round((Number(inv.total) - Number(inv.amount_paid)) * 100) / 100;
@@ -124,7 +124,7 @@ export default function InvoiceDetailPage() {
     <div className="mx-auto max-w-[860px] px-16 py-32">
       {/* Actions — never printed */}
       <div className="no-print flex flex-wrap items-center justify-between gap-12">
-        <Link href="/app/cfa/invoices" className="text-xs underline" style={{ color: "var(--ink-soft)" }}>
+        <Link href="/app/cfa/invoices" className="pane-note text-xs underline">
           ← All invoices
         </Link>
         <div className="flex flex-wrap gap-12">
@@ -133,16 +133,15 @@ export default function InvoiceDetailPage() {
               className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">Mark as sent</button>
           )}
           <button type="button" onClick={() => setReceiptMode(m => !m)}
-            className="rounded-input border px-16 py-8 text-xs font-semibold"
-            style={{ borderColor: "var(--line)", color: "var(--ink)" }}>
+            className="on-photo-btn px-16 py-8 text-xs font-semibold">
             {receiptMode ? "Invoice view" : "EFD-style receipt"}
           </button>
           <button type="button" onClick={() => window.print()}
             className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">Print / Save PDF</button>
           {inv.status !== "cancelled" && Number(inv.amount_paid) === 0 && (
             <button type="button" disabled={busy} onClick={() => action("cancelled")}
-              className="rounded-input border px-16 py-8 text-xs font-semibold"
-              style={{ borderColor: "var(--danger)", color: "var(--danger)" }}>Cancel invoice</button>
+              className="on-photo-btn px-16 py-8 text-xs font-semibold disabled:opacity-50"
+              style={{ color: "#ff9d94" }}>Cancel invoice</button>
           )}
         </div>
       </div>

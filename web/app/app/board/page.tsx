@@ -267,11 +267,11 @@ export default function BoardPage() {
           </p>
         </div>
         <div className="flex items-center gap-8 text-[11px] font-semibold uppercase tracking-[0.12em]"
-          style={{ color: conn === "live" ? "var(--success)" : "var(--ink-soft)" }}>
+          style={{ color: conn === "live" ? "#5fce93" : "rgba(255,255,255,0.78)", textShadow: "0 1px 8px rgba(4,18,28,0.5)" }}>
           <span aria-hidden className="inline-block h-8 w-8 rounded-full"
-            style={{ background: conn === "live" ? "var(--success)" : "var(--line)" }} />
+            style={{ background: conn === "live" ? "#5fce93" : "rgba(255,255,255,0.6)" }} />
           {conn === "live" ? "Live" : conn === "connecting" ? "Connecting…" : "Reconnecting…"}
-          {open !== null && <span style={{ color: "var(--ink-soft)" }}>· {open} open</span>}
+          {open !== null && <span>· {open} open</span>}
         </div>
       </div>
 
@@ -332,7 +332,7 @@ export default function BoardPage() {
         </div>
       )}
 
-      <div className="mt-24 flex items-center justify-between text-xs" style={{ color: "var(--ink-soft)" }}>
+      <div className="pane-note mt-24 flex items-center justify-between text-xs">
         <span>{loading ? "Loading…" : `${cards.length} of ${total} load${total === 1 ? "" : "s"}`}</span>
         <span>{new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>
       </div>

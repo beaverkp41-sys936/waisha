@@ -230,7 +230,7 @@ export default function InvoicesPage() {
             {kpi("Outstanding", kpis.outstanding, "var(--gold)")}
             {kpi("Overdue invoices", kpis.overdue, kpis.overdue > 0 ? "var(--danger)" : "var(--ink)")}
           </div>
-          <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+          <p className="pane-note mt-8 text-[10px]">
             Combined totals across all invoice currencies.
           </p>
         </section>

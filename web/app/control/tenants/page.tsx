@@ -85,17 +85,17 @@ export default function TenantsPage() {
   const labelCls = "mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]";
 
   return (
-    <div className="page-shell flex-1" style={{ background: "var(--milk)" }}>
+    <div className="control-shell page-shell flex-1">
       <header className="flex items-center justify-between px-24 py-12"
-        style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--gold)" }}>
+        style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--adm-accent)" }}>
         <div>
           <p className="text-sm font-bold tracking-[0.08em] text-white">T ENGO AEGIS Control</p>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "var(--gold)" }}>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "var(--adm-accent)" }}>
             Super Admin · Tenants and licences
           </p>
         </div>
         <div className="flex items-center gap-16 text-xs font-semibold">
-          <a href="/control" className="underline" style={{ color: "var(--gold)" }}>Plans</a>
+          <a href="/control" className="underline" style={{ color: "var(--adm-accent)" }}>Plans</a>
           <span className="text-white">Tenants</span>
           <button type="button" className="rounded-input border px-16 py-8 text-white"
             style={{ borderColor: "rgba(255,255,255,0.4)" }}
@@ -178,7 +178,7 @@ export default function TenantsPage() {
 
       {target && (
         <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center p-16"
-          style={{ background: "rgba(5,18,26,0.6)" }}>
+          style={{ background: "rgba(2, 4, 8, 0.7)" }}>
           <div className="w-full max-w-[420px] rounded-modal bg-surface p-24" style={{ border: "1px solid var(--line)" }}>
             <h2 className="text-lg font-bold" style={{ color: "var(--ink)" }}>
               {target.licence_expires_at && new Date(target.licence_expires_at) > new Date() ? "Extend licence" : "Activate licence"}
@@ -208,8 +208,8 @@ export default function TenantsPage() {
                       }}
                       className={`rounded-input border py-8 text-xs font-semibold capitalize ${cycle === c ? "" : "opacity-60"}`}
                       style={cycle === c
-                        ? { borderColor: "var(--brand)", background: "var(--milk)", color: "var(--brand-deep)" }
-                        : { borderColor: "var(--line)" }}>
+                        ? { borderColor: "var(--adm-accent)", background: "var(--adm-accent-soft)", color: "var(--adm-accent)" }
+                        : { borderColor: "var(--line)", color: "var(--ink)" }}>
                       {c}
                     </button>
                   ))}

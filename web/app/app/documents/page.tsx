@@ -76,14 +76,14 @@ export default function DocumentsVaultPage() {
 
       <section className="mt-24 grid grid-cols-2 gap-12">
         <label className="block">
-          <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Attached to</span>
+          <span className={`${labelCls} pane-note`}>Attached to</span>
           <select value={entityType} onChange={e => setEntityType(e.target.value)} className={inputCls} style={inputStyle}>
             <option value="">Everything</option>
             {Object.entries(ENTITY_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </select>
         </label>
         <label className="block">
-          <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Document type</span>
+          <span className={`${labelCls} pane-note`}>Document type</span>
           <select value={kind} onChange={e => setKind(e.target.value)} className={inputCls} style={inputStyle}>
             <option value="">All types</option>
             {Object.entries(KIND_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}

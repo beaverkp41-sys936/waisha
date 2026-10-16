@@ -88,14 +88,12 @@ export default function CalendarPage() {
         </div>
         <div className="flex items-center gap-8">
           <button type="button" onClick={prevMonth} aria-label="Previous month"
-            className="rounded-input border px-12 py-8 text-xs font-semibold"
-            style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Prev</button>
-          <span className="min-w-[130px] text-center text-sm font-bold" style={{ color: "var(--ink)" }}>
+            className="on-photo-btn px-12 py-8 text-xs font-semibold">Prev</button>
+          <span className="pane-note min-w-[130px] text-center text-sm font-bold">
             {cursor.toLocaleDateString([], { month: "long", year: "numeric" })}
           </span>
           <button type="button" onClick={nextMonth} aria-label="Next month"
-            className="rounded-input border px-12 py-8 text-xs font-semibold"
-            style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Next</button>
+            className="on-photo-btn px-12 py-8 text-xs font-semibold">Next</button>
         </div>
       </div>
       {error && <div role="alert" className="mt-16 mb-16 px-12 py-8 text-sm"

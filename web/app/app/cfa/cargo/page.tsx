@@ -231,8 +231,7 @@ function CargoContent() {
         </div>
         <div className="flex gap-8">
           <Link href="/app/cfa/cargo/analytics"
-            className="rounded-input border px-16 py-8 text-xs font-semibold"
-            style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Analytics</Link>
+            className="on-photo-btn px-16 py-8 text-xs font-semibold">Analytics</Link>
           <button type="button" onClick={() => { setForm(EMPTY); setShowForm(s => !s); }}
             className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">
             {showForm ? "Close form" : "+ New file"}
@@ -247,21 +246,21 @@ function CargoContent() {
       {/* Filters */}
       <section className="mt-24 grid grid-cols-3 gap-12">
         <label className="block">
-          <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Stage</span>
+          <span className={`${labelCls} pane-note`}>Stage</span>
           <select value={filterStage} onChange={e => setFilterStage(e.target.value)} className={inputCls} style={inputStyle}>
             <option value="">All stages</option>
             {Object.entries(STAGE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </select>
         </label>
         <label className="block">
-          <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Type</span>
+          <span className={`${labelCls} pane-note`}>Type</span>
           <select value={filterType} onChange={e => setFilterType(e.target.value)} className={inputCls} style={inputStyle}>
             <option value="">All types</option>
             {Object.entries(TYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </select>
         </label>
         <label className="block">
-          <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Search</span>
+          <span className={`${labelCls} pane-note`}>Search</span>
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="File no, consignee, TANSAD, bill…" className={inputCls} style={inputStyle} />
         </label>

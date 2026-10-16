@@ -7,7 +7,7 @@ import { apiFetch } from "../../api-client";
 
 const RouteMap = dynamic(() => import("../../routes/route-map"), {
   ssr: false,
-  loading: () => <p className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>Loading map…</p>
+  loading: () => <p className="pane-note p-16 text-sm">Loading map…</p>
 });
 
 function errorText(json: any, fallback: string): string {
@@ -49,8 +49,8 @@ const STATUS_LABELS: Record<string, string> = {
   completed: "Completed", cancelled: "Cancelled"
 };
 const STATUS_COLORS: Record<string, string> = {
-  planned: "var(--gold)", in_transit: "var(--brand)", arrived: "var(--gold-green)",
-  completed: "var(--success)", cancelled: "var(--danger)"
+  planned: "#c9a84c", in_transit: "#7fb2d8", arrived: "#b8cc5e",
+  completed: "#5fce93", cancelled: "#ff9d94"
 };
 const ACTION_LABELS: Record<string, string> = {
   in_transit: "Depart", arrived: "Mark arrived",
@@ -208,7 +208,7 @@ export default function TripDetailPage() {
   if (error && !trip) {
     return (
       <div className="mx-auto max-w-[900px] px-16 py-32">
-        <div role="alert" className="px-12 py-8 text-sm"
+        <div role="alert" className="pane-note px-12 py-8 text-sm"
           style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>
           {error} <Link href="/app/trips" className="underline">Back to trips</Link>
         </div>
@@ -216,14 +216,14 @@ export default function TripDetailPage() {
     );
   }
   if (!trip) {
-    return <div className="mx-auto max-w-[900px] px-16 py-32 text-sm" style={{ color: "var(--ink-soft)" }}>Loading trip…</div>;
+    return <div className="pane-note mx-auto max-w-[900px] px-16 py-32 text-sm">Loading trip…</div>;
   }
 
   const hasCoords = trip.origin_lat != null && trip.origin_lng != null && trip.dest_lat != null && trip.dest_lng != null;
 
   return (
     <div className="mx-auto max-w-[900px] px-16 py-32">
-      <Link href="/app/trips" className="text-xs underline" style={{ color: "var(--ink-soft)" }}>← All trips</Link>
+      <Link href="/app/trips" className="pane-note text-xs underline">← All trips</Link>
       <div className="mt-12 flex flex-wrap items-center justify-between gap-12">
         <div>
           <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>
@@ -234,8 +234,8 @@ export default function TripDetailPage() {
             {trip.distance_km ? ` · ${fmtNum(trip.distance_km, " km")}` : ""}
           </p>
         </div>
-        <span className="px-8 py-4 text-[10px] font-bold uppercase"
-          style={{ borderLeft: `4px solid ${STATUS_COLORS[trip.status] ?? "var(--ink-soft)"}`, color: "var(--ink)" }}>
+        <span className="badge-plain px-8 py-4 text-[10px] font-bold uppercase"
+          style={{ borderLeft: `4px solid ${STATUS_COLORS[trip.status] ?? "rgba(255,255,255,0.6)"}` }}>
           {STATUS_LABELS[trip.status] ?? trip.status}
         </span>
       </div>
@@ -251,8 +251,8 @@ export default function TripDetailPage() {
             s === "cancelled" ? (
               <button key={s} type="button" disabled={busy}
                 onClick={() => transition(s)}
-                className="rounded-input border px-16 py-8 text-xs font-semibold disabled:opacity-50"
-                style={{ borderColor: "var(--danger)", color: "var(--danger)" }}>
+                className="on-photo-btn px-16 py-8 text-xs font-semibold disabled:opacity-50"
+                style={{ color: "#ff9d94" }}>
                 {ACTION_LABELS[s]}
               </button>
             ) : (
@@ -317,7 +317,7 @@ export default function TripDetailPage() {
       {/* Cargo */}
       <section className="mt-24">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+          <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">
             Cargo ({trip.shipments.length})
           </h2>
           {editable && (
@@ -426,7 +426,7 @@ export default function TripDetailPage() {
 
       {/* Checkpoint ledger */}
       <section className="mt-24">
-        <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+        <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">
           Checkpoint log
         </h2>
 
@@ -489,7 +489,7 @@ export default function TripDetailPage() {
             </div>
           ))}
           {trip.logs.length === 0 && (
-            <p className="text-sm" style={{ color: "var(--ink-soft)" }}>
+            <p className="pane-note text-sm">
               No checkpoints recorded yet{trip.checkpoints.length > 0 ? ` — ${trip.checkpoints.length} on the route` : ""}.
             </p>
           )}

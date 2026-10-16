@@ -29,13 +29,13 @@ export default function OfficeAreaPage() {
         The back office — people, performance and running costs.
       </p>
       {!unlocked && (
-        <div role="status" className="mt-16 px-16 py-8 text-sm"
+        <div role="status" className="pane-note mt-16 px-16 py-8 text-sm"
           style={{ background: "color-mix(in srgb, var(--gold) 14%, transparent)", borderLeft: "4px solid var(--gold)" }}>
           This workspace arrives with the Enterprise plan and is in build.
         </div>
       )}
       {unlocked && (
-        <div role="status" className="mt-16 px-16 py-8 text-sm"
+        <div role="status" className="pane-note mt-16 px-16 py-8 text-sm"
           style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>
           Included in your plan — shipped modules open below, the rest land here as they are built.
         </div>
@@ -63,7 +63,7 @@ export default function OfficeAreaPage() {
         })}
       </div>
 
-      <p className="mt-24 text-xs" style={{ color: "var(--ink-soft)" }}>
+      <p className="pane-note mt-24 text-xs">
         Plan and billing live in <Link href="/app/account" className="underline">Account</Link>.
       </p>
     </div>

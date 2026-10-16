@@ -287,7 +287,7 @@ export default function JobDetailPage() {
   if (error && !job) {
     return (
       <div className="mx-auto max-w-[1100px] px-16 py-32">
-        <div role="alert" className="px-12 py-8 text-sm"
+        <div role="alert" className="pane-note px-12 py-8 text-sm"
           style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>
           {error} <Link href="/app/cfa/jobs" className="underline">Back to the pipeline</Link>
         </div>
@@ -295,7 +295,7 @@ export default function JobDetailPage() {
     );
   }
   if (!job) {
-    return <div className="mx-auto max-w-[1100px] px-16 py-32 text-sm" style={{ color: "var(--ink-soft)" }}>Loading job…</div>;
+    return <div className="pane-note mx-auto max-w-[1100px] px-16 py-32 text-sm">Loading job…</div>;
   }
 
   const workable = job.status === "open";
@@ -306,14 +306,12 @@ export default function JobDetailPage() {
   return (
     <div className="mx-auto max-w-[1100px] px-16 py-32">
       <div className="flex flex-wrap items-center justify-between gap-12">
-        <Link href="/app/cfa/jobs" className="text-xs underline" style={{ color: "var(--ink-soft)" }}>← Job pipeline</Link>
+        <Link href="/app/cfa/jobs" className="pane-note text-xs underline">← Job pipeline</Link>
         <div className="flex flex-wrap gap-8">
           <Link href={`/app/cfa/cargo/${job.shipment_id}`}
-            className="rounded-input border px-16 py-8 text-xs font-semibold"
-            style={{ borderColor: "var(--line)", color: "var(--brand)" }}>Cargo file</Link>
+            className="on-photo-btn px-16 py-8 text-xs font-semibold">Cargo file</Link>
           <Link href={`/app/cfa/messages?file=${job.shipment_id}`}
-            className="rounded-input border px-16 py-8 text-xs font-semibold"
-            style={{ borderColor: "var(--line)", color: "var(--brand)" }}>Messages</Link>
+            className="on-photo-btn px-16 py-8 text-xs font-semibold">Messages</Link>
           {workable && (
             <button type="button" disabled={busy} onClick={() => send(`/jobs/${id}/close`, "POST", {}, "Job closed and billing complete.")}
               className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold disabled:opacity-60">
@@ -338,22 +336,22 @@ export default function JobDetailPage() {
           <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
             {job.consignee_name} · {job.shipment_type} · ETA {fmtDate(job.eta)}
           </p>
-          <p className="mt-8 text-xs" style={{ color: "var(--ink)" }}>
+          <p className="pane-note mt-8 text-xs">
             Current stage: <span className="font-semibold">{current ? current.name : "all ten stages done"}</span>
           </p>
         </div>
         <div className="flex flex-wrap gap-8">
-          <span className="px-8 py-4 text-[10px] font-bold uppercase"
-            style={{ borderLeft: `4px solid ${job.status === "open" ? "var(--success)" : "var(--brand)"}`, color: "var(--ink)" }}>
+          <span className="badge-plain px-8 py-4 text-[10px] font-bold uppercase"
+            style={{ borderLeft: `4px solid ${job.status === "open" ? "#5fce93" : "rgba(255,255,255,0.6)"}` }}>
             {job.status}
           </span>
-          <span className="px-8 py-4 text-[10px] font-bold uppercase"
-            style={{ borderLeft: `4px solid ${job.record_kind === "archive" ? "var(--ink-soft)" : "var(--gold)"}`, color: "var(--ink)" }}>
+          <span className="badge-plain px-8 py-4 text-[10px] font-bold uppercase"
+            style={{ borderLeft: `4px solid ${job.record_kind === "archive" ? "rgba(255,255,255,0.6)" : "#c9a84c"}` }}>
             {job.record_kind === "archive" ? "record of past shipment" : "live job"}
           </span>
           {job.transport_needed && (
-            <span className="px-8 py-4 text-[10px] font-bold uppercase"
-              style={{ borderLeft: `4px solid ${job.transport_consent === "granted" ? "var(--success)" : "var(--warning)"}`, color: "var(--ink)" }}>
+            <span className="badge-plain px-8 py-4 text-[10px] font-bold uppercase"
+              style={{ borderLeft: `4px solid ${job.transport_consent === "granted" ? "#5fce93" : "#e2b45f"}` }}>
               transport · consent {job.transport_consent.replace("_", " ")}
             </span>
           )}
@@ -474,7 +472,7 @@ export default function JobDetailPage() {
       {/* ---------- Checklist: add a task ---------- */}
       {workable && (
         <section className="mt-24">
-          <h2 className={headingCls} style={{ color: "var(--ink-soft)" }}>Add a task</h2>
+          <h2 className={`${headingCls} pane-note`}>Add a task</h2>
           <form onSubmit={addTask} className="mt-16 grid grid-cols-1 gap-12 rounded-card border bg-surface p-24 md:grid-cols-[1fr_160px_150px_170px_120px]">
             <label className="block">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Task *</span>
@@ -510,7 +508,7 @@ export default function JobDetailPage() {
 
       {/* ---------- Document register ---------- */}
       <section className="mt-24">
-        <h2 className={headingCls} style={{ color: "var(--ink-soft)" }}>
+        <h2 className={`${headingCls} pane-note`}>
           Document register ({job.documents.length})
         </h2>
         {workable && (
@@ -607,7 +605,7 @@ export default function JobDetailPage() {
             </div>
           ))}
           {job.documents.length === 0 && (
-            <p className="text-sm" style={{ color: "var(--ink-soft)" }}>
+            <p className="pane-note text-sm">
               Nothing in the register yet — every stage gate is checked against these entries.
             </p>
           )}
@@ -616,7 +614,7 @@ export default function JobDetailPage() {
 
       {/* ---------- Stage 9: transport decision ---------- */}
       <section className="mt-24">
-        <h2 className={headingCls} style={{ color: "var(--ink-soft)" }}>Stage 9 — transport decision</h2>
+        <h2 className={`${headingCls} pane-note`}>Stage 9 — transport decision</h2>
         <div className="mt-16 grid grid-cols-1 gap-24 lg:grid-cols-[1fr_320px]">
           {workable ? (
             <form onSubmit={saveDecision} className={card} style={cardStyle}>

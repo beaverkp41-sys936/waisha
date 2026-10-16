@@ -277,7 +277,7 @@ function MessagesContent() {
                     </span>
                     {t.unread > 0 && (
                       <span className="shrink-0 rounded-full px-8 py-2 text-[10px] font-bold"
-                        style={{ background: "var(--gold)", color: "var(--ink)" }}>{t.unread}</span>
+                        style={{ background: "#c9a84c", color: "#09263c" }}>{t.unread}</span>
                     )}
                   </div>
                   {t.scope === "shipment" && (
@@ -437,7 +437,7 @@ function AttachmentChip({ doc }: { doc: Attachment }) {
 export default function MessagesPage() {
   return (
     <Suspense fallback={
-      <div className="mx-auto max-w-[1100px] px-16 py-32 text-sm" style={{ color: "var(--ink-soft)" }}>Loading…</div>
+      <div className="pane-note mx-auto max-w-[1100px] px-16 py-32 text-sm">Loading…</div>
     }>
       <MessagesContent />
     </Suspense>

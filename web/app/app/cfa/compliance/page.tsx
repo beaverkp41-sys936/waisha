@@ -324,14 +324,14 @@ export default function ComplianceScreeningPage() {
       <section className="mt-32">
         <div className="flex flex-wrap items-end justify-between gap-12">
           <div>
-            <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Flagged — needs review</h2>
-            <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+            <h2 className={`${h2Cls} pane-note`}>Flagged — needs review</h2>
+            <p className="pane-note mt-4 text-xs">
               Open cargo files and clients that match an active watchlist entry, worst first.
             </p>
           </div>
           <div className="flex items-end gap-8">
             <label className="block">
-              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Screen any open file</span>
+              <span className={`${labelCls} pane-note`}>Screen any open file</span>
               <select value={screenFileId} onChange={e => setScreenFileId(e.target.value)}
                 className={inputCls} style={inputStyle}>
                 <option value="">Pick a file…</option>
@@ -385,7 +385,7 @@ export default function ComplianceScreeningPage() {
 
       {/* ---------- Watchlist register ---------- */}
       <section className="mt-32">
-        <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Watchlist register</h2>
+        <h2 className={`${h2Cls} pane-note`}>Watchlist register</h2>
         <form onSubmit={addEntry} className="mt-16 grid grid-cols-2 gap-12 rounded-card border bg-surface p-24 md:grid-cols-6" style={cardStyle}>
           <label className="block md:col-span-2">
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Party name *</span>
@@ -511,7 +511,7 @@ export default function ComplianceScreeningPage() {
 
       {/* ---------- Recent checks ---------- */}
       <section className="mt-32">
-        <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Screening log</h2>
+        <h2 className={`${h2Cls} pane-note`}>Screening log</h2>
         <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
           <table className="w-full text-sm">
             <thead>
@@ -557,7 +557,7 @@ export default function ComplianceScreeningPage() {
 
       {/* ---------- Licence register ---------- */}
       <section className="mt-32">
-        <h2 className={h2Cls} style={{ color: "var(--ink-soft)" }}>Regulatory licence register</h2>
+        <h2 className={`${h2Cls} pane-note`}>Regulatory licence register</h2>
         <form onSubmit={addLicence} className="mt-16 grid grid-cols-2 gap-12 rounded-card border bg-surface p-24 md:grid-cols-6" style={cardStyle}>
           <label className="block">
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Authority</span>
@@ -700,7 +700,7 @@ export default function ComplianceScreeningPage() {
         </div>
       </section>
 
-      <p className="mt-16 text-xs" style={{ color: "var(--ink-soft)" }}>
+      <p className="pane-note mt-16 text-xs">
         Renewal alerts appear in <Link href="/app/notifications" className="underline">Alerts</Link> and the{" "}
         <Link href="/app/cfa/calendar" className="underline">ETA calendar</Link>. Licence scans live in the{" "}
         <Link href="/app/documents" className="underline">documents vault</Link>.

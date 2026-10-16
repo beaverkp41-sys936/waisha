@@ -182,7 +182,7 @@ export default function LedgerPage() {
                 style={{ color: pnl.net >= 0 ? "var(--success)" : "var(--danger)" }}>{fmt(pnl.net)}</p>
             </div>
           </div>
-          <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+          <p className="pane-note mt-8 text-[10px]">
             Combined totals across currencies. Net position is cash received minus cash paid out.
           </p>
         </section>
@@ -226,7 +226,7 @@ export default function LedgerPage() {
 
       {/* Accounts receivable */}
       <section className="mt-24">
-        <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+        <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">
           Accounts receivable — clients owe you
         </h2>
         <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
@@ -269,7 +269,7 @@ export default function LedgerPage() {
       {/* Accounts payable */}
       <section className="mt-24">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+          <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">
             Accounts payable — you owe suppliers
           </h2>
           <button type="button" onClick={() => setShowExpenseForm(s => !s)}
@@ -279,9 +279,9 @@ export default function LedgerPage() {
         </div>
 
         {payables && (
-          <p className="mt-8 text-xs tabular-nums" style={{ color: "var(--ink-soft)" }}>
+          <p className="pane-note mt-8 text-xs tabular-nums">
             {fmt(payables.totals.billed)} billed · {fmt(payables.totals.paid)} paid ·{" "}
-            <span className="font-semibold" style={{ color: "var(--gold)" }}>{fmt(payables.totals.outstanding)} outstanding</span>
+            <span className="font-semibold" style={{ color: "#c9a84c" }}>{fmt(payables.totals.outstanding)} outstanding</span>
           </p>
         )}
 

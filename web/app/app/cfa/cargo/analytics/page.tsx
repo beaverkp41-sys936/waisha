@@ -69,8 +69,7 @@ export default function CargoAnalyticsPage() {
             File mix, throughput, processing times and money — from live data.
           </p>
         </div>
-        <Link href="/app/cfa/cargo" className="rounded-input border px-16 py-8 text-xs font-semibold"
-          style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Back to files</Link>
+        <Link href="/app/cfa/cargo" className="on-photo-btn px-16 py-8 text-xs font-semibold">Back to files</Link>
       </div>
       {error && <div role="alert" className="mt-16 mb-16 px-12 py-8 text-sm"
         style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>{error}</div>}

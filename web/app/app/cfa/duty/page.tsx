@@ -101,7 +101,7 @@ export default function DutyCalculatorPage() {
         Import duty, excise, railway development levy, VAT and total landed cost — from the TRA rate tables.
       </p>
       {rates && !rates.expired && (
-        <p className="mt-8 text-xs" style={{ color: "var(--gold)" }}>
+        <p className="pane-note mt-8 text-xs">
           Rates: {rates.version}, effective {new Date(rates.effectiveFrom).toLocaleDateString()}
           {rates.effectiveTo ? ` to ${new Date(rates.effectiveTo).toLocaleDateString()}` : " onwards"}.
           Rates change with each Finance Act — new versions publish here automatically.
@@ -273,7 +273,7 @@ function TariffExplorer({ version }: { version: string }) {
 
   return (
     <section className="mt-24">
-      <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+      <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">
         Tariff explorer — duties, VAT, levies and fees ({version})
       </h2>
       <div className="mt-16 grid grid-cols-2 gap-12 rounded-card border bg-surface p-24 md:grid-cols-5" style={{ borderColor: "var(--line)" }}>

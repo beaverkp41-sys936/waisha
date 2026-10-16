@@ -45,13 +45,13 @@ export default function NotificationsPage() {
 
       {data && (
         <div className="mt-16 flex gap-16 text-xs">
-          <span className="rounded-input border px-12 py-4 font-semibold" style={cardStyle}>
+          <span className="badge-plain rounded-input px-12 py-4 font-semibold">
             {data.counts.critical} critical
           </span>
-          <span className="rounded-input border px-12 py-4 font-semibold" style={cardStyle}>
+          <span className="badge-plain rounded-input px-12 py-4 font-semibold">
             {data.counts.warning} warnings
           </span>
-          <span className="rounded-input border px-12 py-4 font-semibold" style={cardStyle}>
+          <span className="badge-plain rounded-input px-12 py-4 font-semibold">
             {data.counts.info} info
           </span>
         </div>
@@ -80,12 +80,12 @@ export default function NotificationsPage() {
           </Link>
         ))}
         {data && data.items.length === 0 && (
-          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>
+          <p className="pane-note text-sm">
             Nothing needs attention right now.
           </p>
         )}
         {!data && !error && (
-          <p className="text-sm" style={{ color: "var(--ink-soft)" }}>Loading alerts…</p>
+          <p className="pane-note text-sm">Loading alerts…</p>
         )}
       </div>
     </div>

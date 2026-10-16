@@ -183,7 +183,7 @@ export default function CargoDetailPage() {
   if (error && !file) {
     return (
       <div className="mx-auto max-w-[980px] px-16 py-32">
-        <div role="alert" className="px-12 py-8 text-sm"
+        <div role="alert" className="pane-note px-12 py-8 text-sm"
           style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>
           {error} <Link href="/app/cfa/cargo" className="underline">Back to cargo files</Link>
         </div>
@@ -191,7 +191,7 @@ export default function CargoDetailPage() {
     );
   }
   if (!file) {
-    return <div className="mx-auto max-w-[980px] px-16 py-32 text-sm" style={{ color: "var(--ink-soft)" }}>Loading cargo file…</div>;
+    return <div className="pane-note mx-auto max-w-[980px] px-16 py-32 text-sm">Loading cargo file…</div>;
   }
 
   const stageIndex = STAGES.indexOf(file.stage);
@@ -207,31 +207,25 @@ export default function CargoDetailPage() {
   return (
     <div className="mx-auto max-w-[980px] px-16 py-32">
       <div className="no-print flex flex-wrap items-center justify-between gap-12">
-        <Link href="/app/cfa/cargo" className="text-xs underline" style={{ color: "var(--ink-soft)" }}>← All cargo files</Link>
+        <Link href="/app/cfa/cargo" className="pane-note text-xs underline">← All cargo files</Link>
         <div className="flex flex-wrap gap-8">
           <Link href={`/app/cfa/jobs?file=${id}`}
-            className="rounded-input border px-16 py-8 text-xs font-semibold"
-            style={{ borderColor: "var(--line)", color: "var(--brand)" }}>Job pipeline</Link>
+            className="on-photo-btn px-16 py-8 text-xs font-semibold">Job pipeline</Link>
           <Link href={`/app/cfa/messages?file=${id}`}
-            className="rounded-input border px-16 py-8 text-xs font-semibold"
-            style={{ borderColor: "var(--line)", color: "var(--brand)" }}>Messages</Link>
+            className="on-photo-btn px-16 py-8 text-xs font-semibold">Messages</Link>
           {editable && (
             <Link href={`/app/cfa/cargo?edit=${id}`}
-              className="rounded-input border px-16 py-8 text-xs font-semibold"
-              style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Edit</Link>
+              className="on-photo-btn px-16 py-8 text-xs font-semibold">Edit</Link>
           )}
           <button type="button" disabled={busy} onClick={duplicate}
-            className="rounded-input border px-16 py-8 text-xs font-semibold disabled:opacity-50"
-            style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Duplicate</button>
+            className="on-photo-btn px-16 py-8 text-xs font-semibold disabled:opacity-50">Duplicate</button>
           {editable && file.status === "open" && (
             <button type="button" disabled={busy} onClick={() => changeStatus("on_hold")}
-              className="rounded-input border px-16 py-8 text-xs font-semibold"
-              style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Hold</button>
+              className="on-photo-btn px-16 py-8 text-xs font-semibold">Hold</button>
           )}
           {file.status === "on_hold" && (
             <button type="button" disabled={busy} onClick={() => changeStatus("open")}
-              className="rounded-input border px-16 py-8 text-xs font-semibold"
-              style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Reopen</button>
+              className="on-photo-btn px-16 py-8 text-xs font-semibold">Reopen</button>
           )}
           {editable && (
             <button type="button" disabled={busy} onClick={() => changeStatus("completed")}
@@ -239,16 +233,13 @@ export default function CargoDetailPage() {
           )}
           {editable && (
             <button type="button" disabled={busy} onClick={() => changeStatus("cancelled")}
-              className="rounded-input border px-16 py-8 text-xs font-semibold"
-              style={{ borderColor: "var(--danger)", color: "var(--danger)" }}>Cancel file</button>
+              className="on-photo-btn px-16 py-8 text-xs font-semibold" style={{ color: "#ff9d94" }}>Cancel file</button>
           )}
           <button type="button" onClick={() => window.print()}
-            className="rounded-input border px-16 py-8 text-xs font-semibold"
-            style={{ borderColor: "var(--line)", color: "var(--ink)" }}>Print</button>
+            className="on-photo-btn px-16 py-8 text-xs font-semibold">Print</button>
           {editable && (
             <button type="button" disabled={busy} onClick={remove}
-              className="rounded-input border px-16 py-8 text-xs font-semibold"
-              style={{ borderColor: "var(--danger)", color: "var(--danger)" }}>Delete</button>
+              className="on-photo-btn px-16 py-8 text-xs font-semibold" style={{ color: "#ff9d94" }}>Delete</button>
           )}
         </div>
       </div>
@@ -266,8 +257,8 @@ export default function CargoDetailPage() {
             {file.consignee_name} · {file.consignor_name}
           </p>
         </div>
-        <span className="px-8 py-4 text-[10px] font-bold uppercase"
-          style={{ borderLeft: `4px solid ${file.status === "open" ? "var(--success)" : "var(--ink-soft)"}`, color: "var(--ink)" }}>
+        <span className="badge-plain px-8 py-4 text-[10px] font-bold uppercase"
+          style={{ borderLeft: `4px solid ${file.status === "open" ? "#5fce93" : "rgba(255,255,255,0.6)"}` }}>
           {file.status.replace("_", " ")}
         </span>
       </div>
@@ -343,7 +334,7 @@ export default function CargoDetailPage() {
 
       {/* Tasks */}
       <section className="no-print mt-24">
-        <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+        <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">
           Tasks ({file.tasks.filter(t => t.status === "pending").length} pending)
         </h2>
         <form onSubmit={addTask} className="mt-16 grid grid-cols-[1fr_1fr_150px_140px] items-end gap-12 rounded-card border bg-surface p-24" style={cardStyle}>
@@ -402,14 +393,14 @@ export default function CargoDetailPage() {
             </div>
           ))}
           {file.tasks.length === 0 && (
-            <p className="text-sm" style={{ color: "var(--ink-soft)" }}>No tasks assigned yet.</p>
+            <p className="pane-note text-sm">No tasks assigned yet.</p>
           )}
         </div>
       </section>
 
       {/* Documents */}
       <section className="no-print mt-24">
-        <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+        <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">
           Documents ({file.documents.length})
         </h2>
         <div className="mt-16 flex flex-wrap items-end gap-12 rounded-card border bg-surface p-24" style={cardStyle}>
@@ -436,7 +427,7 @@ export default function CargoDetailPage() {
             </div>
           ))}
           {file.documents.length === 0 && (
-            <p className="text-sm" style={{ color: "var(--ink-soft)" }}>
+            <p className="pane-note text-sm">
               No documents attached — upload the invoice, BL and packing list above.
             </p>
           )}

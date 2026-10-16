@@ -73,13 +73,13 @@ export default function CfaAreaPage() {
         Clearing, forwarding and finance — the working back office for cargo files.
       </p>
       {!unlocked && (
-        <div role="status" className="mt-16 px-16 py-8 text-sm"
+        <div role="status" className="pane-note mt-16 px-16 py-8 text-sm"
           style={{ background: "color-mix(in srgb, var(--gold) 14%, transparent)", borderLeft: "4px solid var(--gold)" }}>
           These modules arrive with the Business plan and are in build — your plan unlocks them the day they land.
         </div>
       )}
       {unlocked && (
-        <div role="status" className="mt-16 px-16 py-8 text-sm"
+        <div role="status" className="pane-note mt-16 px-16 py-8 text-sm"
           style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>
           Included in your plan — modules below are in build and will appear here as they ship.
         </div>
@@ -107,7 +107,7 @@ export default function CfaAreaPage() {
         })}
       </div>
 
-      <p className="mt-24 text-xs" style={{ color: "var(--ink-soft)" }}>
+      <p className="pane-note mt-24 text-xs">
         Plan and billing live in <Link href="/app/account" className="underline">Account</Link>.
       </p>
     </div>
