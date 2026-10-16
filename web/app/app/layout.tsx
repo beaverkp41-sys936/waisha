@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "./api-client";
 import { CFA_NAV, OFFICE_NAV, TRANSPORTER_NAV } from "./nav";
 import type { NavItem } from "./nav";
+import { ShellFooter } from "@/components/ShellFooter";
 
 const WORKSPACES = [
   { key: "transporter", label: "Transporter", home: "/app/dashboard" },
@@ -121,6 +122,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
         <div className="app-content">{children}</div>
+        <ShellFooter />
       </div>
     </div>
   );
