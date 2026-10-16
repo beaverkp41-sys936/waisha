@@ -56,7 +56,7 @@ async function main() {
   // Hard deletes live in exactly five places (grep 'delete from' in api/src):
   // invoices.items rewrite, quotations lines rewrite, employees task purge,
   // trips log edit, routes checkpoints edit.
-  const DELETE_ALLOWED = new Set(["freight_invoice_items", "quotation_items", "office_tasks", "trip_checkpoint_logs", "route_checkpoints"]);
+  const DELETE_ALLOWED = new Set(["freight_invoice_items", "quotation_items", "office_tasks", "trip_checkpoint_logs", "route_checkpoints", "office_task_step_checks", "trainee_report_signoffs"]);
   await app.query(`select set_config('app.tenant_id', $1, false)`, [PROBE]);
 
   for (const { t, rls } of tables) {

@@ -7,6 +7,7 @@ import { verifyAccessToken } from "../security/jwt.js";
 import { requirePermission } from "../security/permissions.js";
 import { writeAudit } from "../audit/audit.js";
 import { encryptField, searchHash } from "../util/crypto.js";
+import { materializeTaskFlow } from "../operations/task-flow.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -19,8 +20,17 @@ const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const phoneValue = z.string().regex(/^\+[1-9]\d{7,14}$/);
 
 const employeeSchema = z.object({
+  // The register carries one name: the legal name, taken exactly as NIDA has it.
   fullName: z.string().trim().min(2).max(160),
   phone: phoneValue.nullable().optional(),
+  dateOfBirth: dateOnly.nullable().optional(),
+  gender: z.enum(["male", "female", "other"]).nullable().optional(),
+  academicStatus: z.enum(["student", "graduate"]).nullable().optional(),
+  college: z.string().trim().max(200).nullable().optional(),
+  qualifications: z.array(z.string().trim().min(1).max(80)).max(20).optional(),
+  emergencyContactName: z.string().trim().max(160).nullable().optional(),
+  emergencyRelationship: z.string().trim().max(80).nullable().optional(),
+  emergencyPhone: phoneValue.nullable().optional(),
   jobTitle: z.string().trim().max(120).nullable().optional(),
   department: z.string().trim().max(120).nullable().optional(),
   skills: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
@@ -44,6 +54,8 @@ const taskSchema = z.object({
   title: z.string().trim().min(2).max(200),
   priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
   dueDate: dateOnly.nullable().optional(),
+  // Attaching a procedure lays its steps and mandatory checklist under the task.
+  procedureId: z.string().uuid().nullable().optional(),
   notes: z.string().trim().max(1000).nullable().optional()
 });
 
@@ -68,6 +80,48 @@ function isUniqueViolation(e: unknown): boolean {
   return !!e && typeof e === "object" && (e as { code?: string }).code === "23505";
 }
 
+/**
+ * A trigger raised the gate — the checklist is open, an earlier step is
+ * unfinished, or a signed report is being rewritten. The database, not the
+ * route, is what holds those invariants (056), so its message is the truth and
+ * goes to the client as it stands.
+ */
+function isGateViolation(e: unknown): string | null {
+  const err = e as { code?: string; message?: string };
+  if (!err || err.code !== "P0001" || typeof err.message !== "string") return null;
+  return err.message.replace(/^relation .*? failed: /, "");
+}
+
+const PROFILE_SELECT_SQL = `e.id, e.full_name, e.job_title, e.department, e.skills,
+  e.employment_type, e.status, e.intern_absorbed,
+  e.date_of_birth::text as date_of_birth,
+  (case when e.date_of_birth is null then null
+        else date_part('year', age(e.date_of_birth))::int end) as age,
+  e.gender, e.academic_status, e.college, e.qualifications,
+  e.emergency_contact_name, e.emergency_relationship,
+  (e.emergency_phone_search is not null) as has_emergency_phone,
+  e.hired_date::text as hired_date,
+  e.contract_start::text as contract_start,
+  e.contract_end::text as contract_end,
+  (e.contract_end - current_date)::int as contract_days,
+  e.monthly_salary::float8 as monthly_salary,
+  e.supervisor_id, s.full_name as supervisor_name,
+  e.user_id, e.notes,
+  (e.phone_search is not null) as has_phone`;
+
+function assertProfile(body: { dateOfBirth?: string | null; fullName?: string }) {
+  // A CHECK cannot call current_date, so the intake form's impossibilities are
+  // caught here: nobody is born tomorrow, and the legal name is not optional.
+  if (body.dateOfBirth && body.dateOfBirth >= new Date().toISOString().slice(0, 10)) {
+    throw new ApiError("VALIDATION_FAILED", "Date of birth is in the future.", 400,
+      [{ field: "dateOfBirth" }]);
+  }
+  if (body.fullName && !body.fullName.trim()) {
+    throw new ApiError("VALIDATION_FAILED", "Enter the full legal name exactly as registered on NIDA.", 400,
+      [{ field: "fullName" }]);
+  }
+}
+
 export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- Roster ----------
@@ -75,16 +129,7 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
   app.get("/employees", { preHandler: [requireAuth, requirePermission("employees.view")] },
     async (req: any) => {
       const { rows } = await withTenant(req.user.tid, (c) => c.query(
-        `select e.id, e.full_name, e.job_title, e.department, e.skills,
-                e.employment_type, e.status, e.intern_absorbed,
-                e.hired_date::text as hired_date,
-                e.contract_start::text as contract_start,
-                e.contract_end::text as contract_end,
-                (e.contract_end - current_date)::int as contract_days,
-                e.monthly_salary::float8 as monthly_salary,
-                e.supervisor_id, s.full_name as supervisor_name,
-                e.user_id, e.notes,
-                (e.phone_search is not null) as has_phone,
+        `select ${PROFILE_SELECT_SQL},
                 (select count(*)::int from office_tasks t
                   where t.tenant_id = e.tenant_id and t.employee_id = e.id
                     and t.status in ('pending','in_progress')) as open_tasks,
@@ -98,6 +143,10 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
                 (select count(*)::int from office_tasks t
                   where t.tenant_id = e.tenant_id and t.employee_id = e.id
                     and t.status = 'done' and t.on_time = false) as late_tasks,
+                (select count(*)::int from office_tasks t
+                  where t.tenant_id = e.tenant_id and t.employee_id = e.id
+                    and t.procedure_id is not null
+                    and t.status in ('pending','in_progress')) as flowed_tasks,
                 (select count(*)::int from employee_evaluations ev
                   where ev.tenant_id = e.tenant_id and ev.employee_id = e.id
                     and ev.deleted_at is null) as evaluation_count,
@@ -116,6 +165,10 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
                     and d.entity_id = e.id and d.deleted_at is null) as document_count,
                 (select d.id from documents d
                   where d.tenant_id = e.tenant_id and d.entity_type = 'employee'
+                    and d.entity_id = e.id and d.kind = 'avatar' and d.deleted_at is null
+                  order by d.created_at desc limit 1) as avatar_document_id,
+                (select d.id from documents d
+                  where d.tenant_id = e.tenant_id and d.entity_type = 'employee'
                     and d.entity_id = e.id and d.deleted_at is null
                   order by d.created_at desc limit 1) as latest_document_id
          from employees e
@@ -126,9 +179,55 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
       return rows;
     });
 
+  // One person, opened: the profile sheet the trainee register reads. The list
+  // stays PII-free, and so does this — the encrypted values never leave the
+  // database, only whether they are set.
+  app.get("/employees/:id", { preHandler: [requireAuth, requirePermission("employees.view")] },
+    async (req: any) => {
+      const { id } = req.params as { id: string };
+      const { rows } = await withTenant(req.user.tid, (c) => c.query(
+        `select ${PROFILE_SELECT_SQL},
+                (select d.id from documents d
+                  where d.tenant_id = e.tenant_id and d.entity_type = 'employee'
+                    and d.entity_id = e.id and d.kind = 'avatar' and d.deleted_at is null
+                  order by d.created_at desc limit 1) as avatar_document_id,
+                (select d.id from documents d
+                  where d.tenant_id = e.tenant_id and d.entity_type = 'employee'
+                    and d.entity_id = e.id and d.deleted_at is null
+                  order by d.created_at desc limit 1) as latest_document_id,
+                (select count(*)::int from documents d
+                  where d.tenant_id = e.tenant_id and d.entity_type = 'employee'
+                    and d.entity_id = e.id and d.deleted_at is null) as document_count,
+                (select round(((ev.task_completion + ev.punctuality
+                     + ev.client_satisfaction + ev.collaboration) / 4.0)::numeric, 1)::float8
+                 from employee_evaluations ev
+                 where ev.tenant_id = e.tenant_id and ev.employee_id = e.id
+                   and ev.deleted_at is null
+                 order by ev.period desc limit 1) as rating,
+                (select count(*)::int from trainee_reports r
+                  where r.tenant_id = e.tenant_id and r.employee_id = e.id
+                    and r.deleted_at is null) as report_count,
+                (select count(*)::int from office_tasks t
+                  where t.tenant_id = e.tenant_id and t.employee_id = e.id
+                    and t.status in ('pending','in_progress')) as open_tasks,
+                (select count(*)::int from office_tasks t
+                  where t.tenant_id = e.tenant_id and t.employee_id = e.id
+                    and t.status = 'done') as done_tasks,
+                (select count(*)::int from office_tasks t
+                  where t.tenant_id = e.tenant_id and t.employee_id = e.id
+                    and t.status = 'done' and t.on_time = true) as on_time_tasks
+         from employees e
+         left join employees s on s.id = e.supervisor_id
+         where e.id = $1 and e.tenant_id = $2 and e.deleted_at is null`,
+        [id, req.user.tid]));
+      if (!rows.length) throw new ApiError("NOT_FOUND", "Employee not found", 404);
+      return rows[0];
+    });
+
   app.post("/employees", { preHandler: [requireAuth, requirePermission("employees.create")] },
     async (req: any, reply) => {
       const body = employeeSchema.parse(req.body);
+      assertProfile(body);
       const id = uuidv7();
       await withTenant(req.user.tid, async (c) => {
         if (body.supervisorId) {
@@ -139,13 +238,22 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
         }
         await c.query(
           `insert into employees (id, tenant_id, full_name, phone_encrypted, phone_search,
+             date_of_birth, gender, academic_status, college, qualifications,
+             emergency_contact_name, emergency_relationship,
+             emergency_phone_encrypted, emergency_phone_search,
              job_title, department, skills, employment_type, status, hired_date,
              contract_start, contract_end, supervisor_id, monthly_salary, notes,
              created_by, updated_by)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)`,
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+                   $21,$22,$23,$24,$25,$26,$26)`,
           [id, req.user.tid, body.fullName,
            body.phone ? encryptField(body.phone) : null,
            body.phone ? searchHash(body.phone) : null,
+           body.dateOfBirth ?? null, body.gender ?? null, body.academicStatus ?? null,
+           body.college ?? null, body.qualifications ?? [],
+           body.emergencyContactName ?? null, body.emergencyRelationship ?? null,
+           body.emergencyPhone ? encryptField(body.emergencyPhone) : null,
+           body.emergencyPhone ? searchHash(body.emergencyPhone) : null,
            body.jobTitle ?? null, body.department ?? null, body.skills ?? [],
            body.employmentType, body.status, body.hiredDate ?? null,
            body.contractStart ?? null, body.contractEnd ?? null,
@@ -165,6 +273,7 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
     async (req: any, reply) => {
       const { id } = req.params as { id: string };
       const body = employeeUpdateSchema.parse(req.body);
+      assertProfile(body);
 
       await withTenant(req.user.tid, async (c) => {
         const prev = await c.query(
@@ -194,6 +303,19 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
           // Absent keeps the stored value; explicit null clears it.
           set("phone_encrypted", body.phone ? encryptField(body.phone) : null);
           set("phone_search", body.phone ? searchHash(body.phone) : null);
+        }
+        if ("dateOfBirth" in body) set("date_of_birth", body.dateOfBirth ?? null);
+        if ("gender" in body) set("gender", body.gender ?? null);
+        if ("academicStatus" in body) set("academic_status", body.academicStatus ?? null);
+        if ("college" in body) set("college", body.college ?? null);
+        if ("qualifications" in body) set("qualifications", body.qualifications ?? []);
+        if ("emergencyContactName" in body) set("emergency_contact_name", body.emergencyContactName ?? null);
+        if ("emergencyRelationship" in body) set("emergency_relationship", body.emergencyRelationship ?? null);
+        if ("emergencyPhone" in body) {
+          // Same rule as the person's own phone: blank means keep what is stored,
+          // an explicit null means take it off the record.
+          set("emergency_phone_encrypted", body.emergencyPhone ? encryptField(body.emergencyPhone) : null);
+          set("emergency_phone_search", body.emergencyPhone ? searchHash(body.emergencyPhone) : null);
         }
         if ("jobTitle" in body) set("job_title", body.jobTitle ?? null);
         if ("department" in body) set("department", body.department ?? null);
@@ -269,10 +391,18 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
                 t.shipment_id, cs.file_number,
                 t.title, t.priority, t.due_date::text as due_date,
                 (t.due_date - current_date)::int as days,
-                t.status, t.done_at, t.on_time, t.notes, t.created_at
+                t.status, t.done_at, t.on_time, t.notes, t.created_at,
+                t.procedure_id, p.name as procedure_name,
+                (select count(*)::int from office_task_steps s
+                  where s.office_task_id = t.id) as steps_total,
+                (select count(*)::int from office_task_steps s
+                  where s.office_task_id = t.id and s.status = 'done') as steps_done,
+                (select coalesce(max(s.seq), 0)::int from office_task_steps s
+                  where s.office_task_id = t.id and s.status <> 'done') as current_step
          from office_tasks t
          join employees e on e.id = t.employee_id
          left join cargo_shipments cs on cs.id = t.shipment_id
+         left join task_procedures p on p.id = t.procedure_id
          where t.tenant_id = $1
            and ($2::text is null or t.status = $2)
            and ($3::uuid is null or t.employee_id = $3)
@@ -302,15 +432,28 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
         }
         await c.query(
           `insert into office_tasks (id, tenant_id, employee_id, shipment_id, title, priority,
-             due_date, notes, created_by, updated_by)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
+             due_date, notes, procedure_id, created_by, updated_by)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`,
           [id, req.user.tid, body.employeeId, body.shipmentId ?? null, body.title,
-           body.priority, body.dueDate ?? null, body.notes ?? null, req.user.sub]);
+           body.priority, body.dueDate ?? null, body.notes ?? null, body.procedureId ?? null,
+           req.user.sub]);
+        // The flow is laid down with the task, so the assignee opens something
+        // that already says what has to happen and what must be ticked off.
+        const flow = body.procedureId
+          ? await materializeTaskFlow(c, {
+              tenantId: req.user.tid, taskId: id,
+              procedureId: body.procedureId, userId: req.user.sub
+            })
+          : null;
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
           requestId: req.requestId, entity: "office_tasks", entityId: id,
           action: "office_task.created",
-          after: { employeeId: body.employeeId, title: body.title, priority: body.priority, dueDate: body.dueDate ?? null }
+          after: {
+            employeeId: body.employeeId, title: body.title, priority: body.priority,
+            dueDate: body.dueDate ?? null, procedureId: body.procedureId ?? null,
+            steps: flow?.steps ?? 0
+          }
         });
       });
       return reply.status(201).send({ id });
@@ -353,6 +496,18 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
         if ("priority" in body) set("priority", body.priority);
         if ("dueDate" in body) set("due_date", body.dueDate ?? null);
         if ("notes" in body) set("notes", body.notes ?? null);
+        if ("procedureId" in body) {
+          set("procedure_id", body.procedureId ?? null);
+          // Attaching after the fact still lays the flow; detaching leaves the
+          // steps that exist standing on their own, because somebody may have
+          // already ticked them.
+          if (body.procedureId) {
+            await materializeTaskFlow(c, {
+              tenantId: req.user.tid, taskId: id,
+              procedureId: body.procedureId, userId: req.user.sub
+            });
+          }
+        }
         if ("status" in body) {
           set("status", body.status);
           if (body.status === "done") {
@@ -370,9 +525,17 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
         }
 
         if (sets.length) {
-          await c.query(
-            `update office_tasks set ${["updated_by = $2", "updated_at = now()", ...sets].join(", ")}
-             where id = $1 and tenant_id = $3`, params);
+          try {
+            await c.query(
+              `update office_tasks set ${["updated_by = $2", "updated_at = now()", ...sets].join(", ")}
+               where id = $1 and tenant_id = $3`, params);
+          } catch (e) {
+            // The 056 trigger is what says no to closing a task whose flow has
+            // not reached Final Sign-off. Its reason is the useful one.
+            const gate = isGateViolation(e);
+            if (gate) throw new ApiError("CONFLICT", gate, 409);
+            throw e;
+          }
         }
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
