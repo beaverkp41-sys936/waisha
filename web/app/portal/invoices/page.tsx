@@ -37,7 +37,7 @@ export default function PortalInvoicesPage() {
         style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>{error}</div>}
 
       {ready && invoices.length > 0 && (
-        <div className="mt-24 rounded-card border px-16 py-12 text-sm font-semibold" style={{
+        <div className="mt-24 rounded-card border bg-surface px-16 py-12 text-sm font-semibold" style={{
           borderColor: outstandingTotal > 0 ? "var(--warning)" : "var(--success)",
           color: "var(--ink)", background: "var(--surface)"
         }}>

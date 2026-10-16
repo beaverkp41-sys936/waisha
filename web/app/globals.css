@@ -120,16 +120,23 @@ body {
 }
 .ws-bg[data-area="transporter"] .ws-bg-img[data-on="transporter"],
 .ws-bg[data-area="cfa"] .ws-bg-img[data-on="cfa"],
-.ws-bg[data-area="office"] .ws-bg-img[data-on="office"] {
+.ws-bg[data-area="office"] .ws-bg-img[data-on="office"],
+.ws-bg[data-area="shipper"] .ws-bg-img[data-on="shipper"] {
   opacity: 1;
 }
 .ws-bg-img[data-on="transporter"] { background-image: url("/bg/transporter.jpg"); }
 .ws-bg-img[data-on="cfa"] { background-image: url("/bg/cfa.jpg"); }
 .ws-bg-img[data-on="office"] { background-image: url("/bg/office.jpg"); }
+.ws-bg-img[data-on="shipper"] { background-image: url("/bg/shipper.jpg"); }
 .ws-bg-scrim {
   position: absolute;
   inset: 0;
   background: linear-gradient(180deg, var(--scrim-top), var(--scrim-bottom));
+}
+/* The sunset is a bright photo; the shipper pane dims it a touch more than the
+   workspace set so on-photo text keeps its contrast in the brightest areas. */
+.ws-bg[data-area="shipper"] .ws-bg-scrim {
+  background: linear-gradient(180deg, rgba(8, 28, 44, 0.62), rgba(8, 28, 44, 0.5));
 }
 /* Signing in lands on a photo, not a blank canvas: the navy cover fades out and
    the workspace photo is underneath it. Mirrors the login page's own scrim. */
@@ -143,6 +150,46 @@ body {
 @keyframes shellReveal {
   from { opacity: 1; }
   to { opacity: 0; }
+}
+
+/* ------------------------------------------------- the client portal pane */
+/* The shipper portal speaks the same photo + glass language as the shell: the
+   fixed shipper.jpg layer (ws-bg above), a translucent navy pane and glass
+   cards. Bare ink flips to on-photo tones at the pane level; every card and
+   form control re-scopes it, so light-glass content keeps the light palette
+   in both themes. The header is a glass bar, not a solid slab. */
+.portal-shell {
+  position: relative;
+  z-index: 1;
+  background: var(--pane-bg);
+}
+.portal-head {
+  background: rgba(6, 24, 38, 0.72);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  backdrop-filter: blur(12px) saturate(1.2);
+  border-bottom: 3px solid var(--gold);
+  box-shadow: 0 10px 24px rgba(4, 16, 26, 0.28);
+}
+.portal-shell main {
+  --ink: #ffffff;
+  --ink-soft: var(--on-photo-soft);
+  --brand: #9ecdf1;
+}
+.portal-shell main :is(.bg-surface, input, select, textarea) {
+  --ink: #123249;
+  --ink-soft: #3d5a72;
+  --brand: var(--navy);
+}
+/* Bare-on-photo text wears the same shadow as the shell's pane text. */
+.portal-shell main :is(h1, p, [role="status"], [role="alert"]):not(.bg-surface *, .bg-surface) {
+  text-shadow: 0 1px 8px rgba(4, 18, 28, 0.5);
+}
+@media (prefers-color-scheme: dark) {
+  .portal-shell main :is(.bg-surface, input, select, textarea) {
+    --ink: #e4eef5;
+    --ink-soft: #9db3c2;
+    --brand: #7fb2d8;
+  }
 }
 
 /* -------------------------------------------------------------- the shell */

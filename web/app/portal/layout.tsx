@@ -34,8 +34,12 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
   }
 
   return (
-    <div className="portal-shell flex-1" style={{ background: "var(--milk)" }}>
-      <header style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--gold)" }}>
+    <div className="portal-shell flex-1">
+      <div aria-hidden className="ws-bg" data-area="shipper">
+        <div className="ws-bg-img" data-on="shipper" />
+        <div className="ws-bg-scrim" />
+      </div>
+      <header className="portal-head">
         <div className="flex flex-wrap items-center justify-between gap-12 px-16 py-12">
           <div className="flex items-baseline gap-12">
             <span className="text-sm font-bold tracking-[0.08em] text-white">WAISHA</span>
