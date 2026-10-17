@@ -78,6 +78,9 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
     email: emailSchema,
     password: passwordSchema,
     confirmPassword: z.string(),
+    // 060's three bundles: what the company wants from WAISHA. Optional because an
+    // account that skipped the question must not be guessed into the priciest one.
+    serviceGroup: z.string().trim().max(40).nullish(),
     acceptTerms: z.literal(true, { errorMap: () => ({ message: "You must accept the Terms and Privacy Policy" }) })
   }).refine(d => d.password === d.confirmPassword, {
     path: ["confirmPassword"], message: "Passwords do not match"
@@ -88,6 +91,20 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
     const data = transporterSignup.parse(req.body);
     const tin = validateTin(data.tin);
     await checkPwned(data.password);
+
+    // Resolved from the table, never from a list kept in the client: the control panel
+    // reprices and deactivates these rows, and a signup that accepted a stale key would
+    // record a bundle the platform no longer sells.
+    let serviceGroupId: string | null = null;
+    if (data.serviceGroup) {
+      const g = await pool.query(
+        "select id from service_groups where key = $1 and is_active", [data.serviceGroup]);
+      if (!g.rowCount) {
+        throw new ApiError("VALIDATION_FAILED", "That service package is not available.", 400,
+          [{ field: "serviceGroup", message: "Not a WAISHA package" }]);
+      }
+      serviceGroupId = g.rows[0].id;
+    }
 
     const tenantId = uuidv7();
     const userId = uuidv7();
@@ -104,10 +121,10 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
       await c.query("select set_config('app.tenant_id', $1, true)", [tenantId]);
       await c.query(
         `insert into tenants (id, type, name, tin_encrypted, tin_search,
-           phone_encrypted, phone_search, email, status)
-         values ($1,'transporter',$2,$3,$4,$5,$6,$7,'pending_verification')`,
+           phone_encrypted, phone_search, email, status, service_group_id)
+         values ($1,'transporter',$2,$3,$4,$5,$6,$7,'pending_verification',$8)`,
         [tenantId, data.companyName, encryptField(tin), searchHash(tin),
-         encryptField(data.phone), searchHash(data.phone), data.email]);
+         encryptField(data.phone), searchHash(data.phone), data.email, serviceGroupId]);
       await c.query(
         `insert into users (id, tenant_id, user_type, email, email_normalized_search,
            phone_encrypted, phone_search, password_hash, status, full_name)
@@ -125,7 +142,7 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
         userAgent: req.headers["user-agent"] ?? null,
         requestId: req.requestId,
         entity: "tenants", entityId: tenantId, action: "signup.initiated",
-        after: { companyName: data.companyName }
+        after: { companyName: data.companyName, serviceGroup: data.serviceGroup ?? null }
       });
     });
 

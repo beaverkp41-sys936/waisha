@@ -1,12 +1,18 @@
 /**
  * Seeker self-signup smoke — the whole lifecycle against a running API (port 4000).
  *
- * Signs a seeker up for real, walks the email-OTP verification through the wrong /
- * resent / verified paths, logs in through /auth/login mode=seeker, and then probes
- * the audience gate: which surfaces a seeker token may knock on and which it may
- * not. The resend assertions are the point of the suite — a second resend must stay
- * on the email channel, because the SMS transport is a dev console stub and a seeker
- * flipped onto it would never receive a code and so could never verify.
+ * Reads the public bundle list the sign-up form prices itself from, signs a company up
+ * naming the package it wants, then signs a seeker up for real and walks the email-OTP
+ * verification through the wrong / resent / verified paths. Logs in through
+ * /auth/login mode=seeker and drives the seeker's own surface — profile, meter, free
+ * claim, one paid search, free paging, the exhaustion notice — and then probes the
+ * audience gate: which surfaces a seeker token may knock on and which it may not.
+ *
+ * The resend assertions are the point of the verification block — a second resend must
+ * stay on the email channel, because the SMS transport is a dev console stub and a
+ * seeker flipped onto it would never receive a code and so could never verify. The
+ * refusal-code assertions are the point of the meter block: the seeker shell renders
+ * each code as its own screen, so a code that drifts is a broken screen.
  *
  * Run: npx tsx scripts/smoke-seeker.ts   (API on :4000)
  */
@@ -112,6 +118,25 @@ async function main() {
   let tenantId: string | null = null;
 
   try {
+    // ---------------- the public price list ----------------
+    // #105 put the sign-up form's three bundle cards on this route, so the numbers a
+    // company reads before paying must be the admin's rows, not a client-side copy.
+    phase("packages");
+    const packages = await call("/content/service-groups", null);
+    check("GET /content/service-groups needs no session → 200",
+      packages.status === 200 && Array.isArray(packages.json) && packages.json.length >= 3,
+      { s: packages.status, n: packages.json?.length });
+    check("each bundle publishes its services, seat limit and three prices",
+      (packages.json ?? []).every((g: any) =>
+        Array.isArray(g.services) && g.services.length >= 1 && g.seat_limit > 0 &&
+        Number(g.price_monthly) > 0 && Number(g.price_annual) > Number(g.price_quarterly) &&
+        g.currency === "TZS"),
+      (packages.json ?? [])[0]);
+    check("the list carries no internal id, tenant key or status column",
+      (packages.json ?? []).every((g: any) =>
+        !("id" in g) && !("is_active" in g) && !("sort" in g) && !("tenant_id" in g)),
+      Object.keys((packages.json ?? [])[0] ?? {}));
+
     // ---------------- validation ----------------
     phase("validation");
     const mismatch = await call("/auth/seeker/signup", null, {
@@ -283,6 +308,77 @@ async function main() {
       initiated?.after?.fullName === `${FIRST} ${LAST}` &&
       Array.isArray(initiated?.after?.lookingFor) && initiated.after.lookingFor[0] === "transporter",
       initiated && { a: initiated.action, after: initiated.after });
+
+    // ---------------- the bundle a company asks for ----------------
+    // 064 stores what was REQUESTED at sign-up, separately from what was sold
+    // (subscriptions.service_group_id). A pending account has no subscription yet, so
+    // this column is the only place the request is recorded — and an unknown key must
+    // fail before a tenant is minted, not after.
+    phase("requested bundle");
+    await clearBuckets("signup:");
+    const badBundle = await call("/auth/transporter/signup", null, {
+      method: "POST",
+      body: JSON.stringify({
+        companyName: `Ghost Bundle Ltd ${STAMP}`, tin: `5${STAMP}`, phone: `+2555${STAMP}`,
+        email: `ghost.${STAMP}@waisha.test`, password: PASSWORD, confirmPassword: PASSWORD,
+        serviceGroup: "not_a_waisha_package", acceptTerms: true
+      })
+    });
+    check("a bundle key that is not on the price list → 400 on serviceGroup",
+      badBundle.status === 400 &&
+      badBundle.json?.error?.details?.some((d: any) => d.field === "serviceGroup"),
+      { s: badBundle.status, d: badBundle.json?.error?.details });
+    check("the rejected request minted no tenant",
+      (await oi(`select count(*)::int as n from tenants where tin_search = $1`,
+        [searchHash(`5${STAMP}`)])).rows[0].n === 0);
+
+    const withBundle = await call("/auth/transporter/signup", null, {
+      method: "POST",
+      body: JSON.stringify({
+        companyName: `Clearway CFA Ltd ${STAMP}`, tin: `4${STAMP}`, phone: `+2554${STAMP}`,
+        email: `bundle.${STAMP}@waisha.test`, password: PASSWORD, confirmPassword: PASSWORD,
+        serviceGroup: "cfa_office", acceptTerms: true
+      })
+    });
+    check("a company can sign up naming the bundle it wants → 201",
+      withBundle.status === 201 && !!withBundle.json?.userId,
+      { s: withBundle.status, b: withBundle.json });
+
+    const bundleRow = withBundle.json?.userId ? (await oi(
+      `select t.service_group_id, g.key as group_key, g.services, t.type, t.status
+         from tenants t
+         join users u on u.tenant_id = t.id
+         left join service_groups g on g.id = t.service_group_id
+        where u.id = $1`, [withBundle.json.userId])).rows[0] : null;
+    check("the request is stored as the tenant's service_group_id, priced row intact",
+      bundleRow?.group_key === "cfa_office" &&
+      (bundleRow?.services ?? []).join() === "cfa,office" &&
+      bundleRow?.type === "transporter" && bundleRow?.status === "pending_verification",
+      bundleRow && { k: bundleRow.group_key, s: bundleRow.services, t: bundleRow.type });
+
+    const bundleAudit = (await oi(
+      `select after from audit_logs
+        where entity_id = $1 and action = 'signup.initiated' limit 1`,
+      [bundleRow ? (await oi(`select tenant_id from users where id = $1`,
+        [withBundle.json.userId])).rows[0].tenant_id : null])).rows[0];
+    check("the audit line carries the bundle name the company asked for",
+      bundleAudit?.after?.serviceGroup === "cfa_office", bundleAudit?.after);
+
+    const bareSignup = await call("/auth/transporter/signup", null, {
+      method: "POST",
+      body: JSON.stringify({
+        companyName: `No Bundle Ltd ${STAMP}`, tin: `3${STAMP}`, phone: `+2553${STAMP}`,
+        email: `nobundle.${STAMP}@waisha.test`, password: PASSWORD, confirmPassword: PASSWORD,
+        acceptTerms: true
+      })
+    });
+    const bareRow = bareSignup.json?.userId ? (await oi(
+      `select service_group_id from tenants
+        where id = (select tenant_id from users where id = $1)`,
+      [bareSignup.json.userId])).rows[0] : null;
+    check("a sign-up that names no package stores a null request, never a guessed one",
+      bareSignup.status === 201 && bareRow?.service_group_id === null,
+      { s: bareSignup.status, sg: bareRow?.service_group_id });
 
     // ---------------- before verification ----------------
     phase("before verification");
@@ -484,8 +580,8 @@ async function main() {
     // The audience gate and the permission gate must be tellable apart. /portal is
     // open to every external surface, but portal.view belongs to the shipper role,
     // so a seeker reaching it is stopped by the permission check, not by the gate —
-    // which is what proves /seeker and /directory will be reachable once #100 builds
-    // them behind the same open prefix.
+    // which is the same door /seeker and /directory come through, and the reason a
+    // seeker's own surface had to be opened by prefix rather than by role.
     const portal = await call("/portal/overview", seekerToken);
     check("an open prefix with an ungranted key fails on the permission gate, not the audience gate",
       portal.status === 403 &&
@@ -493,11 +589,83 @@ async function main() {
       /role does not allow/.test(portal.json?.error?.message ?? ""),
       { s: portal.status, m: portal.json?.error?.message });
 
+    // #100 shipped these routes, so the two prefixes that used to answer 404 from the
+    // router now answer through the meter. The point of the block is the shape of the
+    // refusals: each one is a screen the seeker shell renders differently, and a 500
+    // or a bare 403 here would leave the UI guessing.
     const seekerSurface = await call("/seeker/passes", seekerToken);
-    const directorySurface = await call("/directory/search", seekerToken);
-    check("the seeker and directory prefixes answer 404 from the router, not 403 from the gate",
-      seekerSurface.status === 404 && directorySurface.status === 404,
-      { seeker: seekerSurface.status, directory: directorySurface.status });
+    check("the seeker's own meter reads through the open prefix → 200",
+      seekerSurface.status === 200 && seekerSurface.json?.found === true &&
+      seekerSurface.json?.verified === true && Array.isArray(seekerSurface.json?.products),
+      { s: seekerSurface.status, b: seekerSurface.json });
+
+    const regions = await call("/directory/regions", seekerToken);
+    check("GET /directory/regions answers the board's counts without spending a credit",
+      regions.status === 200 && Array.isArray(regions.json),
+      { s: regions.status, n: regions.json?.length });
+
+    const profile = await call("/seeker/profile", seekerToken);
+    check("GET /seeker/profile → 200 with a masked phone and the meter attached",
+      profile.status === 200 && profile.json?.firstName === FIRST &&
+      /^\+\*+\d{3}$/.test(String(profile.json?.phoneMasked ?? "")) &&
+      profile.json?.pass?.found === true,
+      { s: profile.status, phone: profile.json?.phoneMasked });
+
+    const renamed = await call("/seeker/profile", seekerToken, {
+      method: "PUT", body: JSON.stringify({ lastName: "Juma", lookingFor: ["transporter", "cfa"] })
+    });
+    const nameSync = renamed.status === 200 ? (await oi(
+      `select u.full_name, s.last_name, s.looking_for from users u
+         join seekers s on s.user_id = u.id where u.id = $1`, [userId])).rows[0] : null;
+    check("a name edit keeps users.full_name and seekers in step (the office reads it)",
+      renamed.status === 200 && nameSync?.full_name === `${FIRST} Juma` &&
+      nameSync?.last_name === "Juma" && (nameSync?.looking_for ?? []).length === 2,
+      { s: renamed.status, row: nameSync });
+
+    const emptySearch = await call("/directory/search", seekerToken, {
+      method: "POST", body: JSON.stringify({})
+    });
+    check("searching with nothing to spend → 409 NO_SEARCH_PASS",
+      emptySearch.status === 409 && emptySearch.json?.error?.code === "NO_SEARCH_PASS",
+      { s: emptySearch.status, code: emptySearch.json?.error?.code });
+
+    const claimed = await call("/seeker/passes/free", seekerToken, { method: "POST" });
+    check("claiming today's free search → 201 with exactly one credit",
+      claimed.status === 201 && claimed.json?.kind === "free" && claimed.json?.remaining === 1,
+      { s: claimed.status, b: claimed.json });
+
+    const claimAgain = await call("/seeker/passes/free", seekerToken, { method: "POST" });
+    check("a second claim before the 24 hours turn → 409 FREE_SEARCH_NOT_READY",
+      claimAgain.status === 409 && claimAgain.json?.error?.code === "FREE_SEARCH_NOT_READY",
+      { s: claimAgain.status, code: claimAgain.json?.error?.code });
+
+    const paid = await call("/directory/search", seekerToken, {
+      method: "POST", body: JSON.stringify({ kind: "transporter", limit: 5 })
+    });
+    check("the one free credit buys a real page → 200 with a claim check",
+      paid.status === 200 && !!paid.json?.searchId && paid.json?.remaining === 0 &&
+      Array.isArray(paid.json?.results) && typeof paid.json?.found === "number",
+      { s: paid.status, b: paid.json && { id: paid.json.searchId, found: paid.json.found } });
+
+    const paged = await call(`/directory/search/${paid.json?.searchId}?limit=5&offset=0&kind=transporter`,
+      seekerToken);
+    check("paging the search just paid for costs nothing → 200 with the same total",
+      paged.status === 200 && Array.isArray(paged.json?.results) &&
+      paged.json?.found === paid.json?.found,
+      { s: paged.status, f: paged.json?.found });
+
+    const spent = await call("/directory/search", seekerToken, {
+      method: "POST", body: JSON.stringify({})
+    });
+    check("a search after the credit is gone names the wait, not a bare failure",
+      spent.status === 409 && spent.json?.error?.code === "SEARCH_PASS_EXHAUSTED" &&
+      Number(spent.json?.error?.details?.[0]?.freeWaitMinutes) > 0,
+      { s: spent.status, code: spent.json?.error?.code, d: spent.json?.error?.details });
+
+    const ghostCard = await call(`/directory/companies/${userId}?searchId=${userId}`, seekerToken);
+    check("reading a card off a claim nobody bought is refused, not answered with nulls",
+      ghostCard.status === 410 && ghostCard.json?.error?.code === "SEARCH_EXPIRED",
+      { s: ghostCard.status, code: ghostCard.json?.error?.code });
 
     // A freshly promoted account still carries its old role set inside a live token.
     // The gate re-reads user_roles before denying, or the promotion would lock a
