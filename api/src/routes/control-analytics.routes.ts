@@ -53,7 +53,7 @@ export async function controlHolds(req: any, keys: string[]): Promise<string[]> 
 }
 
 /** Read gate. Analytics is the floor for every screen in this module. */
-async function requireControlPermission(req: any, permissionKey: string) {
+export async function requireControlPermission(req: any, permissionKey: string) {
   if (!(await controlCan(req, permissionKey))) {
     throw new ApiError("FORBIDDEN", "Your platform role does not allow this.", 403);
   }
@@ -80,10 +80,14 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
 
   // ---------- what may this person see? the panel builds its own navigation ----------
   app.get("/control/auth/permissions", { preHandler: [requireControl] }, async (req: any) => {
+    // Every key a SCREEN in web/components/ControlNav.tsx filters on has to be probed
+    // here. A duty that is missing from this list is held but never visible, so the
+    // seat reads the desk as broken rather than as closed — which is how control.staff.view
+    // behaved for three roles after 067 shipped it.
     const keys = ["control.view", ANALYTICS, COSTS, AUDIT,
       "control.tenants.manage", "control.licences.manage", "control.payments.manage",
       "control.plans.manage", "control.content.manage", "control.staff.manage",
-      "control.subscriptions.view",
+      "control.staff.view", "control.subscriptions.view", "control.system.view",
       "control.system.manage", "control.impersonate"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });

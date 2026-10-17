@@ -252,7 +252,15 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- Session info ----------
   app.get("/control/auth/me", { preHandler: [requireControl] }, async (req: any) => {
-    return { userId: req.control.user_id, roles: req.control.roles ?? [] };
+    // The seat's own identity, for the same seat that signed in. Every 403 card in the
+    // panel renders "Signed in as …" and fell back to "a platform seat" while this
+    // returned only an id — get_control_session already carries the name and address.
+    return {
+      userId: req.control.user_id,
+      email: req.control.email ?? null,
+      fullName: req.control.full_name ?? null,
+      roles: req.control.roles ?? []
+    };
   });
 
   app.post("/control/auth/logout", async (req: any, reply) => {
