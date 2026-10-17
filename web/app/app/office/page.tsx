@@ -5,6 +5,12 @@ import { AREAS, areaUnlocked } from "../areas";
 
 const MODULES = [
   {
+    name: "Attendance & Leave",
+    href: "/app/office/attendance",
+    description: "The daily loop — who is in today, the clock each person stamps themselves, the register for a stretch of days with punctuality and hours per head, leave requests with the queue that decides them, balances against the annual entitlement, and the working day itself: start, end, grace and the timezone every one of those numbers is counted in.",
+    plan: "Enterprise"
+  },
+  {
     name: "Employees Management",
     href: "/app/office/employees",
     description: "Your people, ranked by task handling — overview KPIs and a leaderboard, roster with skills and contracts, daily assignments linked to cargo files, monthly evaluations, renewal countdowns and the trainee register with absorption.",

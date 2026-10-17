@@ -67,6 +67,8 @@ async function buildAlerts(c: any, tenantId: string, userId: string): Promise<No
   const seesInvoices = await checkPermission(c, userId, "invoices.view");
   const seesCosts = await checkPermission(c, userId, "costs.view");
   const seesOfficeCosts = await checkPermission(c, userId, "office_costs.view");
+  const decidesLeave = await checkPermission(c, userId, "leave.decide");
+  const correctsAttendance = await checkPermission(c, userId, "attendance.edit");
   // pg DATE columns arrive at local midnight, so count days from the start
   // of today — otherwise a date falling today reads as a negative fraction.
   const startOfToday = new Date();
@@ -434,6 +436,64 @@ async function buildAlerts(c: any, tenantId: string, userId: string): Promise<No
           href: "/app/office/costs", date: new Date().toISOString().slice(0, 10)
         });
       }
+    }
+  }
+
+  // The people loop: a leave queue that has not been answered, and a working day
+  // whose register is still half empty. Neither names an amount, so neither is
+  // wrapped in a finance permission — but each is only built for the seat that
+  // can actually close it.
+  if (decidesLeave) {
+    const pendingLeave = await c.query(
+      `select count(*)::int as n, min(starts_on)::text as first_starts
+         from leave_requests
+        where tenant_id = $1 and deleted_at is null and status = 'pending'`, [tenantId]);
+    const pl = pendingLeave.rows[0];
+    if (pl && Number(pl.n) > 0) {
+      const first = pl.first_starts ? new Date(pl.first_starts) : null;
+      const soon = first ? Math.floor((first.getTime() - today) / DAY) <= 7 : false;
+      items.push({
+        key: `leave_pending:${pl.n}:${pl.first_starts}`,
+        type: "leave_pending",
+        severity: soon ? "warning" : "info",
+        title: `${pl.n} leave request${Number(pl.n) === 1 ? "" : "s"} waiting to be decided`,
+        detail: pl.first_starts ? `Earliest starts ${pl.first_starts}` : "No dates recorded",
+        href: "/app/office/attendance?tab=leave", date: new Date().toISOString().slice(0, 10)
+      });
+    }
+  }
+
+  if (correctsAttendance) {
+    const register = await c.query(
+      `select (timezone(coalesce(s.timezone, 'Africa/Dar_es_Salaam'), now()))::date::text as today,
+              extract(isodow from timezone(coalesce(s.timezone, 'Africa/Dar_es_Salaam'), now()))::int as isodow,
+              coalesce((
+                select count(*)::int from employees e
+                 where e.tenant_id = $1 and e.deleted_at is null and e.status = 'active'
+                   and not exists (
+                     select 1 from employee_attendance a
+                      where a.tenant_id = e.tenant_id and a.employee_id = e.id
+                        and a.deleted_at is null
+                        and a.work_date = (timezone(coalesce(s.timezone, 'Africa/Dar_es_Salaam'), now()))::date)
+                   and not exists (
+                     select 1 from leave_requests lr
+                      where lr.tenant_id = e.tenant_id and lr.employee_id = e.id
+                        and lr.deleted_at is null and lr.status = 'approved'
+                        and (timezone(coalesce(s.timezone, 'Africa/Dar_es_Salaam'), now()))::date
+                            between lr.starts_on and lr.ends_on)
+              ), 0)::int as missing
+         from (values (1)) v
+         left join office_settings s on s.tenant_id = $1`, [tenantId]);
+    const rg = register.rows[0];
+    if (rg && Number(rg.isodow) <= 5 && Number(rg.missing) > 0) {
+      items.push({
+        key: `attendance_open:${rg.today}:${rg.missing}`,
+        type: "attendance_open",
+        severity: Number(rg.missing) > 3 ? "warning" : "info",
+        title: `${rg.missing} member${Number(rg.missing) === 1 ? "" : "s"} of staff not on today's register`,
+        detail: "Clock them in or state the day as absent",
+        href: "/app/office/attendance", date: rg.today
+      });
     }
   }
 
