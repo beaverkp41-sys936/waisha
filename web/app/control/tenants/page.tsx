@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { AnnouncementTicker } from "@/components/AnnouncementTicker";
+import { ControlNav } from "@/components/ControlNav";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
@@ -96,19 +97,7 @@ export default function TenantsPage() {
           </p>
         </div>
         <AnnouncementTicker />
-        <div className="flex items-center gap-16 text-xs font-semibold">
-          <a href="/control" className="underline" style={{ color: "var(--adm-accent)" }}>Plans</a>
-          <span className="text-white">Tenants</span>
-          <a href="/control/directory" className="underline" style={{ color: "var(--adm-accent)" }}>Directory</a>
-          <a href="/control/staff" className="underline" style={{ color: "var(--adm-accent)" }}>Staff</a>
-          <a href="/control/announcements" className="underline" style={{ color: "var(--adm-accent)" }}>Announcements</a>
-          <button type="button" className="rounded-input border px-16 py-8 text-white"
-            style={{ borderColor: "rgba(255,255,255,0.4)" }}
-            onClick={async () => {
-              await fetch(`${API}/api/v1/control/auth/logout`, { method: "POST", credentials: "include" });
-              window.location.href = "/control/login";
-            }}>Sign out</button>
-        </div>
+        <ControlNav />
       </header>
 
       <main className="mx-auto max-w-[900px] px-16 py-32">

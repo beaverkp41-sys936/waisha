@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { AnnouncementTicker } from "@/components/AnnouncementTicker";
+import { ControlNav } from "@/components/ControlNav";
 import { SeatFace } from "@/components/SeatFace";
 import { ProgressRing } from "@/components/ProgressRing";
 
@@ -193,19 +194,7 @@ export default function ControlStaffProfilePage() {
         </p>
       </div>
       <AnnouncementTicker />
-      <div className="flex items-center gap-16 text-xs font-semibold">
-        <a href="/control" className="underline" style={{ color: "var(--adm-accent)" }}>Plans</a>
-        <a href="/control/tenants" className="underline" style={{ color: "var(--adm-accent)" }}>Tenants</a>
-        <a href="/control/directory" className="underline" style={{ color: "var(--adm-accent)" }}>Directory</a>
-        <a href="/control/staff" className="underline" style={{ color: "var(--adm-accent)" }}>Staff</a>
-        <a href="/control/announcements" className="underline" style={{ color: "var(--adm-accent)" }}>Announcements</a>
-        <button type="button" className="rounded-input border px-16 py-8 text-white"
-          style={{ borderColor: "rgba(255,255,255,0.4)" }}
-          onClick={async () => {
-            await fetch(`${API}/api/v1/control/auth/logout`, { method: "POST", credentials: "include" });
-            window.location.href = "/control/login";
-          }}>Sign out</button>
-      </div>
+      <ControlNav />
     </header>
   );
 

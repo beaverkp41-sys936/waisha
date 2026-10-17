@@ -279,16 +279,24 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
     await enforceRateLimit(`activate:uid:${req.control.user_id}`, 20, 3600);
     const { id } = req.params as { id: string };
     const body = z.object({
-      planKey: z.enum(["starter", "business", "enterprise"]),
+      planKey: z.enum(["starter", "business", "enterprise"]).nullish(),
+      // The bundle the office actually sold. 064 recorded the applicant's choice on
+      // the tenant and said the sale belongs on the subscription; this is the write
+      // that puts it there, and 068 prices the invoice from it.
+      serviceGroupKey: z.string().trim().max(40).nullish(),
       billingCycle: z.enum(["monthly", "quarterly", "annual"]),
       provider: z.enum(["azampesa", "mpesa", "tigopesa", "airtel", "halopesa", "bank"]),
       providerTxnId: z.string().max(100).optional(),
       amountOverride: z.number().positive().optional()
     }).parse(req.body);
+    if (!body.planKey && !body.serviceGroupKey) {
+      throw new ApiError("VALIDATION_FAILED", "Choose a WAISHA package or a plan.", 400);
+    }
     const r = await pool.query(
-      "select platform_auth.manual_activate($1,$2,$3,$4,$5,$6,$7) as r",
-      [id, body.planKey, body.billingCycle, body.provider,
-       body.providerTxnId ?? null, body.amountOverride ?? null, req.control.user_id]);
+      "select platform_auth.manual_activate($1,$2,$3,$4,$5,$6,$7,$8) as r",
+      [id, body.planKey ?? null, body.billingCycle, body.provider,
+       body.providerTxnId ?? null, body.amountOverride ?? null, req.control.user_id,
+       body.serviceGroupKey ?? null]);
     const res = r.rows[0].r;
     if (res.status === "ok") return reply.send(res);
     throw new ApiError("VALIDATION_FAILED", res.message ?? "Activation failed", 400);

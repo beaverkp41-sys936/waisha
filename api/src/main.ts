@@ -11,6 +11,7 @@ import { authRoutes } from "./routes/auth.routes.js";
 import { contentRoutes } from "./routes/content.routes.js";
 import { controlRoutes } from "./routes/control.routes.js";
 import { controlAnalyticsRoutes } from "./routes/control-analytics.routes.js";
+import { controlRevenueRoutes } from "./routes/control-revenue.routes.js";
 import { controlStaffRoutes } from "./routes/control-staff.routes.js";
 import { announcementsRoutes } from "./routes/announcements.routes.js";
 import { licenceRoutes } from "./routes/licence.routes.js";
@@ -86,6 +87,7 @@ async function main() {
   await app.register(contentRoutes, { prefix: "/api/v1" });
   await app.register(controlRoutes, { prefix: "/api/v1" });
   await app.register(controlAnalyticsRoutes, { prefix: "/api/v1" });
+  await app.register(controlRevenueRoutes, { prefix: "/api/v1" });
   await app.register(controlStaffRoutes, { prefix: "/api/v1" });
   await app.register(announcementsRoutes, { prefix: "/api/v1" });
   await app.register(licenceRoutes, { prefix: "/api/v1" });

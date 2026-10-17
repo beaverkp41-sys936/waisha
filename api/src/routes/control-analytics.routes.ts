@@ -25,7 +25,7 @@ const ANALYTICS = "control.analytics.view";
 const AUDIT = "control.audit.view";
 const COSTS = "control.costs.manage";
 
-async function controlCan(req: any, permissionKey: string): Promise<boolean> {
+export async function controlCan(req: any, permissionKey: string): Promise<boolean> {
   const c = req.control;
   if (!c?.user_id || !c?.tenant_id) return false;
   const held = await controlHolds(req, [permissionKey]);
@@ -83,6 +83,7 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
     const keys = ["control.view", ANALYTICS, COSTS, AUDIT,
       "control.tenants.manage", "control.licences.manage", "control.payments.manage",
       "control.plans.manage", "control.content.manage", "control.staff.manage",
+      "control.subscriptions.view",
       "control.system.manage", "control.impersonate"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });

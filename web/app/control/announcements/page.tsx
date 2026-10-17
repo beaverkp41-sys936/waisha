@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { AnnouncementTicker } from "@/components/AnnouncementTicker";
+import { ControlNav } from "@/components/ControlNav";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
@@ -107,11 +108,6 @@ export default function AnnouncementsPage() {
     } finally { setBusyId(null); }
   }
 
-  async function logout() {
-    await fetch(`${API}/api/v1/control/auth/logout`, { method: "POST", credentials: "include" });
-    window.location.href = "/control/login";
-  }
-
   const cell = "w-full rounded-input border px-8 py-8 text-sm";
   const cellStyle = { borderColor: "var(--line)", background: "var(--milk)" };
   const labelCls = "mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]";
@@ -127,16 +123,7 @@ export default function AnnouncementsPage() {
           </p>
         </div>
         <AnnouncementTicker />
-        <div className="flex items-center gap-16 text-xs font-semibold">
-          <a href="/control" className="underline" style={{ color: "var(--adm-accent)" }}>Plans</a>
-          <a href="/control/tenants" className="underline" style={{ color: "var(--adm-accent)" }}>Tenants</a>
-          <a href="/control/directory" className="underline" style={{ color: "var(--adm-accent)" }}>Directory</a>
-          <a href="/control/staff" className="underline" style={{ color: "var(--adm-accent)" }}>Staff</a>
-          <span className="text-white">Announcements</span>
-          <button type="button" className="rounded-input border px-16 py-8 text-white"
-            style={{ borderColor: "rgba(255,255,255,0.4)" }}
-            onClick={logout}>Sign out</button>
-        </div>
+        <ControlNav />
       </header>
 
       <main className="mx-auto max-w-[900px] px-16 py-32">
