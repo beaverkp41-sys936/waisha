@@ -182,6 +182,10 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
         [uuidv7(), sess.user_id, sess.tenant_id, uuidv7(),
          new Date(Date.now() + 2 * 3600 * 1000), sha256(newToken),
          req.headers["user-agent"] ?? null, req.ip ?? null]);
+      // The portal stamps this on password success (auth.routes); control sign-in ends
+      // here instead, so without it the roster's "last signed in" column stays empty
+      // for the one group that reads it most.
+      await c.query("update users set last_login_at = now() where id = $1", [sess.user_id]);
       if (!sess.totp_enabled) {
         await c.query("update users set totp_enabled=true where id=$1", [sess.user_id]);
         await writeAudit(c, {

@@ -37,7 +37,7 @@ async function controlCan(req: any, permissionKey: string): Promise<boolean> {
  * each round trip over the pooler is the difference between a tab that opens and a
  * tab that stalls; user_roles is already indexed by user.
  */
-async function controlHolds(req: any, keys: string[]): Promise<string[]> {
+export async function controlHolds(req: any, keys: string[]): Promise<string[]> {
   const c = req.control;
   if (!c?.user_id || !c?.tenant_id) return [];
   return withTenant(c.tenant_id, async (client) => {

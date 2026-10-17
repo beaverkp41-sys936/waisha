@@ -126,6 +126,7 @@ export default function ControlPage() {
           ) : null}
           <a href="/control/tenants" className="text-xs font-semibold underline" style={{ color: "var(--adm-accent)" }}>Tenants</a>
           <a href="/control/directory" className="text-xs font-semibold underline" style={{ color: "var(--adm-accent)" }}>Directory</a>
+          <a href="/control/staff" className="text-xs font-semibold underline" style={{ color: "var(--adm-accent)" }}>Staff</a>
           <a href="/control/announcements" className="text-xs font-semibold underline" style={{ color: "var(--adm-accent)" }}>Announcements</a>
           <button type="button" onClick={logout}
             className="rounded-input border px-16 py-8 text-xs font-semibold text-white"

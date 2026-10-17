@@ -132,6 +132,7 @@ export default function ControlDirectoryPage() {
           <a href="/control" className="underline" style={{ color: "var(--adm-accent)" }}>Plans</a>
           <a href="/control/tenants" className="underline" style={{ color: "var(--adm-accent)" }}>Tenants</a>
           <span className="text-white">Directory</span>
+          <a href="/control/staff" className="underline" style={{ color: "var(--adm-accent)" }}>Staff</a>
           <a href="/control/announcements" className="underline" style={{ color: "var(--adm-accent)" }}>Announcements</a>
           <button type="button" className="rounded-input border px-16 py-8 text-white"
             style={{ borderColor: "rgba(255,255,255,0.4)" }}

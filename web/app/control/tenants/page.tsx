@@ -100,6 +100,7 @@ export default function TenantsPage() {
           <a href="/control" className="underline" style={{ color: "var(--adm-accent)" }}>Plans</a>
           <span className="text-white">Tenants</span>
           <a href="/control/directory" className="underline" style={{ color: "var(--adm-accent)" }}>Directory</a>
+          <a href="/control/staff" className="underline" style={{ color: "var(--adm-accent)" }}>Staff</a>
           <a href="/control/announcements" className="underline" style={{ color: "var(--adm-accent)" }}>Announcements</a>
           <button type="button" className="rounded-input border px-16 py-8 text-white"
             style={{ borderColor: "rgba(255,255,255,0.4)" }}
