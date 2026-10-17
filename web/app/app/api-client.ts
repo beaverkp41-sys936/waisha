@@ -1,41 +1,19 @@
 "use client";
 
-const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
+import { authFetch } from "@/lib/session";
 
 /**
  * Shared auth-aware fetch for all transporter-portal pages.
  * - Attaches the access token from sessionStorage
  * - On 401: silently refreshes the token once and retries
  * - On refresh failure: redirects to /login
+ *
+ * The refresh itself is single-flight and shared with the shipper and seeker shells
+ * (see lib/session.ts): the cookie rotates on every call, so two portal pages
+ * refreshing at the same used to look like token theft and revoke the whole family.
  */
-export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  const doFetch = (t: string | null) => fetch(`${API}/api/v1${path}`, {
-    ...init,
-    credentials: "include",
-    headers: {
-      ...(init?.headers ?? {}),
-      ...(t ? { Authorization: `Bearer ${t}` } : {})
-    }
-  });
-
-  let res = await doFetch(sessionStorage.getItem("waisha_access"));
-
-  if (res.status === 401) {
-    const refresh = await fetch(`${API}/api/v1/auth/refresh`, {
-      method: "POST",
-      credentials: "include"
-    });
-    if (refresh.ok) {
-      const j = await refresh.json();
-      sessionStorage.setItem("waisha_access", j.accessToken);
-      res = await doFetch(j.accessToken);
-    } else {
-      window.location.href = "/login";
-      throw new Error("session ended");
-    }
-  }
-
-  return res;
+export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  return authFetch(path, init, () => { window.location.href = "/login"; });
 }
 
 /**
@@ -48,28 +26,10 @@ export async function apiStream(
   onEvent: (name: string, data: any) => void,
   signal: AbortSignal
 ): Promise<Response> {
-  const doFetch = (t: string | null) => fetch(`${API}/api/v1${path}`, {
-    headers: { Accept: "text/event-stream", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
-    credentials: "include",
+  const res = await authFetch(path, {
+    headers: { Accept: "text/event-stream" },
     signal
-  });
-
-  let res = await doFetch(sessionStorage.getItem("waisha_access"));
-
-  if (res.status === 401) {
-    const refresh = await fetch(`${API}/api/v1/auth/refresh`, {
-      method: "POST",
-      credentials: "include"
-    });
-    if (refresh.ok) {
-      const j = await refresh.json();
-      sessionStorage.setItem("waisha_access", j.accessToken);
-      res = await doFetch(j.accessToken);
-    } else {
-      window.location.href = "/login";
-      throw new Error("session ended");
-    }
-  }
+  }, () => { window.location.href = "/login"; });
 
   // Resolves when the socket ends, so the caller decides whether to reconnect.
   if (res.ok && res.body) await readFrames(res.body, onEvent, signal);

@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { apiFetch } from "../api-client";
 import { useLicence, TrialBanner, LicenceGate } from "./gate";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
@@ -27,27 +28,9 @@ export default function PostLogin() {
   const { licence, loading, reload } = useLicence();
   const [gateOpen, setGateOpen] = useState(false);
 
-  const api = useCallback(async (path: string, init?: RequestInit): Promise<Response> => {
-    const token = sessionStorage.getItem("waisha_access");
-    const doFetch = (t: string | null) =>
-      fetch(`${API}/api/v1${path}`, {
-        ...init, credentials: "include",
-        headers: { ...(init?.headers ?? {}), ...(t ? { Authorization: `Bearer ${t}` } : {}) }
-      });
-    let res = await doFetch(token);
-    if (res.status === 401) {
-      const r = await fetch(`${API}/api/v1/auth/refresh`, { method: "POST", credentials: "include" });
-      if (r.ok) {
-        const j = await r.json();
-        sessionStorage.setItem("waisha_access", j.accessToken);
-        res = await doFetch(j.accessToken);
-      } else {
-        window.location.href = "/login";
-        throw new Error("session ended");
-      }
-    }
-    return res;
-  }, []);
+  // The account page is the one place that reads its own sessions, so it goes through
+  // the portal client like every other page rather than repeating the refresh dance.
+  const api = apiFetch;
 
   const load = useCallback(async () => {
     try {
