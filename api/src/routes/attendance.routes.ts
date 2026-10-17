@@ -736,7 +736,7 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
       return withTenant(req.user.tid, async (c) => {
         const prev = await c.query(
           `select l.employee_id, l.status, l.starts_on::text as starts_on, l.ends_on::text as ends_on,
-                  l.leave_kind, e.user_id
+                  l.leave_kind, l.reason, e.user_id
              from leave_requests l join employees e on e.id = l.employee_id
             where l.id = $1 and l.tenant_id = $2 and l.deleted_at is null`,
           [id, req.user.tid]);
@@ -748,18 +748,20 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
         if (row.status !== "pending") {
           throw new ApiError("CONFLICT", "A request that has been decided is not edited — cancel it and raise a fresh one.", 409);
         }
+        // Absent key keeps the stored value, resolved from the row just read in the same
+        // tenant scope, so the statement below is static and the scanner can prove it.
         const startsOn = "startsOn" in body ? body.startsOn! : row.starts_on;
         const endsOn = "endsOn" in body ? body.endsOn! : row.ends_on;
         assertSpan(startsOn, endsOn, 365, "endsOn");
+        const leaveKind = "leaveKind" in body ? body.leaveKind! : row.leave_kind;
+        const reason = "reason" in body ? (body.reason ?? null) : row.reason;
 
-        const sets: string[] = ["updated_by = $2", "updated_at = now()"];
-        const params: unknown[] = [id, req.user.sub, req.user.tid];
-        const set = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
-        if ("startsOn" in body) set("starts_on", body.startsOn);
-        if ("endsOn" in body) set("ends_on", body.endsOn);
-        if ("leaveKind" in body) set("leave_kind", body.leaveKind);
-        if ("reason" in body) set("reason", body.reason ?? null);
-        await c.query(`update leave_requests set ${sets.join(", ")} where id = $1 and tenant_id = $3`, params);
+        await c.query(
+          `update leave_requests
+              set starts_on = $4, ends_on = $5, leave_kind = $6, reason = $7,
+                  updated_by = $2, updated_at = now()
+            where id = $1 and tenant_id = $3`,
+          [id, req.user.sub, req.user.tid, startsOn, endsOn, leaveKind, reason]);
 
         const saved = await c.query(
           `select id, employee_id, leave_kind, starts_on::text as starts_on, ends_on::text as ends_on,
