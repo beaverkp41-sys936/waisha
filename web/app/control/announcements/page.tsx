@@ -130,6 +130,7 @@ export default function AnnouncementsPage() {
         <div className="flex items-center gap-16 text-xs font-semibold">
           <a href="/control" className="underline" style={{ color: "var(--adm-accent)" }}>Plans</a>
           <a href="/control/tenants" className="underline" style={{ color: "var(--adm-accent)" }}>Tenants</a>
+          <a href="/control/directory" className="underline" style={{ color: "var(--adm-accent)" }}>Directory</a>
           <span className="text-white">Announcements</span>
           <button type="button" className="rounded-input border px-16 py-8 text-white"
             style={{ borderColor: "rgba(255,255,255,0.4)" }}
