@@ -26,49 +26,6 @@ function useGreeting() {
   return greeting;
 }
 
-function useToday() {
-  const [d, setD] = useState("");
-  useEffect(() => {
-    setD(new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase());
-  }, []);
-  return d;
-}
-
-function Chip({ text, color }: { text: string; color: string }) {
-  return (
-    <span className="px-8 py-4 text-[10px] font-bold uppercase tracking-[0.14em]"
-      style={{ borderLeft: `4px solid ${color}`, background: `color-mix(in srgb, ${color} 22%, transparent)`, color: "#fff" }}>
-      {text}
-    </span>
-  );
-}
-
-function Corridor() {
-  return (
-    <div>
-      <div className="flex items-center gap-12">
-        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white">Dar es Salaam</span>
-        <span className="relative h-px flex-1" style={{ background: "rgba(255,255,255,0.35)" }}>
-          <span className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full" style={{ background: "var(--gold)", left: 0 }} />
-          <span className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full" style={{ background: "var(--gold)", left: "50%" }} />
-          <span className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full" style={{ background: "var(--gold)", right: 0 }} />
-        </span>
-        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white">Kigali</span>
-      </div>
-      <p className="mt-4 text-center text-[10px] font-semibold uppercase tracking-[0.22em] tabular-nums"
-        style={{ color: "rgba(255,255,255,0.72)" }}>
-        1,500 KM · Central Corridor
-      </p>
-    </div>
-  );
-}
-
-const MANIFEST: [string, string][] = [
-  ["01", "Multi-tenant, isolated by design"],
-  ["02", "Every action audited"],
-  ["03", "English · Kiswahili"]
-];
-
 function Segmented({ items, index, onChange }: { items: string[]; index: number; onChange: (i: number) => void }) {
   return (
     <div role="tablist" className="auth-tab relative flex border-b">
@@ -220,7 +177,6 @@ function ErrorChip({ msg }: { msg: string | null }) {
 
 export default function LoginPage() {
   const greeting = useGreeting();
-  const today = useToday();
   const [panel, setPanel] = useState<Panel>("login");
   const [loginTab, setLoginTab] = useState(0);
   const [signupTab, setSignupTab] = useState(0);
@@ -396,226 +352,181 @@ export default function LoginPage() {
   const tall = panel === "signup";
 
   return (
-    <div className={`flex flex-1 justify-center px-16 py-32 ${tall ? "items-start" : "items-center"}`}>
+    <div className={`flex flex-1 justify-center px-16 py-16 ${tall ? "items-start" : "items-center"}`}>
       <div aria-hidden className="auth-bg" />
-      <div className="auth-shell w-full max-w-[900px]">
-
-        {/* Mobile-only brand plate — the RHS panel hides on small screens.
-            The wordmark flies on the glass, no white card under it. */}
-        <div className="mb-16 flex flex-col items-center md:hidden">
-          <img src="/brand/waisha-white@2x.png" alt="WAISHA — where shippers meet transporters"
-            width={452} height={211}
-            style={{ width: 220, height: "auto", maxWidth: "100%", filter: "drop-shadow(0 3px 12px rgba(4,16,26,0.55))" }} />
-          <span className="brand-tagline">Where shippers meet transporters</span>
-        </div>
-
-        <div className="relative">
-          <div aria-hidden className="absolute inset-0 rounded-card"
-            style={{ transform: "translate(10px, 10px)", border: "1px solid rgba(255,255,255,0.22)" }} />
-
-          <div className="auth-card sheet-in relative grid overflow-hidden rounded-card border md:grid-cols-2">
-
-            {/* LEFT — form only. No logo here anymore. */}
-            <section className="flex flex-col p-24">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "rgba(255,255,255,0.82)" }}>
-                Sign in to WAISHA
-              </p>
-              <h1 className="mb-4 text-[28px] font-extrabold tracking-tight" style={{ color: "#ffffff" }}>
-                {greeting}.
-              </h1>
-              <p className="mb-16 text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: "var(--gold-on-photo)" }}>
-                Your logistics connected
-              </p>
-              <ErrorChip msg={error} />
-
-              <div className="flex flex-1 flex-col justify-center">
-                {panel === "login" && (
-                  <div key="login" className="panel-enter">
-                    <Segmented items={loginTabs} index={loginTab} onChange={setLoginTab} />
-                    <p className="mt-10 text-[11px] leading-snug" style={{ color: "rgba(255,255,255,0.78)" }}>
-                      {loginNotes[loginTab]}
-                    </p>
-                    <form onSubmit={submitLogin} className="mt-12 space-y-12">
-                      {loginTab === 0 && (<>
-                        <Field label="TIN" name="tin" required placeholder="123-456-789" />
-                        <Field label="Email" name="email" type="email" required />
-                      </>)}
-                      {(loginTab === 1 || loginTab === 2) && (
-                        <Field label="Email or phone" name="identifier" required />
-                      )}
-                      {loginTab === 3 && (<>
-                        <Field label="Company name" name="company" required />
-                        <Field label="TIN" name="tin" required placeholder="123-456-789" />
-                        <Field label="Username" name="username" required />
-                      </>)}
-                      <PasswordField label="Password" name="password" required show={showPw} onToggle={() => setShowPw(v => !v)} />
-                      <div className="flex justify-end">
-                        <button type="button" className="auth-link text-xs underline"
-                          onClick={() => { setShowReset(true); setResetDone(false); }}>
-                          Forgot password?
-                        </button>
-                      </div>
-                      <button type="submit" disabled={busy} className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">
-                        {busy ? "Signing in" : "Sign in"}
-                      </button>
-                    </form>
-                    {loginTab === 1 && (
-                      <p className="mt-12 text-[11px]" style={{ color: "rgba(255,255,255,0.7)" }}>
-                        No account yet? A transporter handling your cargo opens one for you —
-                        ask them for access, then sign in here.
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {panel === "signup" && (
-                  <div key="signup" className="panel-enter">
-                    <Segmented items={["Transport / CFA company", "Find a company"]}
-                      index={signupTab} onChange={setSignupTab} />
-                    <p className="mt-10 text-[11px] leading-snug" style={{ color: "rgba(255,255,255,0.78)" }}>
-                      {signupTab === 0
-                        ? "Hauliers, clearing and forwarding agents and freight offices register here with their TIN."
-                        : "Two names, a phone and an email. You get one free search of the directory every 24 hours."}
-                    </p>
-                    <form onSubmit={submitSignup} className="mt-12 space-y-12">
-                      {signupTab === 0 && (<>
-                        <Field label="Registered company name" name="companyName" required minLength={3} maxLength={120} />
-                        <Field label="TIN" name="tin" required placeholder="123-456-789" />
-                        <GroupChoice groups={groups} value={group} onChange={setGroup} loaded={groupsLoaded} />
-                      </>)}
-                      {signupTab === 1 && (<>
-                        <div className="grid gap-12 sm:grid-cols-2">
-                          <Field label="First name" name="firstName" required maxLength={60} />
-                          <Field label="Last name" name="lastName" required maxLength={60} />
-                        </div>
-                        <fieldset className="space-y-8">
-                          <legend className="auth-label mb-4 font-semibold">Who are you looking for?</legend>
-                          <div className="flex gap-16">
-                            {[["transporter", "A transporter"], ["cfa", "A CFA (clearing & forwarding)"]].map(([v, label]) => (
-                              <label key={v} className="flex items-center gap-8 text-xs"
-                                style={{ color: "rgba(255,255,255,0.86)" }}>
-                                <input type="checkbox" name="lookingFor" value={v} className="auth-check" />
-                                <span>{label}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </fieldset>
-                        <Field label="Your industry (optional)" name="industry" maxLength={80}
-                          placeholder="Manufacturing, mining, retail…" />
-                      </>)}
-                      <Field label="Active phone (international format)" name="phone" required placeholder="+255712345678" />
-                      <Field label="Email" name="email" type="email" required />
-                      <PasswordField label="Password" name="password" required minLength={10} show={showPw} onToggle={() => setShowPw(v => !v)} />
-                      <PasswordField label="Confirm password" name="confirm" required show={showPw} onToggle={() => setShowPw(v => !v)} />
-                      <label className="flex items-start gap-8 text-xs" style={{ color: "rgba(255,255,255,0.86)" }}>
-                        <input type="checkbox" name="terms" required className="auth-check mt-2" />
-                        <span>I accept the Terms of Service and Privacy Policy</span>
-                      </label>
-                      <button type="submit" disabled={busy} className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">
-                        {busy ? "Creating account" : "Create account"}
-                      </button>
-                    </form>
-                    {signupTab === 1 && (
-                      <p className="mt-12 text-[11px]" style={{ color: "rgba(255,255,255,0.7)" }}>
-                        Shipper accounts are not self-registered: the transporter or CFA handling
-                        your cargo opens one and sends you the access.
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {panel === "otp" && pending && (
-                  <div key="otp" className="panel-enter">
-                    <h2 className="mb-8 text-2xl font-bold tracking-tight" style={{ color: "#ffffff" }}>Six-digit code</h2>
-                    <p className="mb-16 text-sm" style={{ color: "rgba(255,255,255,0.82)" }}>
-                      {pending.channel === "email"
-                        ? "We emailed you a verification code. It expires in 5 minutes."
-                        : "Sent by SMS to the phone you typed. Expires in 5 minutes."}
-                    </p>
-                    <OtpInput onComplete={verifyOtp} />
-                    <div className="mt-16 flex items-center justify-between text-sm">
-                      <button type="button" disabled={cooldown > 0} className="auth-link underline disabled:opacity-50"
-                        onClick={resendCode}>
-                        {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
-                      </button>
-                      <button type="button" className="auth-link underline"
-                        onClick={() => {
-                          setError(null);
-                          setPanel(pending.from === "signup" ? "signup" : "login");
-                        }}>
-                        {pending.from === "signup" ? "Change details" : "Back to sign in"}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {panel === "success" && (
-                  <div key="success" className="panel-enter py-16 text-center">
-                    <div className="mx-auto mb-16 h-[2px] w-48" style={{ background: "#7fd6ab" }} aria-hidden />
-                    <h2 className="text-lg font-semibold" style={{ color: "#8fdcbc" }}>
-                      {loginTab === 2 ? "Search account verified" : "Account successfully created"}
-                    </h2>
-                    <p className="mt-8 text-sm" style={{ color: "rgba(255,255,255,0.82)" }}>
-                      {loginTab === 2
-                        ? "Sign in to search the directory. Your first free search is ready now."
-                        : "Sign in with your TIN and email to reach your workspace."}
-                    </p>
-                    <button type="button" className="auth-link mt-16 text-sm underline"
-                      onClick={() => setPanel("login")}>Sign in now</button>
-                  </div>
-                )}
-              </div>
-
-              {panel === "login" && (
-                <div className="mt-24 border-t pt-12 text-center text-sm" style={{ borderColor: "rgba(255,255,255,0.22)" }}>
-                  <span style={{ color: "rgba(255,255,255,0.8)" }}>New to WAISHA? </span>
-                  <button type="button" className="auth-link font-semibold underline"
-                    onClick={() => { setError(null); setPanel("signup"); }}>Create an account</button>
-                </div>
-              )}
-              {panel === "signup" && (
-                <div className="mt-24 border-t pt-12 text-center text-sm" style={{ borderColor: "rgba(255,255,255,0.22)" }}>
-                  <span style={{ color: "rgba(255,255,255,0.8)" }}>Already registered? </span>
-                  <button type="button" className="auth-link font-semibold underline"
-                    onClick={() => { setError(null); setPanel("login"); }}>Sign in</button>
-                </div>
-              )}
-            </section>
-
-            {/* RIGHT — the brand face. Logo is the hero here. */}
-            <aside className="auth-aside relative hidden flex-col justify-between overflow-hidden p-32 md:flex">
-              <div aria-hidden className="absolute inset-0">
-                <div className="absolute rounded-full" style={{ width: 320, height: 320, right: -120, bottom: -110, background: "rgba(255,255,255,0.07)" }} />
-                <div className="absolute rounded-full" style={{ width: 200, height: 200, left: -80, top: -70, background: "rgba(255,255,255,0.055)" }} />
-                <div className="absolute rounded-full" style={{ width: 90, height: 90, right: 70, top: 90, background: "rgba(255,255,255,0.045)" }} />
-              </div>
-
-              <div className="relative flex w-full flex-col items-center">
-                <img src="/brand/waisha-white@2x.png" alt="WAISHA — where shippers meet transporters"
-                  width={452} height={211}
-                  style={{ width: 300, height: "auto", maxWidth: "100%", filter: "drop-shadow(0 4px 16px rgba(4,16,26,0.55))" }} />
-                <span className="brand-tagline">Where shippers meet transporters</span>
-                <div className="mt-16"><Chip text="Secure portal" color="var(--success)" /></div>
-              </div>
-
-              <div className="relative my-auto w-full">
-                <Corridor />
-                <div className="mt-24" style={{ borderTop: "1px solid rgba(200,169,81,0.4)" }}>
-                  {MANIFEST.map(([n, t]) => (
-                    <div key={n} className="flex items-baseline gap-12 border-t py-10" style={{ borderColor: "rgba(255,255,255,0.22)" }}>
-                      <span className="text-xs font-bold tabular-nums" style={{ color: "var(--gold)" }}>{n}</span>
-                      <span className="text-sm" style={{ color: "rgba(255,255,255,0.88)" }}>{t}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <p className="relative text-[10px] font-semibold uppercase tracking-[0.18em] tabular-nums"
-                style={{ color: "rgba(255,255,255,0.65)" }}>
-                WSH · Dar es Salaam · {today}
-              </p>
-            </aside>
+      <div className="auth-shell w-full max-w-[560px]">
+        <div className="auth-card auth-sheet sheet-in relative flex flex-col overflow-hidden rounded-card border p-32">
+          {/* The lockup belongs at the head of the sheet, not in a column beside
+              it — one card, read top to bottom, on every screen size. */}
+          <div className="mb-8 flex flex-col items-center">
+            <img src="/brand/waisha-white@2x.png" alt="WAISHA — where shippers meet transporters"
+              width={452} height={211}
+              style={{ width: 224, height: "auto", maxWidth: "100%", filter: "drop-shadow(0 4px 16px rgba(4,16,26,0.55))" }} />
+            <span className="brand-tagline">Where shippers meet transporters</span>
           </div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "rgba(255,255,255,0.82)" }}>
+            Sign in to WAISHA
+          </p>
+          <h1 className="mb-4 text-[28px] font-extrabold tracking-tight" style={{ color: "#ffffff" }}>
+            {greeting}.
+          </h1>
+          <p className="mb-16 text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: "var(--gold-on-photo)" }}>
+            Your logistics connected
+          </p>
+          <ErrorChip msg={error} />
+
+          <div className="flex flex-1 flex-col justify-center">
+            {panel === "login" && (
+              <div key="login" className="panel-enter">
+                <Segmented items={loginTabs} index={loginTab} onChange={setLoginTab} />
+                <p className="mt-10 text-[11px] leading-snug" style={{ color: "rgba(255,255,255,0.78)" }}>
+                  {loginNotes[loginTab]}
+                </p>
+                <form onSubmit={submitLogin} className="mt-12 space-y-12">
+                  {loginTab === 0 && (<>
+                    <Field label="TIN" name="tin" required placeholder="123-456-789" />
+                    <Field label="Email" name="email" type="email" required />
+                  </>)}
+                  {(loginTab === 1 || loginTab === 2) && (
+                    <Field label="Email or phone" name="identifier" required />
+                  )}
+                  {loginTab === 3 && (<>
+                    <Field label="Company name" name="company" required />
+                    <Field label="TIN" name="tin" required placeholder="123-456-789" />
+                    <Field label="Username" name="username" required />
+                  </>)}
+                  <PasswordField label="Password" name="password" required show={showPw} onToggle={() => setShowPw(v => !v)} />
+                  <div className="flex justify-end">
+                    <button type="button" className="auth-link text-xs underline"
+                      onClick={() => { setShowReset(true); setResetDone(false); }}>
+                      Forgot password?
+                    </button>
+                  </div>
+                  <button type="submit" disabled={busy} className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">
+                    {busy ? "Signing in" : "Sign in"}
+                  </button>
+                </form>
+                {loginTab === 1 && (
+                  <p className="mt-12 text-[11px]" style={{ color: "rgba(255,255,255,0.7)" }}>
+                    No account yet? A transporter handling your cargo opens one for you —
+                    ask them for access, then sign in here.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {panel === "signup" && (
+              <div key="signup" className="panel-enter">
+                <Segmented items={["Transport / CFA company", "Find a company"]}
+                  index={signupTab} onChange={setSignupTab} />
+                <p className="mt-10 text-[11px] leading-snug" style={{ color: "rgba(255,255,255,0.78)" }}>
+                  {signupTab === 0
+                    ? "Hauliers, clearing and forwarding agents and freight offices register here with their TIN."
+                    : "Two names, a phone and an email. You get one free search of the directory every 24 hours."}
+                </p>
+                <form onSubmit={submitSignup} className="mt-12 space-y-12">
+                  {signupTab === 0 && (<>
+                    <Field label="Registered company name" name="companyName" required minLength={3} maxLength={120} />
+                    <Field label="TIN" name="tin" required placeholder="123-456-789" />
+                    <GroupChoice groups={groups} value={group} onChange={setGroup} loaded={groupsLoaded} />
+                  </>)}
+                  {signupTab === 1 && (<>
+                    <div className="grid gap-12 sm:grid-cols-2">
+                      <Field label="First name" name="firstName" required maxLength={60} />
+                      <Field label="Last name" name="lastName" required maxLength={60} />
+                    </div>
+                    <fieldset className="space-y-8">
+                      <legend className="auth-label mb-4 font-semibold">Who are you looking for?</legend>
+                      <div className="flex gap-16">
+                        {[["transporter", "A transporter"], ["cfa", "A CFA (clearing & forwarding)"]].map(([v, label]) => (
+                          <label key={v} className="flex items-center gap-8 text-xs"
+                            style={{ color: "rgba(255,255,255,0.86)" }}>
+                            <input type="checkbox" name="lookingFor" value={v} className="auth-check" />
+                            <span>{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                    <Field label="Your industry (optional)" name="industry" maxLength={80}
+                      placeholder="Manufacturing, mining, retail…" />
+                  </>)}
+                  <Field label="Active phone (international format)" name="phone" required placeholder="+255712345678" />
+                  <Field label="Email" name="email" type="email" required />
+                  <PasswordField label="Password" name="password" required minLength={10} show={showPw} onToggle={() => setShowPw(v => !v)} />
+                  <PasswordField label="Confirm password" name="confirm" required show={showPw} onToggle={() => setShowPw(v => !v)} />
+                  <label className="flex items-start gap-8 text-xs" style={{ color: "rgba(255,255,255,0.86)" }}>
+                    <input type="checkbox" name="terms" required className="auth-check mt-2" />
+                    <span>I accept the Terms of Service and Privacy Policy</span>
+                  </label>
+                  <button type="submit" disabled={busy} className="waisha-btn w-full rounded-input py-12 text-sm font-semibold">
+                    {busy ? "Creating account" : "Create account"}
+                  </button>
+                </form>
+                {signupTab === 1 && (
+                  <p className="mt-12 text-[11px]" style={{ color: "rgba(255,255,255,0.7)" }}>
+                    Shipper accounts are not self-registered: the transporter or CFA handling
+                    your cargo opens one and sends you the access.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {panel === "otp" && pending && (
+              <div key="otp" className="panel-enter">
+                <h2 className="mb-8 text-2xl font-bold tracking-tight" style={{ color: "#ffffff" }}>Six-digit code</h2>
+                <p className="mb-16 text-sm" style={{ color: "rgba(255,255,255,0.82)" }}>
+                  {pending.channel === "email"
+                    ? "We emailed you a verification code. It expires in 5 minutes."
+                    : "Sent by SMS to the phone you typed. Expires in 5 minutes."}
+                </p>
+                <OtpInput onComplete={verifyOtp} />
+                <div className="mt-16 flex items-center justify-between text-sm">
+                  <button type="button" disabled={cooldown > 0} className="auth-link underline disabled:opacity-50"
+                    onClick={resendCode}>
+                    {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
+                  </button>
+                  <button type="button" className="auth-link underline"
+                    onClick={() => {
+                      setError(null);
+                      setPanel(pending.from === "signup" ? "signup" : "login");
+                    }}>
+                    {pending.from === "signup" ? "Change details" : "Back to sign in"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {panel === "success" && (
+              <div key="success" className="panel-enter py-16 text-center">
+                <div className="mx-auto mb-16 h-[2px] w-48" style={{ background: "#7fd6ab" }} aria-hidden />
+                <h2 className="text-lg font-semibold" style={{ color: "#8fdcbc" }}>
+                  {loginTab === 2 ? "Search account verified" : "Account successfully created"}
+                </h2>
+                <p className="mt-8 text-sm" style={{ color: "rgba(255,255,255,0.82)" }}>
+                  {loginTab === 2
+                    ? "Sign in to search the directory. Your first free search is ready now."
+                    : "Sign in with your TIN and email to reach your workspace."}
+                </p>
+                <button type="button" className="auth-link mt-16 text-sm underline"
+                  onClick={() => setPanel("login")}>Sign in now</button>
+              </div>
+            )}
+          </div>
+
+          {panel === "login" && (
+            <div className="mt-16 border-t pt-8 text-center text-sm" style={{ borderColor: "rgba(255,255,255,0.22)" }}>
+              <span style={{ color: "rgba(255,255,255,0.8)" }}>New to WAISHA? </span>
+              <button type="button" className="auth-link font-semibold underline"
+                onClick={() => { setError(null); setPanel("signup"); }}>Create an account</button>
+            </div>
+          )}
+          {panel === "signup" && (
+            <div className="mt-16 border-t pt-8 text-center text-sm" style={{ borderColor: "rgba(255,255,255,0.22)" }}>
+              <span style={{ color: "rgba(255,255,255,0.8)" }}>Already registered? </span>
+              <button type="button" className="auth-link font-semibold underline"
+                onClick={() => { setError(null); setPanel("login"); }}>Sign in</button>
+            </div>
+          )}
         </div>
       </div>
 

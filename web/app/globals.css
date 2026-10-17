@@ -952,11 +952,10 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   color: #fff;
   box-shadow: 0 24px 64px rgba(5, 18, 26, 0.45);
 }
-/* The brand panel keeps its navy face but lets a little of the lake through. */
-.auth-aside {
-  background: linear-gradient(160deg, rgba(9, 38, 60, 0.92) 0%, rgba(9, 30, 48, 0.82) 130%);
-  border-top: 3px solid var(--gold);
-}
+/* One gold edge across the top of the sheet — the only ornament the reference
+   card carries. It lands on the rounded corner because the border is the card's
+   own, not a strip laid over it. */
+.auth-sheet { border-top: 3px solid var(--gold); }
 
 .auth-label {
   color: rgba(255, 255, 255, 0.82);
