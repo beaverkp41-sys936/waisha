@@ -53,10 +53,11 @@ async function main() {
      order by c.relname`)).rows;
 
   let leaks = 0, denied = 0, checked = 0, rlsOff: string[] = [];
-  // Hard deletes live in exactly five places (grep 'delete from' in api/src):
+  // Hard deletes live in exactly eight places (grep 'delete from' in api/src):
   // invoices.items rewrite, quotations lines rewrite, employees task purge,
-  // trips log edit, routes checkpoints edit.
-  const DELETE_ALLOWED = new Set(["freight_invoice_items", "quotation_items", "office_tasks", "trip_checkpoint_logs", "route_checkpoints", "office_task_step_checks", "trainee_report_signoffs"]);
+  // trips log edit, routes checkpoints edit, trainee report sign-off rework, and
+  // the directory region set, which 061 rewrites whole on every save.
+  const DELETE_ALLOWED = new Set(["freight_invoice_items", "quotation_items", "office_tasks", "trip_checkpoint_logs", "route_checkpoints", "office_task_step_checks", "trainee_report_signoffs", "directory_listing_regions"]);
   await app.query(`select set_config('app.tenant_id', $1, false)`, [PROBE]);
 
   for (const { t, rls } of tables) {

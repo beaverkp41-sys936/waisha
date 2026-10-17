@@ -306,19 +306,25 @@ const shapeChecks: [string, string, (rows: any[]) => boolean][] = [
      select tenant_id, is_system, name from roles where key = 'seeker' and tenant_id is null`,
     (r) => r.length === 1 && r[0].is_system === true && !!r[0].name],
 
-  ["the seeker gets its own profile and nothing else yet", `
+  // 060 granted the seeker only the two profile keys, because the directory, reveal
+  // and pass keys did not exist yet. 061 created them and handed over exactly three:
+  // search, view own meter, record a payment reference. This is the guard that keeps
+  // that handover to what was promised — anything wider is a finding here.
+  ["the seeker holds the profile pair plus the three 061 keys, and nothing else", `
      select p.key from roles r
      join role_permissions rp on rp.role_id = r.id
      join permissions p on p.key = rp.permission_key
      where r.key = 'seeker' and r.tenant_id is null`,
-    (r) => r.map((x: any) => x.key).sort().join(",") === "seeker_profile.edit,seeker_profile.view"],
+    (r) => r.map((x: any) => x.key).sort().join(",") ===
+      "directory.search,seeker_pass.create,seeker_pass.view,seeker_profile.edit,seeker_profile.view"],
 
-  ["the seeker role holds no company-side key at all", `
+  ["the seeker role holds no company-side, control or reveal key at all", `
      select p.key from roles r
      join role_permissions rp on rp.role_id = r.id
      join permissions p on p.key = rp.permission_key
      where r.key = 'seeker' and r.tenant_id is null
-       and p.key not like 'seeker_profile.%'`,
+       and p.key not like 'seeker_profile.%'
+       and p.key not in ('directory.search','seeker_pass.view','seeker_pass.create')`,
     (r) => r.length === 0],
 
   ["the pre-auth helpers are definer with a pinned search_path", `
