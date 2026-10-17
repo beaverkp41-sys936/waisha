@@ -311,7 +311,7 @@ export default function TraineeReportPage() {
             <img src={photoUrl} alt={report.full_name}
               className="h-[96px] w-[80px] rounded-card border object-cover" style={{ borderColor: "var(--line)" }} />
           )}
-          <dl className="grid flex-1 grid-cols-2 gap-x-24 gap-y-10 text-xs">
+          <dl className="grid flex-1 grid-cols-1 gap-x-24 gap-y-10 text-xs sm:grid-cols-2">
             <Field label="Legal name (as on NIDA)" value={report.full_name} />
             <Field label="Department" value={report.department} />
             <Field label="Age" value={report.age != null ? `${report.age} (born ${day(report.date_of_birth)})` : day(report.date_of_birth)} />

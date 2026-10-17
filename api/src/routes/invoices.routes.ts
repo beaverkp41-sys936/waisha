@@ -23,7 +23,15 @@ const itemSchema = z.object({
   description: z.string().trim().min(2).max(300),
   quantity: z.number().positive().max(1_000_000),
   unit: z.string().trim().max(30).nullable().optional(),
-  unitPrice: z.number().nonnegative().max(1_000_000_000)
+  unitPrice: z.number().nonnegative().max(1_000_000_000),
+  /** Carried only by a bill converted from a proforma. They are optional here
+   * because the plain invoice form has no sections, but an edit that drops them
+   * would reprint the three statutory blocks as one undifferentiated list. */
+  section: z.enum(["statutory", "port", "transport"]).optional(),
+  catalogCode: z.string().trim().max(40).nullable().optional(),
+  basis: z.enum(["cif", "fob", "duty_paid_value", "per_unit", "per_container", "per_day", "flat"]).optional(),
+  taxKind: z.enum(["vat", "excise", "none"]).optional(),
+  taxRate: z.number().min(0).max(100).optional()
 });
 
 const invoiceCreateSchema = z.object({
@@ -73,6 +81,32 @@ function computeTotals(items: { quantity: number; unitPrice: number }[], vatRate
   const subtotal = money(lines.reduce((a, b) => a + b, 0));
   const vatAmount = money((subtotal * vatRate) / 100);
   return { lines, subtotal, vatAmount, total: money(subtotal + vatAmount) };
+}
+
+/**
+ * A bill converted from a proforma carries tax line by line, so its figures are
+ * the sum of its lines and not subtotal × a headline rate — applying the flat
+ * rule to one of these would change the money on the paper every time a clerk
+ * fixed a description. Section blocks carry line total (charge plus that line's
+ * tax) so the three printed blocks add up to the document total.
+ */
+export function computeBillingTotals(items: z.infer<typeof itemSchema>[]) {
+  const lines = items.map(it => {
+    const amount = money(it.quantity * it.unitPrice);
+    const taxAmount = !it.taxKind || it.taxKind === "none" ? 0 : money((amount * (it.taxRate ?? 0)) / 100);
+    return { amount, taxAmount, total: money(amount + taxAmount), section: it.section ?? "transport" };
+  });
+  const sectionTotal = (s: string) =>
+    money(lines.filter(l => l.section === s).reduce((a, l) => a + l.total, 0));
+  return {
+    lines,
+    subtotal: money(lines.reduce((a, l) => a + l.amount, 0)),
+    vatAmount: money(items.reduce((a, it, n) => a + (it.taxKind === "vat" ? lines[n].taxAmount : 0), 0)),
+    total: money(lines.reduce((a, l) => a + l.total, 0)),
+    statutoryTotal: sectionTotal("statutory"),
+    portTotal: sectionTotal("port"),
+    transportTotal: sectionTotal("transport")
+  };
 }
 
 /** Compose the "where to pay" text from the transporter's profile defaults. */
@@ -256,7 +290,7 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
 
       await withTenant(req.user.tid, async (c) => {
         const prev = await c.query(
-          "select status, amount_paid, vat_rate from freight_invoices where id=$1 and tenant_id=$2 and deleted_at is null",
+          "select status, amount_paid, vat_rate, source_quotation_id from freight_invoices where id=$1 and tenant_id=$2 and deleted_at is null",
           [id, req.user.tid]);
         if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Invoice not found", 404);
         if (prev.rows[0].status !== "draft") {
@@ -264,18 +298,35 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
         }
 
         const vatRate = body.vatRate ?? Number(prev.rows[0].vat_rate);
-        let totals: ReturnType<typeof computeTotals> | null = null;
+        /** A bill born from a proforma keeps its sections and line taxes; a plain
+         * one is billed at a headline VAT rate. The two cannot share one formula. */
+        const billed = prev.rows[0].source_quotation_id != null;
+        let flat: ReturnType<typeof computeTotals> | null = null;
+        let billing: ReturnType<typeof computeBillingTotals> | null = null;
         if (body.items) {
-          totals = computeTotals(body.items, vatRate);
+          if (billed) billing = computeBillingTotals(body.items);
+          else flat = computeTotals(body.items, vatRate);
           await c.query("delete from freight_invoice_items where invoice_id = $1 and tenant_id = $2",
             [id, req.user.tid]);
           for (let n = 0; n < body.items.length; n++) {
-            await c.query(
-              `insert into freight_invoice_items (id, tenant_id, invoice_id, seq, description, quantity, unit, unit_price, amount)
-               values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-              [uuidv7(), req.user.tid, id, n + 1, body.items[n].description,
-               body.items[n].quantity, body.items[n].unit ?? null,
-               body.items[n].unitPrice, totals.lines[n]]);
+            const it = body.items[n];
+            if (billing) {
+              await c.query(
+                `insert into freight_invoice_items (id, tenant_id, invoice_id, seq, description,
+                   quantity, unit, unit_price, amount, section, catalog_code, basis,
+                   tax_kind, tax_rate, tax_amount)
+                 values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+                [uuidv7(), req.user.tid, id, n + 1, it.description, it.quantity,
+                 it.unit ?? null, it.unitPrice, billing.lines[n].amount,
+                 it.section ?? "transport", it.catalogCode ?? null, it.basis ?? "flat",
+                 it.taxKind ?? "none", it.taxRate ?? 0, billing.lines[n].taxAmount]);
+            } else {
+              await c.query(
+                `insert into freight_invoice_items (id, tenant_id, invoice_id, seq, description, quantity, unit, unit_price, amount)
+                 values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                [uuidv7(), req.user.tid, id, n + 1, it.description, it.quantity,
+                 it.unit ?? null, it.unitPrice, flat!.lines[n]]);
+            }
           }
         }
 
@@ -296,10 +347,18 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
         if ("paymentInstructions" in body) set("payment_instructions", body.paymentInstructions ?? null);
         if ("notes" in body) set("notes", body.notes ?? null);
         if ("vatRate" in body || body.items) set("vat_rate", vatRate);
-        if (totals) {
-          set("subtotal", totals.subtotal);
-          set("vat_amount", totals.vatAmount);
-          set("total", totals.total);
+        if (flat) {
+          set("subtotal", flat.subtotal);
+          set("vat_amount", flat.vatAmount);
+          set("total", flat.total);
+        }
+        if (billing) {
+          set("subtotal", billing.subtotal);
+          set("vat_amount", billing.vatAmount);
+          set("total", billing.total);
+          set("statutory_total", billing.statutoryTotal);
+          set("port_total", billing.portTotal);
+          set("transport_total", billing.transportTotal);
         }
 
         if (sets.length) {

@@ -393,6 +393,43 @@ async function main() {
       detail2.json.status === "converted" && detail2.json.converted_invoice_id === invId,
       [detail2.json.status, detail2.json.converted_invoice_id]);
 
+    // ---------- Editing the bill must not flatten the blocks it prints ----------
+    const billLines = (inv.json.items as any[]).map((l: any) => ({
+      description: l.description, quantity: Number(l.quantity), unit: l.unit,
+      unitPrice: Number(l.unit_price), section: l.section, catalogCode: l.catalog_code,
+      basis: l.basis, taxKind: l.tax_kind, taxRate: Number(l.tax_rate)
+    }));
+    const portLine = billLines.find((l: any) => l.section === "port") ?? billLines[0];
+    portLine.unitPrice = Number(portLine.unitPrice) + 50_000;
+    const editedBill = await call(`/invoices/${invId}`, token, {
+      method: "PUT", body: JSON.stringify({ items: billLines })
+    });
+    check("converted bill edited as a draft", editedBill.status === 200, editedBill.json);
+
+    const bill = await call(`/invoices/${invId}`, token);
+    check("the edit kept every line in its statutory block",
+      bill.json.items.every((l: any, n: number) => l.section === billLines[n].section
+        && l.catalog_code === billLines[n].catalogCode),
+      bill.json?.items?.map((l: any) => [l.section, l.catalog_code]));
+    check("the edit kept each line's own tax",
+      bill.json.items.every((l: any, n: number) => l.tax_kind === billLines[n].taxKind
+        && num(l.tax_rate) === billLines[n].taxRate),
+      bill.json?.items?.map((l: any) => [l.tax_kind, l.tax_rate]));
+    const footed = (s: string) => bill.json.items
+      .filter((l: any) => l.section === s)
+      .reduce((a: number, l: any) => a + num(l.amount) + num(l.tax_amount), 0);
+    check("the three blocks re-footed against the edited bill",
+      ["statutory", "port", "transport"].every(s =>
+        Math.abs(num(bill.json[`${s}_total`]) - footed(s)) < 0.011),
+      [bill.json?.statutory_total, bill.json?.port_total, bill.json?.transport_total,
+        footed("statutory"), footed("port"), footed("transport")]);
+    check("the bill total is the sum of its printed lines",
+      Math.abs(num(bill.json.total) - bill.json.items
+        .reduce((a: number, l: any) => a + num(l.amount) + num(l.tax_amount), 0)) < 0.011,
+      bill.json?.total);
+    check("the edit raised the bill by the 50,000 plus its own VAT",
+      num(bill.json.total) > num(inv.json.total), [inv.json?.total, bill.json?.total]);
+
     const deleteConverted = await call(`/quotations/${qid}`, token, { method: "DELETE" });
     check("a converted proforma is kept for the audit trail",
       deleteConverted.status === 409, deleteConverted.status);

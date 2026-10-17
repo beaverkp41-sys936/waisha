@@ -1133,7 +1133,7 @@ select.auth-field option { color: var(--ink); }
    controls are stripped to their text — a clerk can print straight from edit
    mode and the page still reads as the issued document. */
 @media print {
-  .proforma-sheet, .manifest-sheet, .report-sheet {
+  .proforma-sheet, .manifest-sheet, .report-sheet, .invoice-sheet, .receipt-sheet {
     --ink: #123249;
     --ink-soft: #35526a;
     --line: rgba(13, 51, 80, 0.34);
@@ -1153,6 +1153,8 @@ select.auth-field option { color: var(--ink); }
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
+  /* The thermal roll IS its frame, so it keeps the outline the other sheets lose. */
+  .receipt-sheet { border: 1px solid var(--ink) !important; }
   .proforma-sheet :is(input, select, textarea),
   .manifest-sheet :is(input, select, textarea),
   .report-sheet :is(input, select, textarea) {
@@ -1169,17 +1171,29 @@ select.auth-field option { color: var(--ink); }
   .proforma-sheet :is(input, textarea)::placeholder,
   .manifest-sheet :is(input, textarea)::placeholder,
   .report-sheet :is(input, textarea)::placeholder { color: transparent !important; }
-  .proforma-sheet table, .manifest-sheet table, .report-sheet table { border-collapse: collapse; }
+  .proforma-sheet table, .manifest-sheet table, .report-sheet table,
+  .invoice-sheet table, .receipt-sheet table { border-collapse: collapse; }
   .proforma-sheet thead tr, .manifest-sheet thead tr,
-  .proforma-sheet thead, .manifest-sheet thead { background: transparent !important; }
-  .proforma-sheet thead th, .manifest-sheet thead th { border-bottom: 1px solid var(--ink); }
+  .invoice-sheet thead tr, .receipt-sheet thead tr,
+  .proforma-sheet thead, .manifest-sheet thead,
+  .invoice-sheet thead, .receipt-sheet thead { background: transparent !important; }
+  .proforma-sheet thead th, .manifest-sheet thead th,
+  .invoice-sheet thead th, .receipt-sheet thead th { border-bottom: 1px solid var(--ink); }
   .proforma-sheet tr, .proforma-sheet tfoot tr,
   .manifest-sheet tr, .manifest-sheet tfoot tr,
-  .report-sheet tr { break-inside: avoid; }
-  .proforma-sheet h2, .manifest-sheet h2, .report-sheet h2 { break-after: avoid; }
+  .report-sheet tr,
+  .invoice-sheet tr, .invoice-sheet tfoot tr,
+  .receipt-sheet tr { break-inside: avoid; }
+  .proforma-sheet h2, .manifest-sheet h2, .report-sheet h2,
+  .invoice-sheet h2 { break-after: avoid; }
   /* The signature blocks sit at the foot of the paper and must not be
      split across a page boundary. */
-  .manifest-sheet .sig-block, .report-sheet .sig-block { break-inside: avoid; }
+  .manifest-sheet .sig-block, .report-sheet .sig-block,
+  .invoice-sheet .sig-block { break-inside: avoid; }
   /* The completion report is one page — the sheet is allowed to shrink to fit. */
   .report-sheet { font-size: 11px; }
+  /* A block table is the widest thing on the invoice. On paper it must never
+     scroll sideways — it must simply fit. */
+  .sheet-scroll { overflow: visible !important; }
+  .sheet-scroll table { min-width: 0 !important; }
 }

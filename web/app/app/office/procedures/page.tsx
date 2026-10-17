@@ -67,6 +67,10 @@ export default function OfficeProceduresPage() {
   const [taskId, setTaskId] = useState<string>("");
   const [flow, setFlow] = useState<TaskFlow | null>(null);
   const [attachTo, setAttachTo] = useState<string>("");
+  /** The step currently showing its "what is holding this?" field. A native
+   * prompt() blocks the whole tab, so the reason is typed in place instead. */
+  const [blockFor, setBlockFor] = useState<string | null>(null);
+  const [blockReason, setBlockReason] = useState("");
 
   const load = useCallback(async () => {
     const [p, t] = await Promise.all([apiFetch("/procedures"), apiFetch("/office-tasks")]);
@@ -540,11 +544,8 @@ export default function OfficeProceduresPage() {
                                   Close step
                                 </button>
                                 <button type="button" className="on-photo-btn rounded-input px-10 py-6 text-[11px]"
-                                  onClick={() => {
-                                    const reason = window.prompt("What is holding this step?");
-                                    if (reason?.trim()) setStepStatus(s, "blocked", reason.trim());
-                                  }}>
-                                  Block
+                                  onClick={() => { setBlockFor(blockFor === s.id ? null : s.id); setBlockReason(""); }}>
+                                  {blockFor === s.id ? "Never mind" : "Block"}
                                 </button>
                               </>
                             )}
@@ -562,6 +563,28 @@ export default function OfficeProceduresPage() {
                             )}
                           </div>
                         </div>
+
+                        {blockFor === s.id && (
+                          <form className="no-print mt-12 flex flex-wrap items-center gap-8"
+                            onSubmit={e => {
+                              e.preventDefault();
+                              const reason = blockReason.trim();
+                              if (!reason) return;
+                              setBlockFor(null); setBlockReason("");
+                              void setStepStatus(s, "blocked", reason);
+                            }}>
+                            <label className="min-w-[220px] flex-1">
+                              <span className="sr-only">What is holding step {s.seq}?</span>
+                              <input autoFocus value={blockReason} maxLength={300}
+                                onChange={e => setBlockReason(e.target.value)}
+                                placeholder="What is holding this step?" className={inputCls} style={inputStyle} />
+                            </label>
+                            <button type="submit" disabled={busy || !blockReason.trim()}
+                              className="waisha-btn rounded-input px-12 py-6 text-[11px] font-semibold">
+                              Hold the step
+                            </button>
+                          </form>
+                        )}
 
                         {s.blocked_reason && (
                           <p role="status" className="mt-12 text-xs" style={{ color: "var(--danger)" }}>
