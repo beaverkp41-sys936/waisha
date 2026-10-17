@@ -19,10 +19,16 @@
  * and the owner bypasses RLS. The headline probe is the meter: call directory_search
  * with a fabricated claim id and the database must answer with nothing, so "search
  * the directory without spending a credit" is refused by the schema rather than by
- * whichever route happens to forget to check.
+ * whichever route happens to forget to check. The second headline is the opposite
+ * direction: a claim that DOES exist must be answered for real, because EXPLAIN never
+ * plans inside a function body and a fabricated id returns at the claim guard before
+ * it reaches anything — which is exactly how 061's ambiguous `found` reference (063)
+ * stayed green. Step 7 therefore builds a live listing and a paid claim and executes
+ * the reader end-to-end.
  * Run: npx tsx scripts/verify-directory-sql.ts
  */
 import "dotenv/config";
+import { randomUUID } from "crypto";
 import pg from "pg";
 
 const FAKE_TENANT = "00000000-0000-7000-8000-000000000000";
@@ -384,8 +390,17 @@ const shapeChecks: Check[] = [
 
   ["and it settles the log row's found count exactly once", `
      select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_search'`,
-    (rows) => /update seeker_searches set found = v_total/.test(rows[0].def)
-      && /where id = p_search_id and found is null/.test(rows[0].def)],
+    (rows) => /update seeker_searches s set found = v_total/.test(rows[0].def)
+      && /where s\.id = p_search_id and s\.found is null/.test(rows[0].def)],
+
+  ["the settle update is alias-qualified, because FOUND is a reserved plpgsql variable", `
+     select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_search'`,
+    // 061 wrote `where id = p_search_id and found is null`, plpgsql read `found` as its
+    // own status variable and the statement died with 42702 on every list search.
+    // EXPLAIN cannot catch this (it never plans inside a function body), so the shape of
+    // the text is checked here and the live settle probe below runs it for real.
+    (rows) => !/and found is null/.test(rows[0].def)
+      && !/with found as/.test(rows[0].def)],
 
   ["licence_state is derived at read time, never stored", `
      select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_search'`,
@@ -661,6 +676,17 @@ function appRuntimeUrl() {
   return { href: u.toString(), switched: true };
 }
 
+/** FK-ordered removal of one probe tenant and everything the probe hung off it. The
+ *  script never writes through the app, so it writes no audit row and leaves nothing
+ *  an append-only trigger can complain about. */
+async function reapProbeTenant(oi: pg.Client, tenantId: string) {
+  for (const t of ["seeker_searches", "seeker_search_passes", "directory_listing_regions",
+    "directory_listings", "users"]) {
+    await oi.query(`delete from ${t} where tenant_id = $1`, [tenantId]).catch(() => null);
+  }
+  await oi.query("delete from tenants where id = $1", [tenantId]).catch(() => null);
+}
+
 async function main() {
   if (process.env.DNS_FALLBACK) await import("./util/dns-fallback.js");
   const pool = new pg.Pool({ connectionString: url, max: 1 });
@@ -831,6 +857,103 @@ async function main() {
         ? "ok     directory_listings reads 0 rows with no tenant context"
         : `FAIL  directory_listings leaked ${orphan.rows[0].n} rows with no tenant context`);
       if (orphan.rows[0].n !== 0) failed++;
+
+      // 7. THE OPPOSITE DIRECTION — a claim that really exists must be answered, and
+      //    answered by executing the body. Steps 1-6 can only ever see the first line
+      //    of directory_search: with a fabricated id the claim guard returns before
+      //    the count, the settle update and the page are reached, so a raise anywhere
+      //    past that guard is invisible to them. This is the probe that catches 061's
+      //    ambiguous `found` reference — the bug that made every paid search a 500.
+      const stamp = Date.now().toString(36);
+      const pTenant = randomUUID();
+      const pUser = randomUUID();
+      const pPass = randomUUID();
+      const pSearch = randomUUID();
+      const pListing = randomUUID();
+      const oi = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
+      let built = false;
+      try {
+        await oi.connect();
+        built = true;
+        // A run that died mid-probe left its fixtures behind, so the script reaps its
+        // own history before it starts rather than accumulating live listings.
+        const stale = await oi.query("select id from tenants where name like 'Probe Directory %'");
+        for (const r of stale.rows) await reapProbeTenant(oi, r.id);
+        const free = await oi.query("select id from seeker_pass_products where key = 'free'");
+        const reg = await oi.query("select id from geo_regions where is_active order by id limit 1");
+        await oi.query(
+          `insert into tenants (id, type, name, status)
+           values ($1,'transporter',$2,'active')`, [pTenant, `Probe Directory ${stamp}`]);
+        await oi.query(
+          `insert into users (id, tenant_id, user_type, full_name, status, email)
+           values ($1,$2,'staff','Probe Seeker','active',$3)`,
+          [pUser, pTenant, `dir.probe.${stamp}@waisha.test`]);
+        await oi.query(
+          `insert into seeker_search_passes (id, tenant_id, user_id, product_id, kind, status,
+             searches_allowed, searches_used, expires_at)
+           values ($1,$2,$3,$4,'free','live',1,1, now() + interval '20 hours')`,
+          [pPass, pTenant, pUser, free.rows[0].id]);
+        // found is left NULL on purpose: settling it is the thing under test.
+        await oi.query(
+          `insert into seeker_searches (id, tenant_id, user_id, pass_id, query, credits_left)
+           values ($1,$2,$3,$4,'probe settle',0)`, [pSearch, pTenant, pUser, pPass]);
+        // The listing goes in live straight from the owner role, so the 061 eligibility
+        // guard runs for real on this insert — it only lands because the tenant is a
+        // live transporter.
+        await oi.query(
+          `insert into directory_listings (id, tenant_id, serves, company_name, headline,
+             home_base, contact_name, contact_channel, status)
+           values ($1,$2,'{transporter}',$3,'Probe fixture card','Dar es Salaam',
+                   'Probe Contact','+255 700 000 111','live')`,
+          [pListing, pTenant, `Probe Directory Co ${stamp}`]);
+        await oi.query(
+          `insert into directory_listing_regions (listing_id, region_id, tenant_id)
+           values ($1,$2,$3)`, [pListing, reg.rows[0].id, pTenant]);
+
+        await c.query("select set_config('app.tenant_id', $1, false)", [pTenant]);
+        const page1 = await c.query(
+          `select count(*)::int as n, min(total)::int as total
+             from directory_search($1, null, null, 'probe', 20, 0)`, [pSearch]);
+        console.log(page1.rows[0].n === 1 && page1.rows[0].total === 1
+          ? "ok     directory_search executes end-to-end for a paid claim"
+          : `FAIL  directory_search on a real claim returned ${page1.rows[0].n} rows, total=${page1.rows[0].total}`);
+        if (!(page1.rows[0].n === 1 && page1.rows[0].total === 1)) failed++;
+
+        const settled = await c.query("select found from seeker_searches where id = $1", [pSearch]);
+        console.log(settled.rows[0].found === 1
+          ? "ok     the first read settled the log row with its result count"
+          : `FAIL  the log row settled as ${settled.rows[0].found} — the settle update raised or skipped`);
+        if (settled.rows[0].found !== 1) failed++;
+
+        const page2 = await c.query(
+          `select count(*)::int as n from directory_search($1, null, null, 'probe', 20, 20)`, [pSearch]);
+        const restamped = await c.query("select found from seeker_searches where id = $1", [pSearch]);
+        console.log(page2.rows[0].n === 0 && restamped.rows[0].found === 1
+          ? "ok     page two is free and leaves the settled count alone"
+          : `FAIL  page two read ${page2.rows[0].n} rows and left found=${restamped.rows[0].found}`);
+        if (!(page2.rows[0].n === 0 && restamped.rows[0].found === 1)) failed++;
+      } catch (e: any) {
+        failed++;
+        console.log("FAIL  settle-path probe -", e.code ? `${e.code} ${e.message}` : e.message);
+      } finally {
+        if (built) {
+          await reapProbeTenant(oi, pTenant);
+          // Checked by name, not by this run's ids: a previous crashed run's fixtures
+          // would otherwise pass for residue this run never made.
+          const residue = await oi.query(
+            `select (select count(*) from tenants t where t.name like 'Probe Directory %') as tenants,
+                    (select count(*) from directory_listings l
+                       where l.company_name like 'Probe Directory Co %') as listings,
+                    (select count(*) from seeker_searches s where s.query = 'probe settle') as searches,
+                    (select count(*) from users u where u.full_name = 'Probe Seeker') as users`).catch(() => null);
+          const clean = !!residue && Object.values(residue.rows[0]).every((n: any) => Number(n) === 0);
+          console.log(clean
+            ? "ok     probe fixtures cleaned up"
+            : `FAIL  probe residue: ${JSON.stringify(residue?.rows?.[0] ?? "residue query failed")}`);
+          if (!clean) failed++;
+          await oi.end().catch(() => null);
+        }
+      }
     } catch (e: any) {
       failed++;
       console.log("FAIL  app_runtime posture probe -", e.message);

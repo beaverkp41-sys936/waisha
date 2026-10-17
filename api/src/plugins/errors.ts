@@ -44,6 +44,21 @@ export function registerErrorHandling(app: FastifyInstance) {
                  details: [{ field: "file", message: "Too many files" }], request_id: requestId }
       });
     }
+    // A `raise exception` from a trigger or definer is Postgres P0001, and every
+    // one of them in this schema is a business-rule refusal written for a person
+    // to read ("a report is signed off only after the supervisor remarks are
+    // written", "This company account is "pending_verification", so it cannot be
+    // published yet"). They used to fall through to the 500 below, so the client
+    // was told the server had failed when the server had in fact answered.
+    // Routes that need a bespoke code still catch P0001 themselves first — a
+    // local handler runs before this one.
+    if (code === "P0001") {
+      const reason = String(err.message ?? "").split("\n")[0].slice(0, 300);
+      return reply.status(409).send({
+        error: { code: "CONFLICT", message: reason || "This change is not allowed yet.",
+                 details: [], request_id: requestId }
+      });
+    }
     req.log.error(err);
     return reply.status(500).send({
       error: { code: "INTERNAL", message: "An unexpected error occurred", details: [], request_id: requestId }
