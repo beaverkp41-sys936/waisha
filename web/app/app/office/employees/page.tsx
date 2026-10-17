@@ -19,8 +19,13 @@ interface Employee {
   supervisor_id: string | null; supervisor_name: string | null;
   user_id: string | null; notes: string | null; has_phone: boolean;
   open_tasks: number; overdue_tasks: number; done_tasks: number; late_tasks: number;
+  flowed_tasks: number;
   evaluation_count: number; rating: number | null; rating_period: string | null;
   document_count: number; latest_document_id: string | null;
+  date_of_birth: string | null; age: number | null; gender: string | null;
+  academic_status: string | null; college: string | null; qualifications: string[] | null;
+  emergency_contact_name: string | null; emergency_relationship: string | null;
+  has_emergency_phone: boolean; avatar_document_id: string | null;
 }
 interface Task {
   id: string; employee_id: string; employee_name: string; department: string | null;
@@ -42,6 +47,10 @@ const EMPLOYMENT_LABELS: Record<string, string> = {
   permanent: "Permanent", fixed_term: "Fixed-term", intern: "Trainee"
 };
 const STATUS_LABELS: Record<string, string> = { active: "Active", inactive: "Inactive", left: "Left" };
+const GENDER_LABELS: Record<string, string> = { male: "Male", female: "Female", other: "Other" };
+const ACADEMIC_LABELS: Record<string, string> = { student: "Student", graduate: "Graduate" };
+/** The spec caps the profile picture at 1 MB, and the cap is held client-side. */
+const MAX_PHOTO_BYTES = 1024 * 1024;
 const STATUS_COLORS: Record<string, string> = {
   active: "var(--success)", inactive: "var(--ink-soft)", left: "var(--danger)"
 };
@@ -78,6 +87,32 @@ const fmtPeriod = (v: string | null) => {
 const onTimePct = (e: { done_tasks: number; late_tasks: number }) =>
   e.done_tasks ? Math.round(((e.done_tasks - e.late_tasks) / e.done_tasks) * 100) : null;
 
+/** Age for the hint while the date is still being typed; the register stores the date. */
+const yearsSince = (d: string | null) => {
+  if (!d) return null;
+  const dob = new Date(`${d}T00:00:00`);
+  if (Number.isNaN(dob.getTime())) return null;
+  const now = new Date();
+  let n = now.getFullYear() - dob.getFullYear();
+  const m = now.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) n -= 1;
+  return n;
+};
+
+/** Two letters stand in for a person until their picture is on file. */
+function initialsOf(name: string): string {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase() || "?";
+}
+
+function Avatar({ name, url }: { name: string; url?: string | null }) {
+  return (
+    <span className="flex h-48 w-48 shrink-0 items-center justify-center overflow-hidden rounded-full border text-xs font-bold uppercase"
+      style={{ borderColor: "var(--line)", background: "var(--milk-deep)", color: "var(--ink-soft)" }}>
+      {url ? <img src={url} alt="" className="h-full w-full object-cover" /> : initialsOf(name)}
+    </span>
+  );
+}
+
 function gradeOf(e: Employee): string {
   const parts: number[] = [];
   const ot = onTimePct(e);
@@ -92,11 +127,16 @@ interface EmpForm {
   fullName: string; phone: string; jobTitle: string; department: string; skills: string;
   employmentType: string; status: string; hiredDate: string; contractStart: string;
   contractEnd: string; supervisorId: string; monthlySalary: string; notes: string;
+  dateOfBirth: string; gender: string; academicStatus: string; college: string;
+  qualifications: string; emergencyContactName: string; emergencyRelationship: string;
+  emergencyPhone: string;
 }
 const EMPTY_EMP: EmpForm = {
   fullName: "", phone: "", jobTitle: "", department: "", skills: "",
   employmentType: "permanent", status: "active", hiredDate: "", contractStart: "",
-  contractEnd: "", supervisorId: "", monthlySalary: "", notes: ""
+  contractEnd: "", supervisorId: "", monthlySalary: "", notes: "",
+  dateOfBirth: "", gender: "", academicStatus: "", college: "", qualifications: "",
+  emergencyContactName: "", emergencyRelationship: "", emergencyPhone: ""
 };
 interface TaskForm {
   employeeId: string; shipmentId: string; title: string; priority: string;
@@ -137,6 +177,9 @@ export default function OfficeEmployeesPage() {
 
   const attachInput = useRef<HTMLInputElement | null>(null);
   const attachTargetRef = useRef<string | null>(null);
+  const photoInput = useRef<HTMLInputElement | null>(null);
+  const photoTargetRef = useRef<string | null>(null);
+  const [avatarUrls, setAvatarUrls] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     const [e, t, v, f] = await Promise.all([
@@ -155,6 +198,26 @@ export default function OfficeEmployeesPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Signed URLs are resolved once per photo — an <img> cannot carry the bearer
+  // token, and the roster only asks for the documents it actually shows.
+  useEffect(() => {
+    const missing = employees.filter(e => e.avatar_document_id && !avatarUrls[e.avatar_document_id]);
+    if (missing.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(missing.map(async e => {
+        const res = await apiFetch(`/documents/${e.avatar_document_id}/url`);
+        if (!res.ok) return null;
+        const j = await res.json();
+        return [e.avatar_document_id as string, j.url] as const;
+      }));
+      if (!cancelled) {
+        setAvatarUrls(prev => ({ ...prev, ...Object.fromEntries(entries.filter(Boolean) as any) }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employees]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ---------- Employees ----------
 
   function startEditEmp(e: Employee) {
@@ -166,7 +229,12 @@ export default function OfficeEmployeesPage() {
       hiredDate: e.hired_date ?? "", contractStart: e.contract_start ?? "",
       contractEnd: e.contract_end ?? "", supervisorId: e.supervisor_id ?? "",
       monthlySalary: e.monthly_salary != null ? String(e.monthly_salary) : "",
-      notes: e.notes ?? ""
+      notes: e.notes ?? "",
+      dateOfBirth: e.date_of_birth ?? "", gender: e.gender ?? "",
+      academicStatus: e.academic_status ?? "", college: e.college ?? "",
+      qualifications: (e.qualifications ?? []).join(", "),
+      emergencyContactName: e.emergency_contact_name ?? "",
+      emergencyRelationship: e.emergency_relationship ?? "", emergencyPhone: ""
     });
     setError(null); setNotice(null);
   }
@@ -175,7 +243,9 @@ export default function OfficeEmployeesPage() {
     formEvent.preventDefault(); setError(null); setNotice(null); setBusy(true);
     try {
       const skills = empForm.skills.split(",").map(s => s.trim()).filter(Boolean);
+      const qualifications = empForm.qualifications.split(",").map(s => s.trim()).filter(Boolean);
       const base = {
+        // One name, taken exactly as NIDA has it — the report sheet prints this.
         fullName: empForm.fullName, jobTitle: empForm.jobTitle || null,
         department: empForm.department || null, skills,
         employmentType: empForm.employmentType, status: empForm.status,
@@ -184,11 +254,25 @@ export default function OfficeEmployeesPage() {
         contractEnd: empForm.contractEnd || null,
         supervisorId: empForm.supervisorId || null,
         monthlySalary: empForm.monthlySalary ? Number(empForm.monthlySalary) : null,
-        notes: empForm.notes || null
+        notes: empForm.notes || null,
+        dateOfBirth: empForm.dateOfBirth || null,
+        gender: empForm.gender || null,
+        academicStatus: empForm.academicStatus || null,
+        college: empForm.college || null,
+        qualifications,
+        emergencyContactName: empForm.emergencyContactName || null,
+        emergencyRelationship: empForm.emergencyRelationship || null
       };
-      const payload: any = editingEmp
-        ? { ...base, ...(empForm.phone ? { phone: empForm.phone } : {}) }
-        : { ...base, phone: empForm.phone || null };
+      // Phones are stored encrypted and never come back, so a blank box means
+      // "keep what is on file" rather than "clear it".
+      const payload: any = { ...base };
+      if (editingEmp) {
+        if (empForm.phone) payload.phone = empForm.phone;
+        if (empForm.emergencyPhone) payload.emergencyPhone = empForm.emergencyPhone;
+      } else {
+        payload.phone = empForm.phone || null;
+        payload.emergencyPhone = empForm.emergencyPhone || null;
+      }
       const res = await apiFetch(editingEmp ? `/employees/${editingEmp}` : "/employees", {
         method: editingEmp ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
@@ -408,6 +492,43 @@ export default function OfficeEmployeesPage() {
     window.open(j.url, "_blank");
   }
 
+  // ---------- Profile picture ----------
+
+  function pickPhoto(employeeId: string) {
+    photoTargetRef.current = employeeId;
+    photoInput.current?.click();
+  }
+
+  async function uploadPhoto(ev: React.ChangeEvent<HTMLInputElement>) {
+    const f = ev.target.files?.[0];
+    ev.target.value = "";
+    const employeeId = photoTargetRef.current;
+    photoTargetRef.current = null;
+    if (!f || !employeeId) return;
+    setError(null); setNotice(null);
+    if (!f.type.startsWith("image/")) { setError("A profile picture has to be an image file."); return; }
+    if (f.size > MAX_PHOTO_BYTES) {
+      setError(
+        `That photo is ${(f.size / (1024 * 1024)).toFixed(2)} MB. The entry form caps a profile ` +
+        "picture at 1 MB — crop or compress it, then pick it again."
+      );
+      return;
+    }
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("entityType", "employee");
+      fd.append("entityId", employeeId);
+      fd.append("kind", "avatar");
+      fd.append("file", f);
+      const res = await apiFetch("/documents", { method: "POST", body: fd });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(errorText(j, "Photo upload failed.")); return; }
+      setNotice("Profile picture saved.");
+      await load();
+    } finally { setBusy(false); }
+  }
+
   const inputCls = "w-full rounded-input border px-12 py-8 text-sm";
   const inputStyle = { borderColor: "var(--line)", background: "var(--milk)" };
   const labelCls = "mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]";
@@ -442,6 +563,8 @@ export default function OfficeEmployeesPage() {
     return [...map.entries()].sort((a, b) => b[1].total - a[1].total);
   })();
   const payrollTotal = activeStaff.reduce((n, e) => n + (e.monthly_salary ?? 0), 0);
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const editingProfile = employees.find(e => e.id === editingEmp) ?? null;
 
   return (
     <div className="mx-auto max-w-[1080px] px-16 py-32">
@@ -473,6 +596,8 @@ export default function OfficeEmployeesPage() {
 
       <input ref={attachInput} type="file" hidden accept=".pdf,image/jpeg,image/png,image/webp"
         onChange={uploadAttachment} />
+      <input ref={photoInput} type="file" hidden accept="image/jpeg,image/png,image/webp"
+        onChange={uploadPhoto} />
 
       {/* ================= Overview ================= */}
       {view === "overview" && (
@@ -556,7 +681,12 @@ export default function OfficeEmployeesPage() {
       {view === "roster" && (
         <section className="mt-24">
           <div className="flex items-end justify-between gap-12">
-            <h2 className={`${h2Cls} pane-note`}>Roster</h2>
+            <div>
+              <h2 className={`${h2Cls} pane-note`}>Roster</h2>
+              <p className="pane-note mt-4 text-xs">
+                Enter the legal name exactly as NIDA has it. The profile picture — 1 MB or less — is added from the row once the person is on file.
+              </p>
+            </div>
             {editingEmp && (
               <button type="button" className="text-xs underline" style={{ color: "var(--ink-soft)" }}
                 onClick={() => { setEditingEmp(null); setEmpForm(EMPTY_EMP); }}>
@@ -566,14 +696,16 @@ export default function OfficeEmployeesPage() {
           </div>
           <form onSubmit={submitEmp} className="mt-16 grid grid-cols-2 gap-12 rounded-card border bg-surface p-24 md:grid-cols-6" style={cardStyle}>
             <label className="block md:col-span-2">
-              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Full name *</span>
-              <input required value={empForm.fullName}
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>
+                Full legal name — exactly as on NIDA *
+              </span>
+              <input required value={empForm.fullName} placeholder="e.g. Amina Juma Mkwawa"
                 onChange={e => setEmpForm(f => ({ ...f, fullName: e.target.value }))}
                 className={inputCls} style={inputStyle} />
             </label>
             <label className="block">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>
-                Phone{editingEmp ? " — blank keeps current" : " (optional)"}
+                Phone{editingProfile?.has_phone ? " — blank keeps current" : " (optional)"}
               </span>
               <input value={empForm.phone} placeholder="+255712345678"
                 onChange={e => setEmpForm(f => ({ ...f, phone: e.target.value }))}
@@ -598,6 +730,52 @@ export default function OfficeEmployeesPage() {
                 className={inputCls} style={inputStyle}>
                 {Object.entries(EMPLOYMENT_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
               </select>
+            </label>
+
+            <div className="flex items-center gap-12 pt-8 md:col-span-6">
+              <span className={h2Cls} style={{ color: "var(--brand)" }}>Personnel profile</span>
+              <span className="h-px flex-1" style={{ background: "var(--line)" }} />
+              <span className="text-[11px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                Age {yearsSince(empForm.dateOfBirth) ?? "—"}
+              </span>
+            </div>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Date of birth</span>
+              <input type="date" max={todayISO} value={empForm.dateOfBirth}
+                onChange={e => setEmpForm(f => ({ ...f, dateOfBirth: e.target.value }))}
+                className={inputCls} style={inputStyle} />
+            </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Gender</span>
+              <select value={empForm.gender}
+                onChange={e => setEmpForm(f => ({ ...f, gender: e.target.value }))}
+                className={inputCls} style={inputStyle}>
+                <option value="">—</option>
+                {Object.entries(GENDER_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Academic status</span>
+              <select value={empForm.academicStatus}
+                onChange={e => setEmpForm(f => ({ ...f, academicStatus: e.target.value }))}
+                className={inputCls} style={inputStyle}>
+                <option value="">—</option>
+                {Object.entries(ACADEMIC_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+            </label>
+            <label className="block md:col-span-3">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>College / institution</span>
+              <input value={empForm.college} placeholder="e.g. IASM — Institute of Accountancy"
+                onChange={e => setEmpForm(f => ({ ...f, college: e.target.value }))}
+                className={inputCls} style={inputStyle} />
+            </label>
+            <label className="block md:col-span-6">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>
+                Qualifications (comma separated)
+              </span>
+              <input value={empForm.qualifications} placeholder="e.g. Diploma in Customs Studies, TANCIS certificate"
+                onChange={e => setEmpForm(f => ({ ...f, qualifications: e.target.value }))}
+                className={inputCls} style={inputStyle} />
             </label>
             <label className="block md:col-span-2">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Skills (comma separated)</span>
@@ -653,6 +831,35 @@ export default function OfficeEmployeesPage() {
                 onChange={e => setEmpForm(f => ({ ...f, notes: e.target.value }))}
                 className={inputCls} style={inputStyle} />
             </label>
+
+            <div className="flex items-center gap-12 pt-8 md:col-span-6">
+              <span className={h2Cls} style={{ color: "var(--brand)" }}>Emergency contact</span>
+              <span className="h-px flex-1" style={{ background: "var(--line)" }} />
+              <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                Held encrypted — the number is never shown back
+              </span>
+            </div>
+            <label className="block md:col-span-2">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Contact name</span>
+              <input value={empForm.emergencyContactName} placeholder="e.g. Fatuma Mkwawa"
+                onChange={e => setEmpForm(f => ({ ...f, emergencyContactName: e.target.value }))}
+                className={inputCls} style={inputStyle} />
+            </label>
+            <label className="block md:col-span-2">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Relationship</span>
+              <input value={empForm.emergencyRelationship} placeholder="e.g. Sister"
+                onChange={e => setEmpForm(f => ({ ...f, emergencyRelationship: e.target.value }))}
+                className={inputCls} style={inputStyle} />
+            </label>
+            <label className="block md:col-span-2">
+              <span className={labelCls} style={{ color: "var(--ink-soft)" }}>
+                Phone{editingProfile?.has_emergency_phone ? " — blank keeps current" : " (optional)"}
+              </span>
+              <input value={empForm.emergencyPhone} placeholder="+255712345678"
+                onChange={e => setEmpForm(f => ({ ...f, emergencyPhone: e.target.value }))}
+                className={inputCls} style={inputStyle} />
+            </label>
+
             <button type="submit" disabled={busy}
               className="waisha-btn self-end rounded-input py-8 text-xs font-semibold disabled:opacity-60">
               {editingEmp ? "Save changes" : "Add employee"}
@@ -672,18 +879,36 @@ export default function OfficeEmployeesPage() {
                 {employees.map((e, i) => (
                   <tr key={e.id} style={{ background: i % 2 ? "var(--milk-deep)" : "transparent" }}>
                     <td className={tdCls} style={{ color: "var(--ink)" }}>
-                      <span className="font-semibold">{e.full_name}</span>
-                      <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>
-                        {[e.job_title, e.department].filter(Boolean).join(" · ")}
-                      </span>
-                      {(e.skills ?? []).length > 0 && (
-                        <span className="mt-4 flex flex-wrap gap-4">
-                          {e.skills.map(s => (
-                            <span key={s} className="rounded-input border px-8 py-2 text-[10px]"
-                              style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>{s}</span>
-                          ))}
-                        </span>
-                      )}
+                      <div className="flex items-start gap-12">
+                        <Avatar name={e.full_name} url={e.avatar_document_id ? avatarUrls[e.avatar_document_id] : null} />
+                        <div className="min-w-0">
+                          <span className="font-semibold">{e.full_name}</span>
+                          <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>
+                            {[e.job_title, e.department].filter(Boolean).join(" · ")}
+                          </span>
+                          <span className="block text-[11px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                            {[
+                              e.age !== null ? `${e.age} yrs` : null,
+                              e.gender ? GENDER_LABELS[e.gender] : null,
+                              e.academic_status ? ACADEMIC_LABELS[e.academic_status] : null
+                            ].filter(Boolean).join(" · ") || "profile incomplete"}
+                            {e.college ? ` — ${e.college}` : ""}
+                          </span>
+                          {(e.qualifications ?? []).length > 0 && (
+                            <span className="mt-4 block truncate text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                              {(e.qualifications ?? []).join(", ")}
+                            </span>
+                          )}
+                          {(e.skills ?? []).length > 0 && (
+                            <span className="mt-4 flex flex-wrap gap-4">
+                              {e.skills.map(s => (
+                                <span key={s} className="rounded-input border px-8 py-2 text-[10px]"
+                                  style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>{s}</span>
+                              ))}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </td>
                     <td className={tdCls} style={{ color: "var(--ink-soft)" }}>
                       {EMPLOYMENT_LABELS[e.employment_type] ?? e.employment_type}
@@ -713,20 +938,35 @@ export default function OfficeEmployeesPage() {
                         {STATUS_LABELS[e.status] ?? e.status}
                       </span>
                     </td>
-                    <td className={`${tdCls} text-right whitespace-nowrap`}>
-                      <button type="button" className="underline" style={{ color: "var(--ink-soft)" }}
-                        onClick={() => { startEditEmp(e); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
-                        Edit
-                      </button>
-                      {e.status === "active" ? (
-                        <button type="button" disabled={busy} className="ml-12 underline" style={{ color: "var(--warning)" }}
-                          onClick={() => setEmpStatus(e, "inactive")}>Deactivate</button>
-                      ) : (
-                        <button type="button" disabled={busy} className="ml-12 underline" style={{ color: "var(--success)" }}
-                          onClick={() => setEmpStatus(e, "active")}>Activate</button>
-                      )}
-                      <button type="button" disabled={busy} className="ml-12 underline" style={{ color: "var(--danger)" }}
-                        onClick={() => removeEmp(e)}>Delete</button>
+                    <td className={tdCls}>
+                      <div className="flex flex-wrap items-center justify-end gap-x-12 gap-y-4 text-xs">
+                        {e.avatar_document_id ? (
+                          <>
+                            <button type="button" className="underline" style={{ color: "var(--brand)" }}
+                              onClick={() => viewAttachment(e.avatar_document_id!)}>Photo</button>
+                            <button type="button" disabled={busy} className="underline"
+                              style={{ color: "var(--ink-soft)" }}
+                              onClick={() => pickPhoto(e.id)}>Replace</button>
+                          </>
+                        ) : (
+                          <button type="button" disabled={busy} className="underline"
+                            style={{ color: "var(--ink-soft)" }}
+                            onClick={() => pickPhoto(e.id)}>Add photo</button>
+                        )}
+                        <button type="button" className="underline" style={{ color: "var(--ink-soft)" }}
+                          onClick={() => { startEditEmp(e); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                          Edit
+                        </button>
+                        {e.status === "active" ? (
+                          <button type="button" disabled={busy} className="underline" style={{ color: "var(--warning)" }}
+                            onClick={() => setEmpStatus(e, "inactive")}>Deactivate</button>
+                        ) : (
+                          <button type="button" disabled={busy} className="underline" style={{ color: "var(--success)" }}
+                            onClick={() => setEmpStatus(e, "active")}>Activate</button>
+                        )}
+                        <button type="button" disabled={busy} className="underline" style={{ color: "var(--danger)" }}
+                          onClick={() => removeEmp(e)}>Delete</button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1143,10 +1383,22 @@ export default function OfficeEmployeesPage() {
                 {trainees.map((e, i) => (
                   <tr key={e.id} style={{ background: i % 2 ? "var(--milk-deep)" : "transparent" }}>
                     <td className={tdCls} style={{ color: "var(--ink)" }}>
-                      <span className="font-semibold">{e.full_name}</span>
-                      <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>
-                        {[e.job_title, e.department].filter(Boolean).join(" · ")}
-                      </span>
+                      <div className="flex items-start gap-12">
+                        <Avatar name={e.full_name} url={e.avatar_document_id ? avatarUrls[e.avatar_document_id] : null} />
+                        <div className="min-w-0">
+                          <span className="font-semibold">{e.full_name}</span>
+                          <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>
+                            {[e.job_title, e.department].filter(Boolean).join(" · ")}
+                          </span>
+                          <span className="block text-[11px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                            {[
+                              e.age !== null ? `${e.age} yrs` : null,
+                              e.academic_status ? ACADEMIC_LABELS[e.academic_status] : null,
+                              e.college
+                            ].filter(Boolean).join(" · ") || "academic profile not entered"}
+                          </span>
+                        </div>
+                      </div>
                     </td>
                     <td className={tdCls} style={{ color: "var(--ink-soft)" }}>{e.supervisor_name ?? "—"}</td>
                     <td className={`${tdCls} tabular-nums text-xs`} style={{ color: "var(--ink-soft)" }}>
@@ -1170,12 +1422,15 @@ export default function OfficeEmployeesPage() {
                       )}
                     </td>
                     <td className={`${tdCls} text-right whitespace-nowrap`}>
+                      <Link href="/app/office/reports" className="underline" style={{ color: "var(--brand)" }}>
+                        Report
+                      </Link>
                       {e.employment_type === "intern" && (
-                        <button type="button" disabled={busy} className="underline" style={{ color: "var(--success)" }}
+                        <button type="button" disabled={busy} className="ml-12 underline" style={{ color: "var(--success)" }}
                           onClick={() => absorbIntern(e)}>Absorb</button>
                       )}
                       <button type="button"
-                        className={e.employment_type === "intern" ? "ml-12 underline" : "underline"}
+                        className="ml-12 underline"
                         style={{ color: "var(--ink-soft)" }}
                         onClick={() => { setView("roster"); startEditEmp(e); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
                         Edit

@@ -1133,7 +1133,7 @@ select.auth-field option { color: var(--ink); }
    controls are stripped to their text — a clerk can print straight from edit
    mode and the page still reads as the issued document. */
 @media print {
-  .proforma-sheet, .manifest-sheet {
+  .proforma-sheet, .manifest-sheet, .report-sheet {
     --ink: #123249;
     --ink-soft: #35526a;
     --line: rgba(13, 51, 80, 0.34);
@@ -1141,8 +1141,10 @@ select.auth-field option { color: var(--ink); }
     --milk-deep: #eef4f8;
     --brand: #0d3350;
     --gold: var(--gold-ink);
-    --success: #1f6344;
+    --gold-green: #6b7a2c;
+    --warning: #8a6a1c;
     --danger: #94332f;
+    --success: #1f6344;
     background: #ffffff !important;
     border: 0 !important;
     border-radius: 0 !important;
@@ -1152,7 +1154,8 @@ select.auth-field option { color: var(--ink); }
     print-color-adjust: exact;
   }
   .proforma-sheet :is(input, select, textarea),
-  .manifest-sheet :is(input, select, textarea) {
+  .manifest-sheet :is(input, select, textarea),
+  .report-sheet :is(input, select, textarea) {
     width: 100%;
     border: 0 !important;
     border-radius: 0;
@@ -1164,15 +1167,19 @@ select.auth-field option { color: var(--ink); }
     appearance: none;
   }
   .proforma-sheet :is(input, textarea)::placeholder,
-  .manifest-sheet :is(input, textarea)::placeholder { color: transparent !important; }
-  .proforma-sheet table, .manifest-sheet table { border-collapse: collapse; }
-  .proforma-sheet thead tr, .manifest-sheet thead tr { background: transparent !important; }
+  .manifest-sheet :is(input, textarea)::placeholder,
+  .report-sheet :is(input, textarea)::placeholder { color: transparent !important; }
+  .proforma-sheet table, .manifest-sheet table, .report-sheet table { border-collapse: collapse; }
+  .proforma-sheet thead tr, .manifest-sheet thead tr,
+  .proforma-sheet thead, .manifest-sheet thead { background: transparent !important; }
   .proforma-sheet thead th, .manifest-sheet thead th { border-bottom: 1px solid var(--ink); }
   .proforma-sheet tr, .proforma-sheet tfoot tr,
-  .manifest-sheet tr, .manifest-sheet tfoot tr { break-inside: avoid; }
-  .proforma-sheet h2, .proforma-sheet thead,
-  .manifest-sheet h2, .manifest-sheet thead { break-after: avoid; }
-  /* The two signature blocks sit at the foot of the paper and must not be
+  .manifest-sheet tr, .manifest-sheet tfoot tr,
+  .report-sheet tr { break-inside: avoid; }
+  .proforma-sheet h2, .manifest-sheet h2, .report-sheet h2 { break-after: avoid; }
+  /* The signature blocks sit at the foot of the paper and must not be
      split across a page boundary. */
-  .manifest-sheet .sig-block { break-inside: avoid; }
+  .manifest-sheet .sig-block, .report-sheet .sig-block { break-inside: avoid; }
+  /* The completion report is one page — the sheet is allowed to shrink to fit. */
+  .report-sheet { font-size: 11px; }
 }

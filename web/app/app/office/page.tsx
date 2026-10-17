@@ -11,6 +11,18 @@ const MODULES = [
     plan: "Enterprise"
   },
   {
+    name: "Procedural flows",
+    href: "/app/office/procedures",
+    description: "How work is meant to be done here — the procedure library (system defaults you copy, house flows you own) and, per task, the steps from Initiation to Final Sign-off with the mandatory checklist that has to be ticked before a step can close.",
+    plan: "Enterprise"
+  },
+  {
+    name: "Trainee reports",
+    href: "/app/office/reports",
+    description: "The one-page performance and completion report, counted from the tasks and evaluations inside the period, graded on four competencies and closed only when the Head of Department, HR Manager and Direct Supervisor have each put their name to it. Prints as issued.",
+    plan: "Enterprise"
+  },
+  {
     name: "Office Management",
     href: "/app/office/costs",
     description: "What running the office costs — dashboard by period, allowances, meals and refreshments, daily costs with approvals, file costs against revenue, and budget-versus-spend reports.",
