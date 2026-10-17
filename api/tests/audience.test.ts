@@ -24,6 +24,11 @@ describe("portal-only role detection", () => {
   it("does not mistake a staff key for a portal one by substring", () => {
     expect(rolesArePortalOnly(["shipper_manager"])).toBe(false);
   });
+  it("lists seeker — its absence is what let a seeker token use the staff fast path", () => {
+    expect(PORTAL_ONLY_ROLES).toContain("seeker");
+    expect(rolesArePortalOnly(["seeker"])).toBe(true);
+    expect(rolesArePortalOnly(["seeker", "director"])).toBe(false);
+  });
 });
 
 describe("open surface allowlist", () => {
@@ -50,5 +55,11 @@ describe("open surface allowlist", () => {
     expect(isOpenSurface("/api/v1/portal-evil")).toBe(false);
     expect(isOpenSurface("/api/v1/control-x")).toBe(false);
     expect(isOpenSurface("/api/v1/internal-x")).toBe(false);
+  });
+  it("opens the seeker directory and pass surfaces, anchored on the slash", () => {
+    expect(isOpenSurface("/api/v1/directory/search")).toBe(true);
+    expect(isOpenSurface("/api/v1/seeker/passes")).toBe(true);
+    expect(isOpenSurface("/api/v1/directory-x")).toBe(false);
+    expect(isOpenSurface("/api/v1/seeker")).toBe(false);
   });
 });

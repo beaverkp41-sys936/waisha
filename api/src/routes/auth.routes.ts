@@ -8,7 +8,7 @@ import { hashPassword, verifyPassword } from "../security/argon2.js";
 import { issueAccessToken, verifyAccessToken } from "../security/jwt.js";
 import { passwordSchema, pwnedCount } from "../security/password.js";
 import { validateTin } from "../security/tin.js";
-import { generateOtp, hashOtp, maskPhone, OTP_TTL_MINUTES, OTP_RESEND_SECONDS } from "../security/otp.js";
+import { generateOtp, hashOtp, maskPhone, maskEmail, OTP_TTL_MINUTES, OTP_RESEND_SECONDS } from "../security/otp.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
 import { writeAudit } from "../audit/audit.js";
 import { sendMail, sendSms } from "../mail/mail.js";
@@ -195,6 +195,94 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
     return reply.status(201).send({ userId, phoneMasked: maskPhone(data.phone) });
   });
 
+  // ---------------- Seeker sign-up (spec: find a transporter or a CFA) ----------------
+  // Deliberately the shortest form in the system: two names, a phone, an email, a
+  // password. A seeker is not onboarding a company, so there is no TIN, no NIDA and
+  // no company name to ask for. Verification goes out by EMAIL because the SMS
+  // transport is still a dev console stub, and an email code is the one channel that
+  // actually reaches a person today.
+  const seekerSignup = z.object({
+    firstName: z.string().trim().min(1).max(60),
+    lastName: z.string().trim().min(1).max(60),
+    phone: e164,
+    email: emailSchema,
+    password: passwordSchema,
+    confirmPassword: z.string(),
+    lookingFor: z.array(z.enum(["transporter", "cfa"])).max(2).optional(),
+    industry: z.string().trim().max(120).optional(),
+    acceptTerms: z.literal(true, { errorMap: () => ({ message: "You must accept the Terms and Privacy Policy" }) })
+  }).refine(d => d.password === d.confirmPassword, {
+    path: ["confirmPassword"], message: "Passwords do not match"
+  }).refine(d => new Set(d.lookingFor ?? []).size === (d.lookingFor ?? []).length, {
+    path: ["lookingFor"], message: "Choose each option once"
+  });
+
+  app.post("/auth/seeker/signup", async (req: any, reply) => {
+    await enforceRateLimit(`signup:ip:${req.ip}`, 10, 3600);
+    const data = seekerSignup.parse(req.body);
+    await checkPwned(data.password);
+
+    const tenantId = uuidv7();
+    const userId = uuidv7();
+    const seekerId = uuidv7();
+    const code = generateOtp();
+    const fullName = `${data.firstName} ${data.lastName}`;
+    // Empty means "not answered yet". 060's rule: never default to both, or every
+    // statistic about what seekers want becomes a flat 100%.
+    const lookingFor = [...new Set(data.lookingFor ?? [])];
+
+    await withTx(async (c) => {
+      // Both probes run against users, not tenants: a seeker must not be able to take
+      // an email or a phone a transporter or a shipper already holds.
+      const dupe = await c.query(
+        "select platform_auth.check_seeker_duplicates($1, $2) as kind",
+        [data.email, searchHash(data.phone)]);
+      const kind = dupe.rows[0].kind;
+      if (kind === "email") throw new ApiError("CONFLICT", "This email is already registered", 409);
+      if (kind === "phone") throw new ApiError("CONFLICT", "This phone is already registered", 409);
+
+      await c.query("select set_config('app.tenant_id', $1, true)", [tenantId]);
+      await c.query(
+        `insert into tenants (id, type, name, status) values ($1,'seeker',$2,'pending_verification')`,
+        [tenantId, fullName]);
+      await c.query(
+        `insert into users (id, tenant_id, user_type, email, email_normalized_search,
+           phone_encrypted, phone_search, password_hash, status, full_name)
+         values ($1,$2,'seeker',$3,$4,$5,$6,$7,'pending_verification',$8)`,
+        [userId, tenantId, data.email, searchHash(data.email),
+         encryptField(data.phone), searchHash(data.phone),
+         await hashPassword(data.password), fullName]);
+      await c.query(
+        `insert into seekers (id, tenant_id, user_id, first_name, last_name, looking_for,
+           industry, country, created_by, updated_by)
+         values ($1,$2,$3,$4,$5,$6,$7,'Tanzania',$3,$3)`,
+        [seekerId, tenantId, userId, data.firstName, data.lastName, lookingFor,
+         data.industry ?? null]);
+      await c.query(
+        `insert into otp_codes (id, user_id, tenant_id, purpose, channel, destination_search,
+           code_hash, expires_at, resend_available_at)
+         values ($1,$2,$3,'signup','email',$4,$5, now() + interval '5 minutes', now())`,
+        [uuidv7(), userId, tenantId, searchHash(data.email), hashOtp(code)]);
+      await writeAudit(c, {
+        tenantId, actorUserId: userId, ip: req.ip,
+        userAgent: req.headers["user-agent"] ?? null,
+        requestId: req.requestId,
+        entity: "tenants", entityId: tenantId, action: "signup.initiated",
+        after: { fullName, lookingFor }
+      });
+    });
+
+    await sendMail({
+      to: data.email, subject: "Your WAISHA verification code",
+      text: `Your WAISHA verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes. `
+        + `If you did not ask for a WAISHA account, ignore this email.`,
+      html: `<p>Your WAISHA verification code is <b>${code}</b>.</p>`
+        + `<p>It expires in ${OTP_TTL_MINUTES} minutes.</p>`
+        + `<p>If you did not ask for a WAISHA account, ignore this email.</p>`
+    });
+    return reply.status(201).send({ userId, seekerId, emailMasked: maskEmail(data.email) });
+  });
+
   // ---------------- OTP verify / resend ----------------
   app.post("/auth/otp/verify", async (req: any, reply) => {
     await enforceRateLimit(`otp:ip:${req.ip}`, 20, 900);
@@ -222,17 +310,31 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
       throw new ApiError("OTP_INVALID", `Incorrect code. ${res.attempts_left ?? 0} attempts remaining.`, 400);
     }
 
+    // Seekers is RLS-scoped to the seeker's own tenant and this route holds only a
+    // user id, so the verification stamp goes through 060's definer. The metered read
+    // path in 061 reads that stamp — without it every search answers "not_verified".
+    const isSeeker = user.user_type === "seeker";
+    const channel = isSeeker ? (user.channel ?? "email") : null;
     await withTenant(user.tenant_id, async (c) => {
       await c.query("update users set status='active', failed_login_count=0 where id=$1", [userId]);
-      const roleKey = user.user_type === "shipper" ? "shipper" : "director";
+      const roleKey = isSeeker ? "seeker" : user.user_type === "shipper" ? "shipper" : "director";
       await c.query(
         `insert into user_roles (user_id, role_id)
          select $1, id from roles where tenant_id is null and key = $2
          on conflict do nothing`, [userId, roleKey]);
+      if (isSeeker) {
+        await c.query("select platform_auth.mark_seeker_verified($1,$2)", [userId, channel]);
+        // A seeker shell never enters the licence lifecycle, so unlike a transporter
+        // (008's claim_trial) or a paying shipper (009) nothing else would ever move
+        // its tenant off pending_verification. The admin panel counts companies by
+        // this column, so it has to be truthful.
+        await c.query("update tenants set status='active' where id=$1", [user.tenant_id]);
+      }
       await writeAudit(c, {
         tenantId: user.tenant_id, actorUserId: userId, ip: req.ip,
         requestId: req.requestId,
-        entity: "users", entityId: userId, action: "account.verified"
+        entity: "users", entityId: userId, action: "account.verified",
+        after: channel ? { user_type: user.user_type, channel } : undefined
       });
     });
     return reply.send({ ok: true });
@@ -260,20 +362,49 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
     }
 
     const code = generateOtp();
+    // channel is read back from the newest signup row, so it must be carried into the
+    // replacement one: relying on the column's 'sms' default would quietly move a seeker
+    // onto the console-only transport on their second resend, and verify would then
+    // stamp phone_verified_at for a phone nobody ever texted.
+    const byEmail = user.channel === "email";
     await withTenant(user.tenant_id, (c) => c.query(
-      `insert into otp_codes (id, user_id, tenant_id, purpose, destination_search,
+      `insert into otp_codes (id, user_id, tenant_id, purpose, channel, destination_search,
          code_hash, expires_at, resend_available_at)
-       values ($1,$2,$3,'signup',$4,$5, now() + interval '5 minutes', now())`,
-      [uuidv7(), userId, user.tenant_id, user.phone_search ?? "", hashOtp(code)]));
+       values ($1,$2,$3,'signup',$4,$5,$6, now() + interval '5 minutes', now())`,
+      [uuidv7(), userId, user.tenant_id, byEmail ? "email" : "sms",
+       byEmail ? searchHash(user.email) : (user.phone_search ?? ""), hashOtp(code)]));
 
-    const phone = decryptField(bufFromHex(user.phone_encrypted));
-    await sendSms(phone, `Your WAISHA verification code is ${code}. It expires in 5 minutes.`);
+    if (byEmail) {
+      await sendMail({
+        to: user.email, subject: "Your WAISHA verification code",
+        text: `Your WAISHA verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes.`,
+        html: `<p>Your WAISHA verification code is <b>${code}</b>.</p>`
+          + `<p>It expires in ${OTP_TTL_MINUTES} minutes.</p>`
+      });
+    } else {
+      const phone = decryptField(bufFromHex(user.phone_encrypted));
+      await sendSms(phone, `Your WAISHA verification code is ${code}. It expires in 5 minutes.`);
+    }
     return reply.send({ resendAt: new Date(Date.now() + OTP_RESEND_SECONDS * 1000).toISOString() });
   });
 
+  /** Shipper and seeker sign-in both accept one free-text identity box, so the
+   * email/phone split is decided here once rather than re-typed per branch.
+   * Lowercasing is not cosmetic: signup stores email_normalized_search from an
+   * address Zod already folded to lower case, so a login typed as "A@X.COM"
+   * would hash to a different value and the row would simply not be found. */
+  function identitySearches(id: string): { emailSearch: string | null; phoneSearch: string | null } {
+    const value = id.toLowerCase();
+    const isPhone = /^\+?\d{8,15}$/.test(value.replace(/[\s-]/g, ""));
+    return {
+      emailSearch: value.includes("@") ? searchHash(value) : null,
+      phoneSearch: isPhone ? searchHash("+" + value.replace(/\D/g, "")) : null
+    };
+  }
+
   // ---------------- Login (spec 3: all four types) ----------------
   const loginSchema = z.object({
-    mode: z.enum(["transporter", "shipper", "customer"]),
+    mode: z.enum(["transporter", "shipper", "customer", "seeker"]),
     tin: z.string().trim().optional(),
     companyName: z.string().trim().optional(),
     username: z.string().trim().optional(),
@@ -294,16 +425,19 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
       const r = await pool.query("select platform_auth.lookup_transporter_login($1,$2) as r",
         [searchHash(validateTin(data.tin)), searchHash(data.email)]);
       found = r.rows[0].r;
-    } else if (data.mode === "shipper") {
+    } else if (data.mode === "shipper" || data.mode === "seeker") {
       const id = (data.email ?? data.phone ?? "").trim();
       if (!id) {
         throw new ApiError("VALIDATION_FAILED", "Email or phone is required", 400, [{ field: "email" }]);
       }
-      const isPhone = /^\+?\d{8,15}$/.test(id.replace(/[\s-]/g, ""));
-      const emailSearch = id.includes("@") ? searchHash(id) : null;
-      const phoneSearch = isPhone ? searchHash("+" + id.replace(/\D/g, "")) : null;
-      const r = await pool.query("select platform_auth.lookup_shipper_login($1,$2) as r",
-        [emailSearch, phoneSearch]);
+      const { emailSearch, phoneSearch } = identitySearches(id);
+      // 060 mirrored lookup_shipper_login's envelope exactly so this branch stays one
+      // shape — status, lockout and session code below is shared, not duplicated.
+      const r = data.mode === "seeker"
+        ? await pool.query("select platform_auth.lookup_seeker_login($1,$2) as r",
+            [emailSearch, phoneSearch])
+        : await pool.query("select platform_auth.lookup_shipper_login($1,$2) as r",
+            [emailSearch, phoneSearch]);
       found = r.rows[0].r;
     } else {
       if (!data.companyName || !data.tin || !data.username) {

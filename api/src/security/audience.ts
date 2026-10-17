@@ -11,10 +11,15 @@ import { verifyAccessToken } from "./jwt.js";
  * trips or start a licence trial in somebody else's company. Permission keys
  * gate individual modules; this gate decides WHICH SURFACE a token may knock
  * on at all.
+ *
+ * A seeker (060) is the same hole with the tenant problem removed. It owns its
+ * own tenant shell, so it cannot reach into a stranger's company — but it carries
+ * no company keys at all, and until `seeker` was listed below its token took the
+ * staff fast path and passed every `requireAuth`-only route in the API.
  */
 
 /** Roles that exist only to serve an external account — never a staff surface. */
-export const PORTAL_ONLY_ROLES = ["shipper", "shipper_portal", "customer_temp"];
+export const PORTAL_ONLY_ROLES = ["shipper", "shipper_portal", "customer_temp", "seeker"];
 
 /** Pure so the matrix can be unit-tested without a database. */
 export function rolesArePortalOnly(roles: string[] | undefined | null): boolean {
@@ -26,11 +31,19 @@ export function rolesArePortalOnly(roles: string[] | undefined | null): boolean 
  * Surfaces an external account legitimately reaches: its own portal, the auth
  * lifecycle it signs in through, and the pre-auth/public plumbing. `/auth/me`
  * and `/auth/sessions` stay open — they read only the caller's own row.
+ *
+ * `directory` and `seeker` are listed before their routes exist because opening
+ * a prefix here is the only way a portal-only token can ever reach them, and a
+ * prefix is trailing-slash-anchored so nothing else is swept in. Shipper tokens
+ * pass this gate for those two too, which is safe: the keys 061 issued —
+ * `directory.search`, `seeker_pass.view|create` — belong to the seeker role only,
+ * so the route-level permission check still answers 403 for a shipper.
  */
 const OPEN_PREFIXES = [
   "/api/v1/auth/", "/api/v1/portal/", "/api/v1/health", "/api/v1/content/",
   "/api/v1/announcements", "/api/v1/control/", "/api/v1/internal/",
-  "/api/v1/payments/mock", "/api/v1/payments/webhook"
+  "/api/v1/payments/mock", "/api/v1/payments/webhook",
+  "/api/v1/directory/", "/api/v1/seeker/"
 ];
 
 export function isOpenSurface(url: string): boolean {
