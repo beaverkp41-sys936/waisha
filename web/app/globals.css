@@ -981,6 +981,37 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
    own, not a strip laid over it. */
 .auth-sheet { border-top: 3px solid var(--gold); }
 
+/* The head of the sign-in sheet. The mark is the card's masthead rather than a
+   caption above a form: it spans the sheet edge to edge and grows with it, so the
+   brand is the first thing read at every width. The negative margins cancel the
+   card's own padding and the sheet's overflow-hidden squares the band off against
+   the rounded corners. A scrim sits behind it because the photo under the glass
+   runs from dusk sky to near-white cloud, and a transparent white lockup vanishes
+   in the bright half — the shadow alone is not enough over cloud. */
+.auth-head {
+  margin: -32px -32px 20px;
+  padding: 28px 24px 20px;
+  background: linear-gradient(180deg,
+      rgba(5, 20, 33, 0.78) 0%,
+      rgba(5, 20, 33, 0.55) 68%,
+      rgba(5, 20, 33, 0.1) 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.auth-mark {
+  display: block;
+  width: 100%;
+  max-width: 440px;
+  /* The sheet must not grow past the fold on a short window — the form's own
+     buttons sit below the head and there is no scroll affordance here. */
+  max-height: 24vh;
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 6px 22px rgba(4, 16, 26, 0.6));
+}
+
 .auth-label {
   color: rgba(255, 255, 255, 0.82);
   font-size: 11px;
