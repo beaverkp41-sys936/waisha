@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { ZodError } from "zod";
 import { ApiError } from "../util/errors.js";
+import { captureServerError } from "../security/error-record.js";
 
 export function registerErrorHandling(app: FastifyInstance) {
   app.addHook("onRequest", async (req) => {
@@ -72,6 +73,10 @@ export function registerErrorHandling(app: FastifyInstance) {
       });
     }
     req.log.error(err);
+    // The one failure nobody was told about twice. Every 5xx the caller saw is written to
+    // the register in 082 — with the request id the caller was just given as the key into
+    // it — because the process log this used to live only in is gone after a restart.
+    captureServerError({ err, req, statusCode: 500, requestId });
     return reply.status(500).send({
       error: { code: "INTERNAL", message: "An unexpected error occurred", details: [], request_id: requestId }
     });

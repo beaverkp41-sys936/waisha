@@ -43,7 +43,12 @@ const OPEN_PREFIXES = [
   "/api/v1/auth/", "/api/v1/portal/", "/api/v1/health", "/api/v1/content/",
   "/api/v1/announcements", "/api/v1/control/", "/api/v1/internal/",
   "/api/v1/payments/mock", "/api/v1/payments/webhook",
-  "/api/v1/directory/", "/api/v1/seeker/"
+  "/api/v1/directory/", "/api/v1/seeker/",
+  // The error intake. A portal account is a person on a page too, and the page that
+  // crashes is often the one that signs them in — if this door were shut to a shipper
+  // token, the portal's failures would be the only ones nobody collects. It is open
+  // because it writes nothing that can be read back and attributes nothing (082).
+  "/api/v1/client-errors"
 ];
 
 export function isOpenSurface(url: string): boolean {

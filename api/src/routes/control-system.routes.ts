@@ -7,6 +7,7 @@ import { enforceRateLimit } from "../security/ratelimit.js";
 import { storageConfigured } from "../storage/supabase.js";
 import { requireControl } from "./control.routes.js";
 import { requireControlPermission } from "./control-analytics.routes.js";
+import { ERROR_SUMMARY_SQL } from "./control-errors.routes.js";
 
 /**
  * The technical report and the advisory (069).
@@ -197,11 +198,13 @@ const NOT_MEASURED = [
       + "event — the register can show lapsed companies, not companies that chose to leave."
   },
   {
-    thing: "Uptime, latency and error rate",
-    why: "The API has no metrics endpoint, no request-timing store and no error "
-      + "collector. /api/v1/health answers 'ok' for a process and nothing else. This is "
-      + "the single most useful thing to build next if the panel is to say anything "
-      + "about reliability."
+    thing: "Uptime and request latency",
+    why: "Errors are collected now — every 5xx the API answered and everything the "
+      + "browser reports lands in the register in 082, which the error desk and the "
+      + "advisory both read. What is still missing is the other half of reliability: "
+      + "there is no metrics endpoint and no request-timing store, so /api/v1/health "
+      + "answers 'ok' for a process and nothing else. A route that is merely slow, and "
+      + "the gap between two restarts, are both invisible."
   },
   {
     thing: "Revenue per feature or per module",
@@ -242,9 +245,15 @@ export async function controlSystemRoutes(app: FastifyInstance, _opts: unknown) 
     const unapplied = onDisk.filter(f => !appliedNames.includes(f));
     const missingFiles = appliedNames.filter(n => !onDisk.includes(n));
 
+    // Reliability, from 082's register. Read through the same definer the error desk
+    // uses, so the report and the desk can never disagree about how many failures
+    // there were — one number, one source.
+    const errors = await pool.query(ERROR_SUMMARY_SQL, [7]);
+
     return {
       ...report,
       runtime: runtimeFacts(),
+      errors: errors.rows[0]?.s ?? {},
       migrations: {
         ...(report.migrations ?? {}),
         files_on_disk: onDisk.length,
@@ -279,7 +288,28 @@ export async function controlSystemRoutes(app: FastifyInstance, _opts: unknown) 
       missing_files: dir ? appliedNames.filter(n => !onDisk.includes(n)) : []
     });
 
-    const items = [...dbItems, ...driftItems].sort((a: any, b: any) => {
+    // Failures the users actually walked into. The register only knows what was served,
+    // so this is the one line on the advisory that is a fact about the last day rather
+    // than a rule about the schema.
+    const errSummary = (await pool.query(ERROR_SUMMARY_SQL, [2])).rows[0]?.s ?? {};
+    const errorItems: Array<Record<string, unknown>> = [];
+    const server24 = Number(errSummary.server_in_last_24h ?? 0);
+    if (server24 > 0) {
+      errorItems.push({
+        item_id: "errors_server_24h", rank: 0,
+        priority: server24 >= 20 ? "high" : "medium", kind: "risk",
+        area: "Reliability",
+        title: `${server24} server failure${server24 === 1 ? "" : "s"} answered in the last 24 hours`,
+        detail: "Every one of these was a request the API could not complete. They are "
+          + "listed by bug on the error desk, newest first, with the stack and the request "
+          + "id the caller was given — start there before guessing which screen broke.",
+        metric: server24, unit: "occurrences",
+        action: "Open Errors in the panel, triage what is understood, and raise the rest.",
+        evidence: []
+      });
+    }
+
+    const items = [...dbItems, ...driftItems, ...errorItems].sort((a: any, b: any) => {
       if (a.rank !== b.rank) return a.rank - b.rank;
       const p = PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority);
       if (p !== 0) return p;
