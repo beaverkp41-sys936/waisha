@@ -356,12 +356,11 @@ export default function LoginPage() {
       <div aria-hidden className="auth-bg" />
       <div className="auth-shell w-full max-w-[560px]">
         <div className="auth-card auth-sheet sheet-in relative flex flex-col overflow-hidden rounded-card border p-32">
-          {/* The lockup is the sheet's masthead, not a label above the form: it spans
-              the card edge to edge and is the first thing read on every screen size. */}
+          {/* The lockup carries its own tagline in the artwork, so the masthead is
+              one image on a glass plate — no live caption under it. */}
           <div className="auth-head">
-            <img src="/brand/waisha-white@2x.png" alt="WAISHA — where shippers meet transporters"
-              width={452} height={211} className="auth-mark" />
-            <span className="brand-tagline">Where shippers meet transporters</span>
+            <img src="/brand/waisha-lockup-white@2x.png" alt="WAISHA — where shippers meet transporters"
+              width={904} height={309} className="auth-mark" />
           </div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "rgba(255,255,255,0.82)" }}>
             Sign in to WAISHA

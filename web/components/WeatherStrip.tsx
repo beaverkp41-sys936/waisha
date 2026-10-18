@@ -65,17 +65,23 @@ export function WeatherStrip() {
     : null;
 
   return (
-    <span className="weather-strip inline-flex flex-wrap items-center justify-end gap-14 text-right">
-      <span className="inline-flex items-center gap-6" title={`Open-Meteo forecast for ${place.label}${stamp ? `, read at ${stamp}` : ""}`}>
-        <Thermometer size={15} aria-hidden />
-        <span className="tabular-nums font-semibold">{v(shown?.tempC)}&deg;C</span>
-        <Droplets size={15} aria-hidden />
-        <span className="tabular-nums font-semibold">{v(shown?.humidity)}%</span>
-        <Wind size={15} aria-hidden />
-        <span className="tabular-nums font-semibold">{v(shown?.windKph)} km/h</span>
+    <span className="weather-strip" title={`Open-Meteo forecast for ${place.label}${stamp ? `, read at ${stamp}` : ""}`}>
+      <span className="weather-readings">
+        <span className="weather-cell">
+          <Thermometer size={14} aria-hidden />
+          <span className="tabular-nums">{v(shown?.tempC)}&deg;C</span>
+        </span>
+        <span className="weather-cell">
+          <Droplets size={14} aria-hidden />
+          <span className="tabular-nums">{v(shown?.humidity)}%</span>
+        </span>
+        <span className="weather-cell">
+          <Wind size={14} aria-hidden />
+          <span className="tabular-nums">{v(shown?.windKph)} km/h</span>
+        </span>
       </span>
 
-      <span className="inline-flex items-center gap-6">
+      <span className="weather-place">
         {note && <span className="weather-note text-[11px]">{note}</span>}
         <button
           type="button"
@@ -83,10 +89,10 @@ export function WeatherStrip() {
           title={place.label === DAR_ES_SALAAM.label
             ? "Use this device's location for the forecast"
             : "Stop using this device's location"}
-          className="weather-locate inline-flex items-center gap-5 rounded-full px-9 py-3 text-[11px]"
+          className="weather-locate inline-flex items-center gap-4 rounded-full px-8 py-2 text-[11px]"
           disabled={locating}
         >
-          {place.label === DAR_ES_SALAAM.label ? <MapPin size={13} aria-hidden /> : <Navigation size={13} aria-hidden />}
+          {place.label === DAR_ES_SALAAM.label ? <MapPin size={12} aria-hidden /> : <Navigation size={12} aria-hidden />}
           <span>{locating ? "Locating…" : place.label}</span>
         </button>
       </span>

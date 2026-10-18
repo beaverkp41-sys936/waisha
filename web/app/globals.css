@@ -239,11 +239,48 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   text-shadow: 0 1px 6px rgba(4, 16, 26, 0.5);
 }
 
-/* The forecast readout at the far right of that bar sits on the same blurred
-   photo, so it inherits the footer's white + shadow and only adds a hairline
-   to make the location pill look pressable. */
+/* Everything the bar carries is held on one centred line: the contact words own
+   the middle and the forecast reads beside them. Wrapping is allowed so a long
+   phone pair never overlaps the cluster at a narrow desktop width. */
+.footer-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 22px;
+  padding: 0 20px;
+}
+.footer-words { text-align: center; }
+
+/* The forecast sits on the same blurred photo as the rest of the bar, so it
+   inherits the footer's white + shadow and only adds a hairline to make the
+   location pill look pressable. Each reading is an icon welded to its number —
+   the pairs stay tight and only the pairs are spaced, which is what keeps the
+   cluster off the words. */
 .weather-strip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 12px;
   color: rgba(255, 255, 255, 0.95);
+}
+.weather-readings {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.weather-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+}
+.weather-place {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .weather-locate {
   border: 1px solid rgba(255, 255, 255, 0.45);
@@ -255,6 +292,14 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 .weather-locate:hover { background: rgba(255, 255, 255, 0.24); }
 .weather-locate:disabled { opacity: 0.65; cursor: progress; }
 .weather-note { color: rgba(255, 255, 255, 0.85); }
+
+/* Below the shell's own breakpoint the bar is a phone's width, and a second
+   read nobody went looking for is what makes it look wrong there. The cluster
+   leaves the layout entirely rather than wrapping under the words — the words
+   are the whole footer on a phone. */
+@media (max-width: 860px) {
+  .weather-strip { display: none; }
+}
 
 .app-shell {
   position: relative;
@@ -981,35 +1026,35 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
    own, not a strip laid over it. */
 .auth-sheet { border-top: 3px solid var(--gold); }
 
-/* The head of the sign-in sheet. The mark is the card's masthead rather than a
-   caption above a form: it spans the sheet edge to edge and grows with it, so the
-   brand is the first thing read at every width. The negative margins cancel the
-   card's own padding and the sheet's overflow-hidden squares the band off against
-   the rounded corners. A scrim sits behind it because the photo under the glass
-   runs from dusk sky to near-white cloud, and a transparent white lockup vanishes
-   in the bright half — the shadow alone is not enough over cloud. */
+/* The head of the sign-in sheet: the lockup on its own glass plate, not a band
+   across the card. The plate is the only place the surface goes transparent —
+   the photo behind the card runs from dusk sky to near-white cloud, and a
+   transparent white lockup vanishes in the bright half, so the blur is confined
+   to the artwork and the rest of the sheet stays as it is. */
 .auth-head {
-  margin: -32px -32px 20px;
-  padding: 28px 24px 20px;
-  background: linear-gradient(180deg,
-      rgba(5, 20, 33, 0.78) 0%,
-      rgba(5, 20, 33, 0.55) 68%,
-      rgba(5, 20, 33, 0.1) 100%);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  width: 100%;
+  max-width: 304px;
+  margin: 0 auto 20px;
+  padding: 10px 16px;
   display: flex;
-  flex-direction: column;
   align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
+  backdrop-filter: blur(8px) saturate(1.2);
+  box-shadow: 0 8px 22px rgba(5, 18, 26, 0.3);
 }
 .auth-mark {
   display: block;
   width: 100%;
-  max-width: 440px;
   /* The sheet must not grow past the fold on a short window — the form's own
      buttons sit below the head and there is no scroll affordance here. */
-  max-height: 24vh;
+  max-height: 15vh;
   height: auto;
   object-fit: contain;
-  filter: drop-shadow(0 6px 22px rgba(4, 16, 26, 0.6));
+  filter: drop-shadow(0 3px 10px rgba(4, 16, 26, 0.55));
 }
 
 .auth-label {
