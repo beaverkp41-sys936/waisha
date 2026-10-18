@@ -306,8 +306,14 @@ export default function TripDetailPage() {
         <div className="mt-24 overflow-hidden rounded-card border" style={cardStyle}>
           <div className="h-[280px]">
             <RouteMap
-              a={{ lat: Number(trip.origin_lat), lng: Number(trip.origin_lng), name: trip.origin_text ?? trip.origin_region ?? "Origin" }}
-              b={{ lat: Number(trip.dest_lat), lng: Number(trip.dest_lng), name: trip.dest_text ?? trip.dest_region ?? "Destination" }}
+              points={[
+                { lat: Number(trip.origin_lat), lng: Number(trip.origin_lng), name: trip.origin_text ?? trip.origin_region ?? "Origin", kind: "origin" },
+                { lat: Number(trip.dest_lat), lng: Number(trip.dest_lng), name: trip.dest_text ?? trip.dest_region ?? "Destination", kind: "dest" }
+              ]}
+              lines={[{
+                positions: [[Number(trip.origin_lat), Number(trip.origin_lng)], [Number(trip.dest_lat), Number(trip.dest_lng)]],
+                kind: "guess"
+              }]}
               center={[(Number(trip.origin_lat) + Number(trip.dest_lat)) / 2, (Number(trip.origin_lng) + Number(trip.dest_lng)) / 2]}
             />
           </div>

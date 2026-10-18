@@ -767,10 +767,15 @@ export default function BoardPage() {
             {expanded === c.id && c.pickupLat !== null && c.destLat !== null && (
               <div className="mt-16 overflow-hidden rounded-card" style={{ height: 280, border: "1px solid var(--line)" }}>
                 <RouteMap
-                  a={{ lat: c.pickupLat, lng: c.pickupLng!, name: c.pickupText }}
-                  b={{ lat: c.destLat, lng: c.destLng!, name: c.destText }}
+                  points={[
+                    { lat: c.pickupLat, lng: c.pickupLng!, name: c.pickupText, kind: "origin" },
+                    { lat: c.destLat, lng: c.destLng!, name: c.destText, kind: "dest" }
+                  ]}
+                  lines={[{
+                    positions: geometry[c.id] ?? [[c.pickupLat, c.pickupLng!], [c.destLat, c.destLng!]],
+                    kind: geometry[c.id] ? "road" : "guess"
+                  }]}
                   center={[(c.pickupLat + c.destLat) / 2, (c.pickupLng! + c.destLng!) / 2]}
-                  positions={geometry[c.id]}
                 />
               </div>
             )}
