@@ -15,6 +15,8 @@
  *  - the eligibility trigger's refusal answers 409 with the database's sentence rather
  *    than 500 (the P0001 mapping in plugins/errors.ts), and a suspended listing cannot
  *    be re-published by its owner;
+ *  - the read carries the same permission answer as the write gate (canManage), so the
+ *    editor never offers a director-only button to a manager whose click would 403;
  *  - the control side works through the real cookie path: a session row, the queue,
  *    the approval that re-bases the week, and moderation.
  *
@@ -97,7 +99,11 @@ async function main() {
     `select id from roles where key = $1 and tenant_id is null`, [k])).rows[0]?.id;
   const directorRole = await roleOf("director");
   const superAdminRole = await roleOf("super_admin");
-  if (!directorRole || !superAdminRole) throw new Error("global director / super_admin role missing");
+  // 061 gives directory.view to operations_manager but keeps directory.manage for the
+  // director alone, so this seat is the only way to prove the read's canManage flag
+  // tracks the write gate instead of disagreeing with it.
+  const opsRole = await roleOf("operations_manager");
+  if (!directorRole || !superAdminRole || !opsRole) throw new Error("global director / super_admin / operations_manager role missing");
 
   const regions = (await oi(
     `select id, name_en from geo_regions where country = 'TZ' and is_active
@@ -106,7 +112,7 @@ async function main() {
   const [R1, R2, R3] = regions.map((r: any) => r.id as number);
 
   const TA = randomUUID(), TP = randomUUID(), TC = randomUUID();
-  const uA = randomUUID(), uP = randomUUID(), uC = randomUUID();
+  const uA = randomUUID(), uP = randomUUID(), uC = randomUUID(), uM = randomUUID();
   const CONTROL_TOKEN = `dir-smoke-control-${STAMP}`;
   const ourTenants = [TA, TP, TC];
 
@@ -162,6 +168,10 @@ async function main() {
             values ($1,$2,'director',$3,'active',$4)`, [uA, TA, "Carrier Director", `dir.a.${STAMP}@waisha.test`]);
   await oi(`insert into users (id, tenant_id, user_type, full_name, status, email)
             values ($1,$2,'director',$3,'active',$4)`, [uP, TP, "Pending Director", `dir.p.${STAMP}@waisha.test`]);
+  await oi(`insert into users (id, tenant_id, user_type, full_name, status, email)
+            values ($1,$2,'staff',$3,'active',$4)`,
+    [uM, TA, "Carrier Ops Manager", `dir.m.${STAMP}@waisha.test`]);
+  await oi(`insert into user_roles (user_id, role_id) values ($1,$2)`, [uM, opsRole]);
   await oi(`insert into users (id, tenant_id, user_type, full_name, status, email, totp_enabled)
             values ($1,$2,'platform',$3,'active',$4,true)`, [uC, TC, "Dir Smoke Admin", CONTROL_EMAIL]);
   await oi(`insert into user_roles (user_id, role_id) values ($1,$2)`, [uA, directorRole]);
@@ -179,6 +189,7 @@ async function main() {
       .setSubject(sub).setIssuedAt().setExpirationTime("15m").sign(key);
   const tokA = await mint(uA, TA, ["director"]);
   const tokP = await mint(uP, TP, ["director"]);
+  const tokM = await mint(uM, TA, ["operations_manager"]);
   const cookie = { Cookie: `waisha_control=${CONTROL_TOKEN}` };
 
   let seekerTok = "";
@@ -320,6 +331,28 @@ async function main() {
       /^\d{4}-\d{2}-\d{2}$/.test(afterSave.json?.listing?.licence_valid_to ?? "") &&
       !JSON.stringify(afterSave.json).includes("TRL-DO-NOT-PUBLISH"),
       { lic: afterSave.json?.listing?.licence_valid_to });
+
+    // The page uses this flag to choose between a live form and "only a director can
+    // publish", so it must agree with the gate on the write it replaces — a flag that
+    // said true while the route said 403 would be a button that only hurts.
+    const managerRead = await call("/directory/listing", tokM);
+    const managerSave = await call("/directory/listing", tokM, {
+      method: "PUT", body: JSON.stringify({
+        serves: ["transporter"], companyName: `${CARRIER} renamed by a manager`,
+        contactName: CONTACT, contactChannel: CHANNEL, regionIds: [R1]
+      })
+    });
+    check("an operations manager reads the listing with canManage false and is refused the write",
+      managerRead.status === 200 && managerRead.json?.canManage === false &&
+      managerSave.status === 403 && managerSave.json?.error?.code === "FORBIDDEN",
+      { read: managerRead.status, cm: managerRead.json?.canManage, s: managerSave.status, code: managerSave.json?.error?.code });
+    const unchanged = await oi(
+      `select company_name from directory_listings where tenant_id = $1`, [TA]);
+    check("the refused write left the saved card alone",
+      unchanged.rows[0]?.company_name === CARRIER, unchanged.rows[0]);
+    const directorFlag = await call("/directory/listing", tokA);
+    check("the director who may publish is told so on the same read",
+      directorFlag.json?.canManage === true, { cm: directorFlag.json?.canManage });
 
     const publish = await call("/directory/listing/publish", tokA, { method: "POST" });
     check("publishing stamps published_at and goes live",
@@ -622,7 +655,7 @@ async function main() {
     await oi(`delete from rate_limits where bucket like 'signup:%' or bucket like 'otp%'
               or bucket like 'login:%' or bucket like 'directory%' or bucket like 'seeker%'
               or bucket like 'pass-verify:%' or bucket like 'listing-moderate:%'`).catch(() => { });
-    const uids = [uA, uP, uC, userId].filter(Boolean);
+    const uids = [uA, uP, uC, uM, userId].filter(Boolean);
     await oi(`delete from user_roles where user_id = any($1::uuid[])`, [uids]).catch(() => { });
     await oi(`delete from seekers where user_id = any($1::uuid[])`, [uids]).catch(() => { });
     await oi(`delete from users where id = any($1::uuid[])`, [uids]).catch(() => { });

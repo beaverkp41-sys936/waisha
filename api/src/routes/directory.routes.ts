@@ -3,7 +3,7 @@ import { z } from "zod";
 import { pool, withTenant } from "../db/pool.js";
 import { ApiError } from "../util/errors.js";
 import { verifyAccessToken } from "../security/jwt.js";
-import { requirePermission } from "../security/permissions.js";
+import { checkPermission, requirePermission } from "../security/permissions.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
 import { writeAudit } from "../audit/audit.js";
 import { requireControl, hasLicenceRole } from "./control.routes.js";
@@ -297,7 +297,10 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
           listing: l.rows[0] ?? null,
           regions,
           stats: stats.rows[0]?.s ?? null,
-          suggestions: profile.rows[0] ?? null
+          suggestions: profile.rows[0] ?? null,
+          // The same lookup the write gate runs, asked once on the read so the page can
+          // show a manager the truth instead of a form that fails when they press Save.
+          canManage: await checkPermission(c, req.user.sub, "directory.manage")
         };
       });
     });

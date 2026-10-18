@@ -1,6 +1,6 @@
 import {
   BookOpenText, Boxes, Building2, Calculator, CalendarCheck, CalendarClock, ChartColumn,
-  ClipboardCheck, ContactRound, FileCheck2, FileSignature, Fuel, IdCard, KeyRound, LayoutDashboard,
+  ClipboardCheck, ContactRound, FileCheck2, FileSignature, Fuel, Globe, IdCard, KeyRound, LayoutDashboard,
   Lightbulb, MapPinned, Megaphone, MessageSquare, Navigation, Package, Receipt, ReceiptText, Route,
   Settings, ShieldCheck, TriangleAlert, Truck, Users, UsersRound, Wallet, Workflow
 } from "lucide-react";
@@ -26,6 +26,7 @@ export const TRANSPORTER_NAV: NavItem[] = [
   { href: "/app/incidents", label: "Incidents", icon: TriangleAlert },
   { href: "/app/clients", label: "Clients", icon: Users },
   { href: "/app/shipper-access", label: "Shipper access", icon: KeyRound },
+  { href: "/app/directory", label: "Company directory", icon: Globe },
   { href: "/app/compliance", label: "Compliance", icon: ShieldCheck },
   { href: "/app/reports", label: "Reports", icon: ChartColumn },
   { href: "/app/staff", label: "Staff", icon: IdCard },
@@ -46,6 +47,7 @@ export const CFA_NAV: NavItem[] = [
   { href: "/app/cfa/messages", label: "Messages", icon: MessageSquare },
   { href: "/app/cfa/calendar", label: "ETA calendar", icon: CalendarClock },
   { href: "/app/cfa/compliance", label: "Compliance", icon: ShieldCheck },
+  { href: "/app/directory", label: "Company directory", icon: Globe },
   { href: "/app/recommendations", label: "Recommendations", icon: Lightbulb }
 ];
 
