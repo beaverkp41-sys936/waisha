@@ -1,5 +1,7 @@
 "use client";
 
+import { reportFetchError } from "./client-errors";
+
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 const ACCESS = "waisha_access";
 
@@ -82,5 +84,8 @@ export async function authFetch(
     }
     res = await run(fresh);
   }
+  // A 5xx is the API's own failure and the seat is the only witness it has. The response is
+  // handed on untouched — the report reads a clone, so the caller still gets its body.
+  if (res.status >= 500) void reportFetchError(path, res);
   return res;
 }

@@ -44,6 +44,10 @@ const PASSWORD = `Er-${STAMP}-K9!q`;
 const NAME_SWEEP = `Errors Smoke %`;
 const PROBE_CODE = `PROBE_${STAMP}`;
 const CLIENT_CODE = `SMOKE_${STAMP}`;
+/** The web collector sends the JS error's own name as the code, so this run cannot key its
+ *  browser-shaped batch on a code of its own making — it is marked inside the message. */
+const MARK_PREFIX = "deskpayload";
+const MARK = `${MARK_PREFIX}-${STAMP}`;
 const RAW_EMAIL = "ada@alpha.co.tz";
 const RAW_MSISDN = "+255712345678";
 const PROBE_PATH = "/api/v1/dev/error-probe";
@@ -114,6 +118,10 @@ async function main() {
     `select ${COLS} from app_errors where request_id = $1`, [rid]);
   const byCode = (code: string) => oi(
     `select ${COLS} from app_errors where code = $1 order by id`, [code]);
+  const byMessage = (phrase: string) => {
+    const like = `%${phrase}%`;
+    return oi(`select ${COLS} from app_errors where message like $1 order by id`, [like]);
+  };
   /** One bug is one fingerprint spread over one row per minute it happened in. */
   const foldState = (fp: string) => oi(
     `select coalesce(sum(1 + repeats),0)::int as occurrences, count(*)::int as lines,
@@ -150,12 +158,17 @@ async function main() {
     await oi(`delete from users where tenant_id = any($1::uuid[])`, [tids]).catch(() => { });
     await oi(`delete from tenants where id = any($1::uuid[])`, [tids]);
   };
-  /** Only ever this run's lines: the probe's own path, or the code stamped on the batch. */
+  /** Only ever this run's lines: the probe's own path, or the code stamped on the batch.
+   *  The web-shaped batch carries neither — it is found by the phrase inside its messages, and
+   *  that sweep is prefix-wide so a run aborted half way leaves no residue for the next one. */
   const sweepRegister = async () => {
     await oi(`delete from app_error_notes where fingerprint in
               (select distinct fingerprint from app_errors
-                where path = $1 or code = $2)`, [PROBE_PATH, CLIENT_CODE]).catch(() => { });
-    await oi(`delete from app_errors where path = $1 or code = $2`, [PROBE_PATH, CLIENT_CODE]);
+                where path = $1 or code = $2 or message like $3)`,
+      [PROBE_PATH, CLIENT_CODE, `%${MARK_PREFIX}%`]).catch(() => { });
+    await oi(`delete from app_errors
+               where path = $1 or code = $2 or message like $3`,
+      [PROBE_PATH, CLIENT_CODE, `%${MARK_PREFIX}%`]);
   };
 
   let TC = "", dirU = "", directorName = "", tokenA = "", refreshA = "";
@@ -379,6 +392,43 @@ async function main() {
     check("a report with no status of its own stores a null status, not a made-up one",
       clientRows.rows.find((r: any) => /never came back/.test(String(r.message)))?.status === null,
       clientRows.rows.find((r: any) => /never came back/.test(String(r.message)))?.status);
+
+    // Exactly the payload web/lib/client-errors.ts composes: five items, the fields the
+    // browser fills, and the undefined ones simply absent from the JSON. If the web side ever
+    // drifts from this shape the whole batch is dropped quietly, so this is the only thing
+    // that would notice.
+    const asTheWebSends = await call("/client-errors", null, {
+      method: "POST", body: JSON.stringify({
+        errors: [
+          { message: `A screen failed to render ${MARK}`, code: "TypeError", source: "boundary",
+            path: "/app/office/payroll", detail: "TypeError: x is not a function\n    at n (web/app/x.tsx:3:1)",
+            requestId: "D-abc123" },
+          { message: `The API answered 503 for /api/v1/trips ${MARK}`, code: "API_503",
+            source: "fetch", path: "/api/v1/trips", status: 503 },
+          { message: `Could not load script chunk-7f9a.js ${MARK}`, code: "ResourceLoadError",
+            source: "window", path: "/login" },
+          { message: `Unhandled promise rejection ${MARK}`, code: "DOMException", source: "rejection" },
+          { message: `Uncaught ReferenceError ${MARK}`, code: "ReferenceError", source: "window",
+            status: 500, requestId: rid1 }
+        ]
+      })
+    });
+    check("a full page of reports shaped exactly like the web collector sends lands in full",
+      asTheWebSends.status === 202 && asTheWebSends.json?.recorded === 5, asTheWebSends.json);
+    const webRows = await poll(() => byMessage(MARK), (r) => r.rows.length >= 5);
+    const apiLine = webRows.rows.find((r: any) => /API answered 503/.test(String(r.message))) ?? {};
+    const chunkLine = webRows.rows.find((r: any) => /Could not load script/.test(String(r.message))) ?? {};
+    check("…each carries the code the browser gave it, not the suite's own",
+      webRows.rows.filter((r: any) => ["TypeError", "API_503", "ResourceLoadError",
+        "DOMException", "ReferenceError"].includes(r.code)).length === 5,
+      webRows.rows.map((r: any) => r.code));
+    check("…the fetch report keeps the status that makes it findable",
+      apiLine.status === 503 && apiLine.route === "client:fetch", apiLine);
+    check("…an API path is normalised like any other, so ids in a URL cannot split a line",
+      apiLine.path === "/api/v1/trips", apiLine.path);
+    check("…a resource failure is a line of its own with no invented status",
+      chunkLine.status === null && chunkLine.route === "client:window",
+      { s: chunkLine.status, r: chunkLine.route });
 
     const badStatus = await call("/client-errors", null, {
       method: "POST", body: JSON.stringify({
