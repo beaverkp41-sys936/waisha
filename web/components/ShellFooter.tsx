@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { WeatherStrip } from "@/components/WeatherStrip";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 const FALLBACK = {
@@ -21,8 +22,11 @@ export function ShellFooter() {
     return () => { cancelled = true; };
   }, []);
   return (
-    <footer className="app-footer w-full py-16 text-center text-[13px] tracking-[0.04em] text-white">
-      {f.brand} | {f.supportEmail} | mob. {f.phone}
+    <footer className="app-footer w-full py-12 text-[13px] tracking-[0.04em] text-white">
+      <div className="flex flex-col items-center gap-8 px-20 sm:flex-row sm:justify-between sm:gap-x-20">
+        <span className="text-center sm:text-left">{f.brand} | {f.supportEmail} | mob. {f.phone}</span>
+        <WeatherStrip />
+      </div>
     </footer>
   );
 }

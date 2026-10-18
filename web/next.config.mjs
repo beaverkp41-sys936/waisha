@@ -8,7 +8,11 @@ const apiOrigin = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 // object-src. Revisit if a nonce scheme is ever wired through middleware.
 const csp = [
   "default-src 'self'",
-  `connect-src 'self' ${apiOrigin}`,
+  // api.open-meteo.com is the footer forecast: a GET whose only parameter is a
+  // rounded (~1 km) coordinate the person handed over, sent with no cookie and
+  // no token. Nothing the platform holds travels in that direction, and the
+  // reply is three numbers rendered as text — no script, no frame, no storage.
+  `connect-src 'self' ${apiOrigin} https://api.open-meteo.com`,
   // unpkg: leaflet default marker images; *.tile.openstreetmap.org: map tiles;
   // *.supabase.co: document signed URLs rendered in <img> (avatars/logos).
   "script-src 'self' 'unsafe-inline'" + (isDev ? " 'unsafe-eval'" : ""),

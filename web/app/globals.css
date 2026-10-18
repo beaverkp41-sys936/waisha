@@ -239,6 +239,23 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   text-shadow: 0 1px 6px rgba(4, 16, 26, 0.5);
 }
 
+/* The forecast readout at the far right of that bar sits on the same blurred
+   photo, so it inherits the footer's white + shadow and only adds a hairline
+   to make the location pill look pressable. */
+.weather-strip {
+  color: rgba(255, 255, 255, 0.95);
+}
+.weather-locate {
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  cursor: pointer;
+  text-shadow: inherit;
+}
+.weather-locate:hover { background: rgba(255, 255, 255, 0.24); }
+.weather-locate:disabled { opacity: 0.65; cursor: progress; }
+.weather-note { color: rgba(255, 255, 255, 0.85); }
+
 .app-shell {
   position: relative;
   min-height: 100vh;
