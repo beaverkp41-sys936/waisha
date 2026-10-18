@@ -55,6 +55,7 @@ export const OFFICE_NAV: NavItem[] = [
   { href: "/app/office", label: "Overview", icon: LayoutDashboard },
   { href: "/app/office/attendance", label: "Attendance", icon: CalendarCheck },
   { href: "/app/office/employees", label: "Employees", icon: UsersRound },
+  { href: "/app/office/payroll", label: "Payroll", icon: ReceiptText },
   { href: "/app/office/procedures", label: "Procedural flows", icon: Workflow },
   { href: "/app/office/reports", label: "Trainee reports", icon: FileCheck2 },
   { href: "/app/office/costs", label: "Office costs", icon: Wallet },

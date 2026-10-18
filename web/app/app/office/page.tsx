@@ -17,6 +17,12 @@ const MODULES = [
     plan: "Enterprise"
   },
   {
+    name: "Payroll",
+    href: "/app/office/payroll",
+    description: "What a month of the register is worth in money. Previewed before anything is written — every active person with a salary, pro-rated on the working days that have actually arrived, charged only for approved unpaid leave and recorded absences. One hand-typed figure per line, and it has to carry its own label. Issue it and the numbers freeze; the payslip prints as issued and the salary register holds what was paid, month by month.",
+    plan: "Enterprise"
+  },
+  {
     name: "Procedural flows",
     href: "/app/office/procedures",
     description: "How work is meant to be done here — the procedure library (system defaults you copy, house flows you own) and, per task, the steps from Initiation to Final Sign-off with the mandatory checklist that has to be ticked before a step can close.",

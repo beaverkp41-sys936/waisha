@@ -49,6 +49,7 @@ import { proceduresRoutes } from "./routes/procedures.routes.js";
 import { traineeReportsRoutes } from "./routes/trainee-reports.routes.js";
 import { officeCostsRoutes } from "./routes/office-costs.routes.js";
 import { attendanceRoutes } from "./routes/attendance.routes.js";
+import { payrollRoutes } from "./routes/payroll.routes.js";
 import { shipperAccountsRoutes } from "./routes/shipper-accounts.routes.js";
 import { portalRoutes } from "./routes/portal.routes.js";
 import { seekerRoutes } from "./routes/seeker.routes.js";
@@ -128,6 +129,7 @@ async function main() {
   await app.register(traineeReportsRoutes, { prefix: "/api/v1" });
   await app.register(officeCostsRoutes, { prefix: "/api/v1" });
   await app.register(attendanceRoutes, { prefix: "/api/v1" });
+  await app.register(payrollRoutes, { prefix: "/api/v1" });
   await app.register(shipperAccountsRoutes, { prefix: "/api/v1" });
   await app.register(portalRoutes, { prefix: "/api/v1" });
   await app.register(seekerRoutes, { prefix: "/api/v1" });
