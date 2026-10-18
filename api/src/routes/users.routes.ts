@@ -150,7 +150,8 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
           const seats = await countSeats(c, req.user.tid);
           if (seatsLicensed > 0 && seats >= seatsLicensed) {
             throw new ApiError("TRIAL_LIMIT",
-              `Your licence covers ${seatsLicensed} users. Deactivate someone or upgrade the plan to invite more.`,
+              `Your licence covers ${seatsLicensed} ${seatsLicensed === 1 ? "user" : "users"}. ` +
+              `Deactivate someone or upgrade the plan to invite more.`,
               403);
           }
           const dup = await c.query(

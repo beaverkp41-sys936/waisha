@@ -12,10 +12,11 @@ type Screen = { href: string; label: string; roles?: string[]; keys?: string[] }
  * Which desk a seat may open, keyed on what each route actually enforces.
  *
  * The panel used to show every link to everybody and let the API answer 403, which
- * reads to a new analyst as "the panel is broken". Two of the gates are still role
- * checks from before the permission matrix (tenants, plans, notices, directory), so
- * those keys are matched here as roles — a link conditioned on a permission the route
- * never reads would promise a door that then shuts.
+ * reads to a new analyst as "the panel is broken". Three of the gates are still role
+ * checks from before the permission matrix (plans, notices, directory), so those keys
+ * are matched here as roles — a link conditioned on a permission the route never reads
+ * would promise a door that then shuts. Tenants carries both: selling a licence is a
+ * licence role, shutting a company is control.tenants.manage.
  */
 const SCREENS: Screen[] = [
   { href: "/control", label: "Pricing", roles: LICENCE },
@@ -23,7 +24,7 @@ const SCREENS: Screen[] = [
   { href: "/control/subscriptions", label: "Customers",
     keys: ["control.subscriptions.view", "control.analytics.view"] },
   { href: "/control/payments", label: "Money", keys: ["control.subscriptions.view"] },
-  { href: "/control/tenants", label: "Tenants", roles: LICENCE },
+  { href: "/control/tenants", label: "Tenants", roles: LICENCE, keys: ["control.tenants.manage"] },
   { href: "/control/directory", label: "Directory", roles: LICENCE },
   { href: "/control/recommendations", label: "Inbox",
     keys: ["control.recommendations.view", "control.recommendations.manage"] },

@@ -12,6 +12,10 @@ import {
 } from "../security/totp.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
 import { writeAudit } from "../audit/audit.js";
+// The cycle with control-analytics.routes.ts (which imports requireControl from here) is
+// safe: both bindings are hoisted function declarations and neither is touched during
+// module evaluation, only inside a handler long after both files have loaded.
+import { controlCan } from "./control-analytics.routes.js";
 
 const CONTROL_COOKIE = "waisha_control";
 const isProd = process.env.NODE_ENV === "production";
@@ -272,9 +276,15 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
     return reply.send({ ok: true });
   });
 
-  // ---------- Tenants: list (Control; super_admin / billing_admin) ----------
+  // ---------- Tenants: list ----------
+  // Selling a licence (the licence roles) and shutting a company (control.tenants.manage,
+  // which 078 gives compliance_officer as well) are different duties, but the second one
+  // is unworkable without the list: a register you cannot read is a decision you cannot
+  // make. Read is widened to the managing seat; the activate route below stays licence-only.
   app.get("/control/tenants", { preHandler: [requireControl] }, async (req: any) => {
-    if (!hasLicenceRole(req.control.roles ?? [])) throw new ApiError("FORBIDDEN", "Not permitted", 403);
+    if (!hasLicenceRole(req.control.roles ?? []) && !(await controlCan(req, "control.tenants.manage"))) {
+      throw new ApiError("FORBIDDEN", "Not permitted", 403);
+    }
     const q = ((req.query as any)?.q ?? "").toString().trim();
     const { rows } = await pool.query(
       "select * from platform_auth.list_tenants_for_control($1)", [q || null]);

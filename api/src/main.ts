@@ -6,10 +6,12 @@ import multipart from "@fastify/multipart";
 import { env } from "./env.js";
 import { enforceRateLimit } from "./security/ratelimit.js";
 import { requireStaffAudience } from "./security/audience.js";
+import { requireOperationalTenant } from "./security/tenant-state.js";
 import { registerErrorHandling } from "./plugins/errors.js";
 import { authRoutes } from "./routes/auth.routes.js";
 import { contentRoutes } from "./routes/content.routes.js";
 import { controlRoutes } from "./routes/control.routes.js";
+import { controlTenantsRoutes } from "./routes/control-tenants.routes.js";
 import { controlAnalyticsRoutes } from "./routes/control-analytics.routes.js";
 import { controlRevenueRoutes } from "./routes/control-revenue.routes.js";
 import { controlStaffRoutes } from "./routes/control-staff.routes.js";
@@ -57,6 +59,7 @@ import { seekerRoutes } from "./routes/seeker.routes.js";
 import { directoryRoutes } from "./routes/directory.routes.js";
 import { internalRoutes } from "./routes/internal.routes.js";
 import { startBookingTimerLoop } from "./util/booking-timer.js";
+import { startTenantPolicyLoop } from "./util/tenant-policy.js";
 
 async function main() {
   const app = Fastify({
@@ -87,10 +90,16 @@ async function main() {
   // plugin inherits it.
   app.addHook("preHandler", requireStaffAudience);
 
+  // A blocked company stops being served, mid-token. Revoking the refresh sessions is
+  // what a block does to the seat, but an access token is valid for 15 minutes from
+  // issue and nothing else consults the database about it — this closes that window.
+  app.addHook("preHandler", requireOperationalTenant);
+
   app.get("/api/v1/health", async () => ({ status: "ok", time: new Date().toISOString() }));
   await app.register(authRoutes, { prefix: "/api/v1" });
   await app.register(contentRoutes, { prefix: "/api/v1" });
   await app.register(controlRoutes, { prefix: "/api/v1" });
+  await app.register(controlTenantsRoutes, { prefix: "/api/v1" });
   await app.register(controlAnalyticsRoutes, { prefix: "/api/v1" });
   await app.register(controlRevenueRoutes, { prefix: "/api/v1" });
   await app.register(controlStaffRoutes, { prefix: "/api/v1" });
@@ -139,6 +148,7 @@ async function main() {
   await app.register(internalRoutes, { prefix: "/api/v1" });
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
   startBookingTimerLoop(app.log);
+  startTenantPolicyLoop(app.log);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

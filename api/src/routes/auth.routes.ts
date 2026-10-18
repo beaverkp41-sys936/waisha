@@ -10,6 +10,7 @@ import { passwordSchema, pwnedCount } from "../security/password.js";
 import { validateTin } from "../security/tin.js";
 import { generateOtp, hashOtp, maskPhone, maskEmail, OTP_TTL_MINUTES, OTP_RESEND_SECONDS } from "../security/otp.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
+import { blockedMessage, tenantBlockState } from "../security/tenant-state.js";
 import { writeAudit } from "../audit/audit.js";
 import { sendMail, sendSms } from "../mail/mail.js";
 import { env, isProd } from "../env.js";
@@ -530,6 +531,24 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
     await withTenant(found.tenant_id, (c) =>
       c.query("update users set failed_login_count=0, lockout_count=0, locked_until=null, last_login_at=now() where id=$1",
         [found.user_id]));
+
+    // The company is shut, so the person is not let in — even though they knew their
+    // password. This sits after the password check on purpose: telling an anonymous
+    // caller that a company is blocked is an existence signal, and the suite that
+    // proves enumeration parity (smoke-security-e2e phase H) compares this path with
+    // the wrong-password path byte for byte. The counters were reset above because a
+    // correct password is a correct password; a block the office imposed must not
+    // stack toward a lockout that outlives the block.
+    const blockState = await tenantBlockState(found.tenant_id);
+    if (blockState) {
+      await withTenant(found.tenant_id, (c) => writeAudit(c, {
+        tenantId: found.tenant_id, actorUserId: found.user_id,
+        ip: req.ip, userAgent: req.headers["user-agent"] ?? null, requestId: req.requestId,
+        entity: "auth", entityId: found.user_id, action: "auth.login_blocked",
+        after: { reason_code: blockState.reason_code, since: blockState.since }
+      }));
+      throw new ApiError("TENANT_BLOCKED", blockedMessage(blockState), 403);
+    }
 
     const roles: string[] = found.roles ?? [];
     const accessToken = await issueSession(reply, req, found.user_id, found.tenant_id, roles[0] ?? "staff", roles);

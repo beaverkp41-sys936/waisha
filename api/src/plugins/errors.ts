@@ -59,6 +59,18 @@ export function registerErrorHandling(app: FastifyInstance) {
                  details: [], request_id: requestId }
       });
     }
+    // Fastify's own request-framing refusals (FST_ERR_CTP_EMPTY_JSON_BODY, an unknown
+    // content-type, a malformed body) arrive carrying their own 4xx, but they used to
+    // fall through to the 500 below: the client was told the server had broken when the
+    // server had in fact rejected the request. The status is already on the error.
+    const fStatus = (err as any).statusCode;
+    if (typeof fStatus === "number" && fStatus >= 400 && fStatus < 500) {
+      return reply.status(fStatus).send({
+        error: { code: code ?? "REQUEST_REFUSED",
+                 message: String(err.message ?? "This request was refused.").slice(0, 200),
+                 details: [], request_id: requestId }
+      });
+    }
     req.log.error(err);
     return reply.status(500).send({
       error: { code: "INTERNAL", message: "An unexpected error occurred", details: [], request_id: requestId }
