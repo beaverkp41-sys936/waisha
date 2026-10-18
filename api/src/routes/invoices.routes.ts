@@ -401,8 +401,8 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
 
         await c.query(
           `update freight_invoices set status = $2, updated_by = $3, updated_at = now()
-           where id = $1 and tenant_id = $3 and deleted_at is null`,
-          [id, body.status, req.user.sub]);
+           where id = $1 and tenant_id = $4 and deleted_at is null`,
+          [id, body.status, req.user.sub, req.user.tid]);
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
           requestId: req.requestId, entity: "freight_invoices", entityId: id,
@@ -442,8 +442,8 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
            body.reference ?? null, body.paidAt ?? null, body.notes ?? null, req.user.sub]);
         await c.query(
           `update freight_invoices set amount_paid = amount_paid + $2, updated_by = $3, updated_at = now()
-           where id = $1 and tenant_id = $3 and deleted_at is null`,
-          [id, body.amount, req.user.sub]);
+           where id = $1 and tenant_id = $4 and deleted_at is null`,
+          [id, body.amount, req.user.sub, req.user.tid]);
 
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,

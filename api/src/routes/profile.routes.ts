@@ -202,7 +202,7 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
            district_freetext=$6, ward=$7, street=$8, postal_address=$9, gps_lat=$10,
            gps_lng=$11, contact_person=$12, phone_encrypted=$13, phone_search=$14,
            email=$15, operating_hours=$16, updated_by=$17, updated_at=now()
-         where id=$1 and tenant_id=$17 and deleted_at is null
+         where id=$1 and tenant_id=$18 and deleted_at is null
          returning id`, [id, body.kind, body.name,
           body.regionId ?? null, body.districtId ?? null,
           body.districtId ? null : (body.wardFreetext ?? null),
@@ -212,7 +212,7 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
           body.contactPerson ?? null,
           body.phone ? encryptField(body.phone) : null,
           body.phone ? searchHash(body.phone) : null,
-          body.email ?? null, body.operatingHours ?? null, req.user.sub]);
+          body.email ?? null, body.operatingHours ?? null, req.user.sub, req.user.tid]);
       if (res.rowCount) {
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
@@ -231,8 +231,8 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
     const r = await withTenant(req.user.tid, async (c) => {
       const res = await c.query(
         `update branches set deleted_at = now(), updated_by = $2
-         where id = $1 and tenant_id = $2 and deleted_at is null`,
-        [id, req.user.sub]);
+         where id = $1 and tenant_id = $3 and deleted_at is null`,
+        [id, req.user.sub, req.user.tid]);
       if (res.rowCount) {
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,

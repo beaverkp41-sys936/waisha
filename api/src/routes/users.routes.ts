@@ -273,24 +273,24 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
         if (body.fullName) {
           await c.query(
             `update users set full_name = $2, updated_by = $3, updated_at = now()
-             where id = $1 and tenant_id = $3 and deleted_at is null`,
-            [id, body.fullName, req.user.sub]);
+             where id = $1 and tenant_id = $4 and deleted_at is null`,
+            [id, body.fullName, req.user.sub, req.user.tid]);
         }
         if ("phone" in body) {
           await c.query(
             `update users set phone_encrypted = $2, phone_search = $3,
                updated_by = $4, updated_at = now()
-             where id = $1 and tenant_id = $4 and deleted_at is null`,
+             where id = $1 and tenant_id = $5 and deleted_at is null`,
             [id,
              body.phone != null ? encryptField(body.phone) : null,
              body.phone != null ? searchHash(body.phone) : null,
-             req.user.sub]);
+             req.user.sub, req.user.tid]);
         }
         if ("jobTitle" in body) {
           await c.query(
             `update users set job_title = $2, updated_by = $3, updated_at = now()
-             where id = $1 and tenant_id = $3 and deleted_at is null`,
-            [id, body.jobTitle ?? null, req.user.sub]);
+             where id = $1 and tenant_id = $4 and deleted_at is null`,
+            [id, body.jobTitle ?? null, req.user.sub, req.user.tid]);
         }
 
         if (body.roleKeys) {
@@ -335,8 +335,8 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
 
         await c.query(
           `update users set status = $2, updated_by = $3, updated_at = now()
-           where id = $1 and tenant_id = $3 and deleted_at is null`,
-          [id, body.status, req.user.sub]);
+           where id = $1 and tenant_id = $4 and deleted_at is null`,
+          [id, body.status, req.user.sub, req.user.tid]);
         if (body.status === "deactivated") {
           await c.query(
             `update sessions set revoked_at = now(), revoked_reason = 'deactivated'

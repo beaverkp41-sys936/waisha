@@ -187,7 +187,7 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
            road_class=$15, risk_notes=$16, seasonal_notes=$17,
            rate_per_km=$18, rate_per_tonne=$19, rate_per_trip=$20,
            fuel_surcharge_pct=$21, updated_by=$22, updated_at=now()
-         where id=$1 and tenant_id=$22 and deleted_at is null
+         where id=$1 and tenant_id=$23 and deleted_at is null
          returning id`,
         [id, body.name, body.corridor ?? null,
          body.originRegionId ?? null, body.originDistrictId ?? null,
@@ -198,7 +198,7 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
          body.expectedDurationHours ?? null, body.roadClass ?? null,
          body.riskNotes ?? null, body.seasonalNotes ?? null,
          body.ratePerKm ?? null, body.ratePerTonne ?? null, body.ratePerTrip ?? null,
-         body.fuelSurchargePct ?? null, req.user.sub]);
+         body.fuelSurchargePct ?? null, req.user.sub, req.user.tid]);
       if (res.rowCount) {
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
@@ -218,8 +218,8 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
     const r = await withTenant(req.user.tid, async (c) => {
       const res = await c.query(
         `update routes set deleted_at = now(), updated_by = $2
-         where id = $1 and tenant_id = $2 and deleted_at is null`,
-        [id, req.user.sub]);
+         where id = $1 and tenant_id = $3 and deleted_at is null`,
+        [id, req.user.sub, req.user.tid]);
       if (res.rowCount) {
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
