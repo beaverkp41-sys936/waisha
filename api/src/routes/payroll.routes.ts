@@ -69,6 +69,13 @@ const RUN_SELECT_SQL = `r.id, r.period::text as period, r.status, r.currency,
   (select count(*)::int from payroll_lines l where l.run_id = r.id
      and l.adjustment_amount <> 0) as lines_adjusted`;
 
+// The shared FROM/JOIN prefix, concatenated rather than interpolated: both halves
+// are constants typed in this file, so the statement a .query() receives is static
+// and the security scanner can prove it.
+const RUN_FROM_SQL = " from payroll_runs r" +
+  " left join users ui on ui.id = r.issued_by" +
+  " left join users uc on uc.id = r.cancelled_by";
+
 /**
  * The whole point of the module in one statement: for every active person with a
  * salary on file, what the register and the leave queue say about each working day
@@ -228,12 +235,9 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
   app.get("/payroll/runs", { preHandler: [requireAuth, requirePermission("payroll.view")] },
     async (req: any) => {
       const { rows } = await withTenant(req.user.tid, (c) => c.query(
-        `select ${RUN_SELECT_SQL}
-           from payroll_runs r
-           left join users ui on ui.id = r.issued_by
-           left join users uc on uc.id = r.cancelled_by
-          where r.tenant_id = $1 and r.deleted_at is null
-          order by r.period desc limit 60`,
+        "select " + RUN_SELECT_SQL + RUN_FROM_SQL +
+        " where r.tenant_id = $1 and r.deleted_at is null" +
+        " order by r.period desc limit 60",
         [req.user.tid]));
       return { runs: rows };
     });
@@ -316,10 +320,9 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
           [id, req.user.tid, body.period, bounds.workingDays, req.user.sub]);
         const lines = await c.query(BUILD_LINES_SQL,
           [req.user.tid, bounds.from, bounds.upto, bounds.workingDays, id]);
-        const saved = await c.query(`select ${RUN_SELECT_SQL} from payroll_runs r
-          left join users ui on ui.id = r.issued_by
-          left join users uc on uc.id = r.cancelled_by
-          where r.id = $1 and r.tenant_id = $2`, [id, req.user.tid]);
+        const saved = await c.query(
+          "select " + RUN_SELECT_SQL + RUN_FROM_SQL +
+          " where r.id = $1 and r.tenant_id = $2", [id, req.user.tid]);
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
           requestId: req.requestId, entity: "payroll_runs", entityId: id,
@@ -341,10 +344,9 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
     async (req: any) => {
       const runId = z.string().uuid().parse((req.params as { id: string }).id);
       return withTenant(req.user.tid, async (c) => {
-        const run = await c.query(`select ${RUN_SELECT_SQL} from payroll_runs r
-          left join users ui on ui.id = r.issued_by
-          left join users uc on uc.id = r.cancelled_by
-          where r.id = $1 and r.tenant_id = $2 and r.deleted_at is null`,
+        const run = await c.query(
+          "select " + RUN_SELECT_SQL + RUN_FROM_SQL +
+          " where r.id = $1 and r.tenant_id = $2 and r.deleted_at is null",
           [runId, req.user.tid]);
         if (!run.rowCount) throw new ApiError("NOT_FOUND", "Payroll run not found", 404);
         const lines = await c.query(
@@ -391,10 +393,9 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
         const lines = await c.query(BUILD_LINES_SQL,
           [req.user.tid, bounds.from, bounds.upto,
            Number(run.rows[0].working_days), runId]);
-        const saved = await c.query(`select ${RUN_SELECT_SQL} from payroll_runs r
-          left join users ui on ui.id = r.issued_by
-          left join users uc on uc.id = r.cancelled_by
-          where r.id = $1 and r.tenant_id = $2`, [runId, req.user.tid]);
+        const saved = await c.query(
+          "select " + RUN_SELECT_SQL + RUN_FROM_SQL +
+          " where r.id = $1 and r.tenant_id = $2", [runId, req.user.tid]);
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
           requestId: req.requestId, entity: "payroll_runs", entityId: runId,
@@ -543,10 +544,9 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
             where id = $1 and tenant_id = $5 and deleted_at is null and status = 'draft'`,
           [runId, req.user.sub, body.paymentReference ?? null, body.paidOn ?? null,
            req.user.tid]);
-        const saved = await c.query(`select ${RUN_SELECT_SQL} from payroll_runs r
-          left join users ui on ui.id = r.issued_by
-          left join users uc on uc.id = r.cancelled_by
-          where r.id = $1 and r.tenant_id = $2`, [runId, req.user.tid]);
+        const saved = await c.query(
+          "select " + RUN_SELECT_SQL + RUN_FROM_SQL +
+          " where r.id = $1 and r.tenant_id = $2", [runId, req.user.tid]);
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
           requestId: req.requestId, entity: "payroll_runs", entityId: runId,
@@ -624,10 +624,9 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
                   updated_by = $2, updated_at = now()
             where id = $1 and tenant_id = $6 and deleted_at is null`,
           [runId, req.user.sub, reference, paidOn, note, req.user.tid]);
-        const saved = await c.query(`select ${RUN_SELECT_SQL} from payroll_runs r
-          left join users ui on ui.id = r.issued_by
-          left join users uc on uc.id = r.cancelled_by
-          where r.id = $1 and r.tenant_id = $2`, [runId, req.user.tid]);
+        const saved = await c.query(
+          "select " + RUN_SELECT_SQL + RUN_FROM_SQL +
+          " where r.id = $1 and r.tenant_id = $2", [runId, req.user.tid]);
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
           requestId: req.requestId, entity: "payroll_runs", entityId: runId,
