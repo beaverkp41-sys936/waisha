@@ -11,7 +11,8 @@ const NAV = [
   { href: "/portal", label: "Overview" },
   { href: "/portal/files", label: "My files" },
   { href: "/portal/invoices", label: "Invoices" },
-  { href: "/portal/documents", label: "Documents" }
+  { href: "/portal/documents", label: "Documents" },
+  { href: "/portal/recommendations", label: "Recommendations" }
 ];
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {

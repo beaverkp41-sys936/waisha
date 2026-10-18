@@ -1,8 +1,8 @@
 import {
   BookOpenText, Boxes, Building2, Calculator, CalendarCheck, CalendarClock, ChartColumn,
   ClipboardCheck, ContactRound, FileCheck2, FileSignature, Fuel, IdCard, KeyRound, LayoutDashboard,
-  MapPinned, Megaphone, MessageSquare, Navigation, Package, Receipt, ReceiptText, Route, Settings,
-  ShieldCheck, TriangleAlert, Truck, Users, UsersRound, Wallet, Workflow
+  Lightbulb, MapPinned, Megaphone, MessageSquare, Navigation, Package, Receipt, ReceiptText, Route,
+  Settings, ShieldCheck, TriangleAlert, Truck, Users, UsersRound, Wallet, Workflow
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -29,6 +29,7 @@ export const TRANSPORTER_NAV: NavItem[] = [
   { href: "/app/compliance", label: "Compliance", icon: ShieldCheck },
   { href: "/app/reports", label: "Reports", icon: ChartColumn },
   { href: "/app/staff", label: "Staff", icon: IdCard },
+  { href: "/app/recommendations", label: "Recommendations", icon: Lightbulb },
   { href: "/app/account", label: "Account", icon: Settings }
 ];
 
@@ -44,7 +45,8 @@ export const CFA_NAV: NavItem[] = [
   { href: "/app/cfa/duty", label: "Duty calculator", icon: Calculator },
   { href: "/app/cfa/messages", label: "Messages", icon: MessageSquare },
   { href: "/app/cfa/calendar", label: "ETA calendar", icon: CalendarClock },
-  { href: "/app/cfa/compliance", label: "Compliance", icon: ShieldCheck }
+  { href: "/app/cfa/compliance", label: "Compliance", icon: ShieldCheck },
+  { href: "/app/recommendations", label: "Recommendations", icon: Lightbulb }
 ];
 
 export const OFFICE_NAV: NavItem[] = [
@@ -53,5 +55,6 @@ export const OFFICE_NAV: NavItem[] = [
   { href: "/app/office/employees", label: "Employees", icon: UsersRound },
   { href: "/app/office/procedures", label: "Procedural flows", icon: Workflow },
   { href: "/app/office/reports", label: "Trainee reports", icon: FileCheck2 },
-  { href: "/app/office/costs", label: "Office costs", icon: Wallet }
+  { href: "/app/office/costs", label: "Office costs", icon: Wallet },
+  { href: "/app/recommendations", label: "Recommendations", icon: Lightbulb }
 ];

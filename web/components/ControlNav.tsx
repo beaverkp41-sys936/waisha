@@ -25,6 +25,8 @@ const SCREENS: Screen[] = [
   { href: "/control/payments", label: "Money", keys: ["control.subscriptions.view"] },
   { href: "/control/tenants", label: "Tenants", roles: LICENCE },
   { href: "/control/directory", label: "Directory", roles: LICENCE },
+  { href: "/control/recommendations", label: "Inbox",
+    keys: ["control.recommendations.view", "control.recommendations.manage"] },
   { href: "/control/staff", label: "Staff", keys: ["control.staff.view", "control.staff.manage"] },
   { href: "/control/system", label: "System", keys: ["control.system.view"] },
   { href: "/control/announcements", label: "Notices", roles: LICENCE }

@@ -12,6 +12,7 @@ const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 const NAV = [
   { href: "/find", label: "Search" },
   { href: "/find/history", label: "My searches" },
+  { href: "/find/recommendations", label: "Recommendations" },
   { href: "/find/account", label: "Account" }
 ];
 
