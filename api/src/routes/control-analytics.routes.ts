@@ -89,7 +89,8 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       "control.plans.manage", "control.content.manage", "control.staff.manage",
       "control.staff.view", "control.subscriptions.view", "control.system.view",
       "control.system.manage", "control.recommendations.view",
-      "control.recommendations.manage", "control.impersonate"];
+      "control.recommendations.manage", "control.impersonate",
+      "control.departments.view", "control.departments.manage"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });
 
