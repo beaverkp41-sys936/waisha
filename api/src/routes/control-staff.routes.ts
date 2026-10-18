@@ -543,6 +543,9 @@ export async function controlStaffRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- end their sessions (lost phone, suspicion, end of shift) ----------
   app.post("/control/staff/:id/sessions/revoke", { preHandler: [requireControl] }, async (req: any) => {
+    // One click ends every session a seat holds. A scripted or bored control seat must not
+    // be able to sweep the roster, so the door is capped per signer, not per IP.
+    await enforceRateLimit(`control-revoke:uid:${req.control.user_id}`, 20, 300);
     await requireStaffManage(req);
     const id = SEAT.safeParse(req.params.id);
     if (!id.success) throw new ApiError("NOT_FOUND", "That platform seat does not exist.", 404);

@@ -5,6 +5,7 @@ import { ApiError } from "../util/errors.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { checkPermission, requirePermission } from "../security/permissions.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
+import { webAddress } from "../security/url.js";
 import { writeAudit } from "../audit/audit.js";
 import { requireControl, hasLicenceRole } from "./control.routes.js";
 // One translation table for every reason the 061 meter emits, shared with the claim
@@ -60,7 +61,7 @@ const listingSchema = z.object({
   servicesOffered: z.string().max(600).nullish(),
   corridorsServed: z.string().max(600).nullish(),
   homeBase: z.string().trim().max(200).nullish(),
-  website: z.string().trim().max(300).nullish(),
+  website: webAddress().nullish(),
   fleetSizeDeclared: z.number().int().min(0).max(20000).nullish(),
   yearEstablished: z.number().int().min(1900).max(2100).nullish(),
   contactName: z.string().trim().min(2).max(120),

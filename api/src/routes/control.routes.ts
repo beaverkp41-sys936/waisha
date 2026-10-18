@@ -95,10 +95,19 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- Step 2a: TOTP enrollment (forced when totpEnabled=false) ----------
   app.post("/control/auth/totp/setup", async (req: any, reply) => {
+    await enforceRateLimit(`control-totpsetup:ip:${req.ip}`, 10, 900);
     const { challengeToken } = z.object({ challengeToken: z.string().min(10) }).parse(req.body);
     const s = await pool.query("select platform_auth.get_control_session($1) as s", [sha256(challengeToken)]);
     const sess = s.rows[0]?.s;
     if (!sess || new Date(sess.expires_at) < new Date()) throw new ApiError("TOKEN_EXPIRED", "Challenge expired - sign in again", 401);
+
+    // Counted per seat as well, because every call here overwrites
+    // totp_secret_encrypted: an attacker who can reach this door repeatedly does not
+    // need to read the secret, they only need to keep replacing it, and the legitimate
+    // owner finds an authenticator that no longer matches. The user id comes from the
+    // resolved session, never from the body, so the bucket cannot be farmed by rotating
+    // the challenge token.
+    await enforceRateLimit(`control-totpsetup:uid:${sess.user_id}`, 4, 900);
 
     const secret = generateTotpSecret();
     await withTenant(sess.tenant_id, async (c) => {
@@ -217,6 +226,11 @@ export async function controlRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- Change own password (spec 20; retires bootstrap credentials) ----------
   app.post("/control/auth/change-password", { preHandler: [requireControl] }, async (req: any, reply) => {
+    // A control cookie is not proof of the password, so this is a second oracle over it —
+    // and unlike sign-in, a wrong answer here feeds no failed_login_count or locked_until,
+    // because the account lockout belongs to the login path and a typo in one's own current
+    // password must not shut the panel. The ceiling therefore has to live here.
+    await enforceRateLimit(`control-chpw:uid:${req.control.user_id}`, 5, 900);
     const { currentPassword, newPassword } = z.object({
       currentPassword: z.string().min(1),
       newPassword: passwordSchema

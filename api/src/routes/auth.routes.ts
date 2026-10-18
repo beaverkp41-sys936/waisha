@@ -9,7 +9,7 @@ import { issueAccessToken, verifyAccessToken } from "../security/jwt.js";
 import { passwordSchema, pwnedCount } from "../security/password.js";
 import { validateTin } from "../security/tin.js";
 import { generateOtp, hashOtp, maskPhone, maskEmail, OTP_TTL_MINUTES, OTP_RESEND_SECONDS } from "../security/otp.js";
-import { enforceRateLimit } from "../security/ratelimit.js";
+import { enforceRateLimit, identityBucket } from "../security/ratelimit.js";
 import { blockedMessage, tenantBlockState } from "../security/tenant-state.js";
 import { writeAudit } from "../audit/audit.js";
 import { sendMail, sendSms } from "../mail/mail.js";
@@ -650,6 +650,10 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
   app.post("/auth/forgot-password", async (req: any, reply) => {
     await enforceRateLimit(`forgot:ip:${req.ip}`, 5, 3600);
     const { email } = z.object({ email: emailSchema }).parse(req.body);
+    // The same address again on a different connection. An IP-only ceiling is worth
+    // nothing to an attacker with a handful of source addresses, and this route mints a
+    // live 30-minute token and sends an email to somebody who did not ask for either.
+    await enforceRateLimit(identityBucket("forgot:mail", email), 5, 3600);
 
     const u = await pool.query(
       "select platform_auth.lookup_active_user_by_email($1) as u", [searchHash(email)]);
@@ -676,6 +680,10 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
     const { token, password } = z.object({
       token: z.string().min(10), password: passwordSchema
     }).parse(req.body);
+    // Keyed on the token itself. Guessing a 32-byte reset token is not a solvable budget
+    // question, but a leaked link is: this is the door that revokes every session and
+    // replaces the password, so it must not also be the door that guesses the old one.
+    await enforceRateLimit(identityBucket("reset:tok", token), 10, 3600);
     await checkPwned(password);
 
     const r = await pool.query("select platform_auth.consume_reset_token($1) as r", [sha256(token)]);

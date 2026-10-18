@@ -7,6 +7,7 @@ import { encryptField, searchHash } from "../util/crypto.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { writeAudit } from "../audit/audit.js";
 import { requirePermission } from "../security/permissions.js";
+import { httpUrl } from "../security/url.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -86,7 +87,7 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
       servicesOffered: z.string().max(500).optional(),
       corridorsServed: z.string().max(300).optional(),
       description: z.string().max(2000).optional(),
-      website: z.string().url().max(200).optional(),
+      website: httpUrl().optional(),
       companyCode: z.string().trim().regex(/^[A-Za-z]{3}$/, "Company code must be exactly 3 letters").nullable().optional(),
       payBankName: z.string().max(120).nullable().optional(),
       payBankAccount: z.string().max(60).nullable().optional(),

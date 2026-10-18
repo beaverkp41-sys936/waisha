@@ -7,6 +7,7 @@ import { encryptField, searchHash, sha256, randomToken } from "../util/crypto.js
 import { hashPassword } from "../security/argon2.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { requirePermission } from "../security/permissions.js";
+import { enforceRateLimit } from "../security/ratelimit.js";
 import { writeAudit } from "../audit/audit.js";
 import { sendMail } from "../mail/mail.js";
 import { env } from "../env.js";
@@ -137,6 +138,10 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
   // ---------- Invite (creates the user + role grants + accept token) ----------
   app.post("/users", { preHandler: [requireAuth, requirePermission("users.create")] },
     async (req: any, reply) => {
+      // Each invite mints a live accept link and posts an email. The ceiling is a flood
+      // brake, not an onboarding limit — a director staffing a new office by hand has to
+      // stay well inside it.
+      await enforceRateLimit(`invite:uid:${req.user.sub}`, 40, 3600);
       const body = inviteSchema.parse(req.body);
 
       const licence = await pool.query("select platform_auth.get_licence($1) as l", [req.user.tid]);
@@ -357,6 +362,10 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
   app.post("/users/:id/reinvite", { preHandler: [requireAuth, requirePermission("users.create")] },
     async (req: any, reply) => {
       const { id } = req.params as { id: string };
+      // A reinvite retires every outstanding link for that seat and issues a new one, so
+      // it needs its own count: repeated here is not merely noisy, it invalidates the
+      // link the invitee may be about to click.
+      await enforceRateLimit(`reinvite:uid:${req.user.sub}`, 20, 3600);
 
       let inviteUrl = "";
       await withTenant(req.user.tid, async (c) => {

@@ -234,12 +234,16 @@ export async function boardRoutes(app: FastifyInstance, _opts: unknown) {
       reply.hijack();
       res = reply.raw;
       // hijack() leaves the Fastify reply pipeline, so the CORS headers the
-      // cors plugin already decided on must be written onto the raw socket.
+      // cors plugin already decided on must be written onto the raw socket — and so must
+      // anything helmet decided, because helmet answers on onRequest and its work is
+      // thrown away with the rest of the reply object. Without nosniff this is the one
+      // response in the API that reaches a browser with no content-type guard at all.
       const sseHeaders: Record<string, string> = {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
-        "X-Accel-Buffering": "no"
+        "X-Accel-Buffering": "no",
+        "X-Content-Type-Options": "nosniff"
       };
       for (const [k, v] of Object.entries(reply.getHeaders())) {
         if (/^access-control-/i.test(k) && v !== undefined) sseHeaders[k] = String(v);
