@@ -519,8 +519,9 @@ export default function ControlStaffProfilePage() {
         {card(
           "Work log",
           "The last forty things this seat did, with the request id so a strand can be followed into the forensic reader. Payloads are not shown here — that is control.audit.view.",
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
               <thead>
                 <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
                   <th className="p-8">When</th>
@@ -550,8 +551,14 @@ export default function ControlStaffProfilePage() {
                   </td></tr>
                 )}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+            <Link href={`/control/forensics?actor=${p.user_id}`}
+              className="mt-14 inline-block text-[11px] font-semibold uppercase tracking-[0.12em]"
+              style={{ color: "var(--adm-accent)" }}>
+              Open this seat in the forensic desk →
+            </Link>
+          </>
         )}
 
         {/* ---------- the picture and the name ---------- */}

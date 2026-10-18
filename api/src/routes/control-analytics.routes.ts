@@ -260,4 +260,28 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
         [q.days]);
       return rows.map(r => ({ ...r, last_seen: new Date(r.last_seen).toISOString() }));
     });
+
+  // The register of people behind the trail (071). A forensic read is asked backwards:
+  // not "what happened" but "who touched this, and how far did they reach" — and 066's
+  // reader cannot answer it, because its only actor filter is a uuid the operator would
+  // have to already possess. Counts and clocks only; no payload, no address, no PII.
+  app.get("/control/audit/actors",
+    { preHandler: [requireControl] }, async (req: any) => {
+      await requireControlPermission(req, AUDIT);
+      await enforceRateLimit(`audit-actors:uid:${req.control.user_id}`, 60, 60);
+      const q = z.object({
+        tenantId: z.string().uuid().optional(),
+        days: z.coerce.number().int().min(1).max(730).default(30),
+        limit: z.coerce.number().int().min(1).max(500).default(100)
+      }).parse(req.query ?? {});
+      const { rows } = await pool.query(
+        `select * from platform_auth.list_audit_actors_for_control(
+           $1, now() - make_interval(days => $2), null, $3)`,
+        [q.tenantId ?? null, q.days, q.limit]);
+      return rows.map(r => ({
+        ...r,
+        first_seen: new Date(r.first_seen).toISOString(),
+        last_seen: new Date(r.last_seen).toISOString()
+      }));
+    });
 }
