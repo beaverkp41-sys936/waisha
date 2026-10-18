@@ -53,11 +53,15 @@ async function main() {
      order by c.relname`)).rows;
 
   let leaks = 0, denied = 0, checked = 0, rlsOff: string[] = [];
-  // Hard deletes live in exactly eight places (grep 'delete from' in api/src):
-  // invoices.items rewrite, quotations lines rewrite, employees task purge,
-  // trips log edit, routes checkpoints edit, trainee report sign-off rework, and
-  // the directory region set, which 061 rewrites whole on every save.
-  const DELETE_ALLOWED = new Set(["freight_invoice_items", "quotation_items", "office_tasks", "trip_checkpoint_logs", "route_checkpoints", "office_task_step_checks", "trainee_report_signoffs", "directory_listing_regions"]);
+  // Hard deletes live in exactly these places (grep 'delete from' in api/src), and every
+  // one of them is a child set that a rewrite replaces or a draft that never became a
+  // record: invoices.items, quotations lines, employees task purge, trips log edit,
+  // routes checkpoints edit, trainee report sign-off rework, the directory region set
+  // (061 rewrites it whole on save), a draft debit note's lines and the draft note itself
+  // (074, only a note that was never issued), a draft payroll run's lines when it is
+  // rebuilt (072), and a route's VIA list, which the builder rewrites whole on save (075).
+  const DELETE_ALLOWED = new Set(["freight_invoice_items", "quotation_items", "office_tasks", "trip_checkpoint_logs", "route_checkpoints", "office_task_step_checks", "trainee_report_signoffs", "directory_listing_regions",
+    "debit_note_items", "debit_notes", "payroll_lines", "route_stops"]);
   await app.query(`select set_config('app.tenant_id', $1, false)`, [PROBE]);
 
   for (const { t, rls } of tables) {

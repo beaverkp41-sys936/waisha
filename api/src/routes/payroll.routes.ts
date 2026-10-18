@@ -389,7 +389,8 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
             "Only a draft is rebuilt. An issued run keeps the figures it was issued with.", 409);
         }
         const bounds = await periodBounds(c, req.user.tid, run.rows[0].period);
-        await c.query("delete from payroll_lines where run_id = $1", [runId]);
+        await c.query("delete from payroll_lines where run_id = $1 and tenant_id = $2",
+          [runId, req.user.tid]);
         const lines = await c.query(BUILD_LINES_SQL,
           [req.user.tid, bounds.from, bounds.upto,
            Number(run.rows[0].working_days), runId]);
