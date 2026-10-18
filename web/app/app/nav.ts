@@ -1,6 +1,6 @@
 import {
   BookOpenText, Boxes, Building2, Calculator, CalendarCheck, CalendarClock, ChartColumn,
-  ClipboardCheck, ContactRound, FileCheck2, FileSignature, Fuel, Globe, IdCard, KeyRound, LayoutDashboard,
+  ClipboardCheck, ContactRound, FileCheck2, FilePlus2, FileSignature, Fuel, Globe, IdCard, KeyRound, LayoutDashboard,
   Lightbulb, MapPinned, Megaphone, MessageSquare, Navigation, Package, Receipt, ReceiptText, Route,
   Settings, ShieldCheck, TriangleAlert, Truck, Users, UsersRound, Wallet, Workflow
 } from "lucide-react";
@@ -39,6 +39,7 @@ export const CFA_NAV: NavItem[] = [
   { href: "/app/cfa/cargo", label: "Cargo files", icon: BookOpenText },
   { href: "/app/cfa/jobs", label: "Job pipeline", icon: ClipboardCheck },
   { href: "/app/cfa/invoices", label: "Invoices", icon: Receipt },
+  { href: "/app/cfa/debitnotes", label: "Debit notes", icon: FilePlus2 },
   { href: "/app/cfa/proforma", label: "Proforma & quotes", icon: ReceiptText },
   { href: "/app/cfa/consolidation", label: "Consolidation", icon: Boxes },
   { href: "/app/cfa/ledger", label: "Ledger", icon: ChartColumn },

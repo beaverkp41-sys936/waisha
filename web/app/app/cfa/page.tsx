@@ -23,6 +23,12 @@ const MODULES = [
     plan: "Business"
   },
   {
+    name: "Debit Notes",
+    href: "/app/cfa/debitnotes",
+    description: "Raise charges after the bill was written — demurrage, re-worked entries, extra handling — on your letterhead with the reason printed on the note. Issued once, then frozen; cancelled only with a name on the reason.",
+    plan: "Business"
+  },
+  {
     name: "Proforma & Quotations",
     href: "/app/cfa/proforma",
     description: "Bill from two advisement files at once — upload the primary proforma and the supporting invoice, cross-check them line by line, edit every charge inline, then issue, convert to an invoice and print on your letterhead.",
