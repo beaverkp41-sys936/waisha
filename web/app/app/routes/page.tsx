@@ -362,25 +362,52 @@ export default function RoutesPage() {
   }
 
   function applyCorridor(c: Corridor) {
-    setStops(prev => {
-      const head = prev[0], tail = prev[prev.length - 1];
-      // A corridor chain runs from the first anchor after the origin to the far
-      // end, which is the destination the user already has as their own tail
-      // stop. So drop only that last anchor — the first one (Kibaha, Morogoro)
-      // is a real VIA — and skip any anchor that repeats an end the user kept.
-      const ends = new Set([head.placeId, tail.placeId].filter(Boolean));
-      const mid: StopRow[] = c.stops.slice(0, -1)
-        .filter(s => !s.placeId || !ends.has(String(s.placeId)))
-        .map(s => ({
-          ...blankStop(),
-          regionId: String(s.regionId),
-          placeId: s.placeId ? String(s.placeId) : "",
-          town: s.placeId ? s.label : ""
-        }));
-      return [head, ...mid, tail];
-    });
+    const a = c.stops;
+    const head = stops[0], tail = stops[stops.length - 1];
+    const idxOfTown = (placeId: string) => a.findIndex(s => s.placeId && String(s.placeId) === placeId);
+    const idxsIn = (regionId: string) => regionId
+      ? a.map((s, i) => (String(s.regionId) === regionId && s.placeId ? i : -1)).filter(i => i >= 0)
+      : [];
+    // An end that carries only a region has no coordinate of its own, so it traces from the
+    // region centroid — for a corridor that ends at Mbamba Bay, 200 km short of the town the
+    // corridor is named for. Such an end adopts the corridor's edge town instead: the origin
+    // the first in its region, the destination the last. An end the operator already pinned or
+    // picked a town for is theirs, never rewritten; the chain is trimmed to the span between
+    // the two ends so it cannot pass the origin on its way to the destination.
+    const openHead = !head.placeId && !head.pin, openTail = !tail.placeId && !tail.pin;
+    const headTowns = idxsIn(head.regionId), tailTowns = idxsIn(tail.regionId);
+    const ownHead = head.placeId ? idxOfTown(head.placeId) : -1;
+    const ownTail = tail.placeId ? idxOfTown(tail.placeId) : -1;
+    let from = ownHead >= 0 ? ownHead
+      : !headTowns.length ? 0
+      : openHead ? headTowns[0] : headTowns[headTowns.length - 1];
+    let to = ownTail >= 0 ? ownTail
+      : !tailTowns.length ? a.length - 1
+      : openTail ? tailTowns[tailTowns.length - 1] : tailTowns[0];
+    if (from > to) { from = 0; to = a.length - 1; }
+    const headAnchor = openHead && from === headTowns[0] ? a[from] : null;
+    const tailAnchor = openTail && to === tailTowns[tailTowns.length - 1] && to !== from ? a[to] : null;
+    const taken = new Set((headAnchor ? [from] : []).concat(tailAnchor ? [to] : []));
+    // An end the operator already chose is not also a VIA: loading a second corridor whose
+    // chain runs through the town the destination already holds would double it.
+    const ownEnds = new Set([head.placeId, tail.placeId].filter(Boolean));
+    const mid: StopRow[] = a.slice(from, to + 1)
+      .filter((s, i) => !taken.has(from + i) && (!s.placeId || !ownEnds.has(String(s.placeId))))
+      .map(s => ({
+        ...blankStop(),
+        regionId: String(s.regionId),
+        placeId: s.placeId ? String(s.placeId) : "",
+        town: s.placeId ? s.label : ""
+      }));
+    const adopt = (row: StopRow, anchor: CorridorStop | null): StopRow =>
+      anchor ? { ...row, placeId: String(anchor.placeId), town: anchor.label } : row;
+    setStops([adopt(head, headAnchor), ...mid, adopt(tail, tailAnchor)]);
+    const named = [headAnchor && `origin ${headAnchor.label}`, tailAnchor && `destination ${tailAnchor.label}`]
+      .filter(Boolean);
+    setNotice(named.length
+      ? `Corridor "${c.name}" loaded — ${c.stops.length} anchors, your ${named.join(" and ")} taken from it. Adjust either end to your own ward or village.`
+      : `Corridor "${c.name}" loaded — ${c.stops.length} anchors between your two ends. Adjust them to your own ward or village.`);
     setForm(f => ({ ...f, corridor: f.corridor || c.name }));
-    setNotice(`Corridor "${c.name}" loaded — ${c.stops.length} anchors. Adjust the ends to your own ward or village.`);
   }
 
   function resetForm() {

@@ -72,11 +72,12 @@ async function main() {
 
   const geo = await owner.query(
     `select id, code, name_en, lat, lng from geo_regions
-      where lower(name_en) like 'dar%' or lower(name_en) like 'mtwara%' or lower(name_en) like 'lindi%'
+      where lower(name_en) like 'dar%' or lower(name_en) like 'mtwara%'
+         or lower(name_en) like 'lindi%' or lower(name_en) like 'ruvuma%'
       order by name_en`);
   const region = (pick: string) => geo.rows.find(r => r.name_en.toLowerCase().includes(pick));
-  const dar = region("dar"), mtwara = region("mtwara"), lindi = region("lindi");
-  if (!dar || !mtwara || !lindi) throw new Error("Regions missing from geo_regions");
+  const dar = region("dar"), mtwara = region("mtwara"), lindi = region("lindi"), ruvuma = region("ruvuma");
+  if (!dar || !mtwara || !lindi || !ruvuma) throw new Error("Regions missing from geo_regions");
 
   const gaz = await owner.query(
     `select count(*)::int as n, count(*) filter (where kind = 'port')::int as ports,
@@ -105,19 +106,20 @@ async function main() {
   try {
     // ---------- Gazetteer search through the API ----------
     const search = await call("/geo/places?q=Mbamb", token);
-    check("the gazetteer answers a partial town search",
+    check("the gazetteer answers a partial town search, filed in the region the town is in",
       search.status === 200 && search.json.some((p: any) => p.name === "Mbamba Bay"
-        && p.region_id === mtwara.id),
+        && p.region_id === ruvuma.id),
       [search.status, search.json?.slice?.(0, 3)]);
-    const byRegion = await call(`/geo/places?regionId=${mtwara.id}&limit=60`, token);
-    check("a region lists its own towns",
+    const byRegion = await call(`/geo/places?regionId=${ruvuma.id}&limit=60`, token);
+    check("Ruvuma lists its own towns, Mbamba Bay among them",
       byRegion.status === 200 && byRegion.json.length > 0
-        && byRegion.json.every((p: any) => p.region_id === mtwara.id),
+        && byRegion.json.every((p: any) => p.region_id === ruvuma.id)
+        && byRegion.json.some((p: any) => p.name === "Mbamba Bay"),
       byRegion.json?.length);
 
     // ---------- Corridor options: the user's exact example ----------
     const corridors = await call(
-      `/geo/corridors?originRegionId=${dar.id}&destRegionId=${mtwara.id}`, token);
+      `/geo/corridors?originRegionId=${dar.id}&destRegionId=${ruvuma.id}`, token);
     const names: string[] = (corridors.json ?? []).map((c: any) => c.name);
     check("Dar -> Mbamba Bay offers two different corridors",
       corridors.status === 200 && corridors.json.length >= 2, names);
@@ -130,8 +132,16 @@ async function main() {
       coastalChain);
     check("the other runs inland through Morogoro, Iringa and Njombe",
       /iringa/i.test(chainOf(inland)) && /makambako|njombe/i.test(chainOf(inland)), chainOf(inland));
+    // The builder's destination adopts this anchor, so it must be a town with its own
+    // coordinate in the corridor's destination region — a centroid here is the bug #174
+    // shipped with, hundreds of km from the lake.
+    const farEnd = (coastal?.stops ?? [])[(coastal?.stops ?? []).length - 1];
+    check("the coastal corridor's far anchor is Mbamba Bay itself, in Ruvuma, with a coordinate",
+      !!farEnd?.placeId && /mbamba/i.test(farEnd.label) && farEnd.regionId === ruvuma.id
+        && Number.isFinite(farEnd.lat) && Math.abs(farEnd.lat + 11.2833) < 0.05
+        && Math.abs(farEnd.lng - 34.7717) < 0.05, farEnd);
     const backwards = await call(
-      `/geo/corridors?originRegionId=${mtwara.id}&destRegionId=${dar.id}`, token);
+      `/geo/corridors?originRegionId=${ruvuma.id}&destRegionId=${dar.id}`, token);
     const backChain = chainOf((backwards.json ?? []).find((c: any) => c.id === coastal?.id));
     check("the same corridor reads back-to-front when the trip is reversed",
       backwards.status === 200 && !!backChain && backChain === chainOf(coastal).split(" > ").reverse().join(" > "),
@@ -145,7 +155,7 @@ async function main() {
         lat: pin.lat, lng: pin.lng },
       { kind: "via", regionId: lindi.id, placeId: town("Kilwa")?.id ?? null, place: "Kivinikoniko storages" },
       { kind: "via", regionId: mtwara.id, placeId: town("Mtwara")?.id ?? null },
-      { kind: "dest", regionId: mtwara.id, placeId: town("Mbamba Bay")?.id ?? null,
+      { kind: "dest", regionId: ruvuma.id, placeId: town("Mbamba Bay")?.id ?? null,
         place: "Mbamba Bay lakeside depot" }
     ];
     const made = await call("/routes", token, post({
@@ -181,7 +191,7 @@ async function main() {
     check("the flat destination text carries the village and the town together",
       detail.json?.dest_text === "Mbamba Bay lakeside depot, Mbamba Bay", detail.json?.dest_text);
     check("the flat origin/destination columns follow the first and last stop",
-      detail.json?.origin_region_id === dar.id && detail.json?.dest_region_id === mtwara.id
+      detail.json?.origin_region_id === dar.id && detail.json?.dest_region_id === ruvuma.id
         && Number(detail.json?.origin_lat) === Number(st[0].lat)
         && Number(detail.json?.dest_lat) === Number(st[3].lat),
       [detail.json?.origin_text, detail.json?.dest_text]);
@@ -242,7 +252,7 @@ async function main() {
       name: FIXTURE + " wild pin",
       stops: [
         { kind: "origin", lat: -65.4063, lng: 37.59521 },
-        { kind: "dest", regionId: mtwara.id, placeId: town("Mbamba Bay")?.id ?? null }
+        { kind: "dest", regionId: ruvuma.id, placeId: town("Mbamba Bay")?.id ?? null }
       ]
     }));
     check("a pin dropped off the mapped world is refused, not routed",
