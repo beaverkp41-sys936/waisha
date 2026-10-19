@@ -618,13 +618,18 @@ const live: [string, string, unknown[]][] = [
        join pg_namespace gn on gn.oid = p.pronamespace
       where gn.nspname = 'public' and p.proname = 'payroll_line_gate'
         and pg_get_functiondef(p.oid) like '%trip_pay_total%::numeric(14,2)::text%'`, []],
-  // A trigger does not need EXECUTE to fire, so these three belong to the application alone —
-  // 073 left the first pair inheriting PUBLIC, and 095 replaces both bodies, so 095 says so.
-  ["the three gates this migration writes are executable by the app role only",
+  // A trigger does not need EXECUTE to fire, so these belong to the application alone.
+  // 073 pinned only its own two and 095 pinned its own three, which left 072's gates and
+  // divisor handing themselves to PUBLIC until 096 swept them — so the check now covers
+  // every function the module owns, by name, and a missing name fails the count.
+  ["every payroll function is executable by the app role and by nobody else",
     `select count(*)::int as n from pg_proc p
        join pg_namespace gn on gn.oid = p.pronamespace
       where gn.nspname = 'public'
-        and p.proname in ('payroll_line_gate','payroll_run_roll_up','trip_pay_gate')
+        and p.proname in ('payroll_derive','payroll_line_gate','payroll_run_gate',
+                          'payroll_run_starts_draft','payroll_run_roll_up',
+                          'period_working_days','trip_pay_accrue','trip_pay_claim',
+                          'trip_pay_settle','trip_pay_gate')
         and has_function_privilege('app_runtime', p.oid, 'execute')
         and not has_function_privilege('public', p.oid, 'execute')`, []],
   ["driver_pay.view / edit exist",

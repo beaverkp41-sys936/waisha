@@ -85,14 +85,50 @@ async function main() {
     leaked.length === 0, leaked.map((l: any) => `${l.obj}:${l.grantee}:${l.privs}`).join(" | "));
 
   // A null proacl means the default EXECUTE-to-PUBLIC applies, so it counts too.
+  // aclexplode hands back PUBLIC as grantee 0, not NULL — a `grantee is null` filter
+  // here silently reports zero leaks while every revoked-from-anon ACL still carries
+  // `=X/postgres`. 096 found 21 that way: the definers-only scope of this check,
+  // widened to every function the app owns.
   const publicRights: any[] = (await oi(
+    `select n.nspname || '.' || p.proname || '(' ||
+            coalesce(pg_get_function_identity_arguments(p.oid), '') || ')' as fn,
+            (select count(*) from pg_trigger t where t.tgfoid = p.oid and not t.tgisinternal) as fires
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = any($1::text[]) and p.prokind = 'f'
+       and pg_get_userbyid(p.proowner) = 'postgres'
+       and (p.proacl is null or exists (select 1 from aclexplode(p.proacl) a
+                                         where a.grantee = 0))`,
+    [APP_SCHEMAS])).rows;
+  check("no app function is executable by PUBLIC — definers and plain trigger gates alike",
+    publicRights.length === 0,
+    publicRights.map((r: any) => `${r.fn} (fires on ${r.fires})`).join(", "));
+
+  // The mirror image: a trigger the API role's own write fires must be one the API role
+  // can execute.  Postgres checks EXECUTE when the trigger is CREATED, not when it runs,
+  // so an unbound guard sits inert for months and then 42501s the first stage that wants
+  // it in a policy or a route (096 found directory_listing_tenant_guard in that state).
+  const unbound: any[] = (await oi(
+    `select distinct p.proname as fn
+     from pg_trigger t
+     join pg_proc p on p.oid = t.tgfoid
+     join pg_class c on c.oid = t.tgrelid
+     join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and not t.tgisinternal
+       and not has_function_privilege('app_runtime', p.oid, 'EXECUTE')
+     order by 1`)).rows;
+  check("app_runtime can execute every function a trigger on an app table fires",
+    unbound.length === 0, unbound.map((r: any) => r.fn).join(", "));
+
+  // And the question a PUBLIC-grant audit cannot answer: can a browser role reach it?
+  const browserFns: any[] = (await oi(
     `select p.oid::regprocedure::text as fn
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-     where n.nspname = any($1::text[]) and p.prosecdef
-       and (p.proacl is null or exists (select 1 from aclexplode(p.proacl) a where a.grantee = 0))`,
+     where n.nspname = any($1::text[]) and p.prokind = 'f'
+       and (has_function_privilege('anon', p.oid, 'EXECUTE')
+            or has_function_privilege('authenticated', p.oid, 'EXECUTE'))`,
     [APP_SCHEMAS])).rows;
-  check("no SECURITY DEFINER function is executable by PUBLIC", publicRights.length === 0,
-    publicRights.map((r: any) => r.fn).join(", "));
+  check("neither browser API role can execute any app function by name",
+    browserFns.length === 0, browserFns.map((r: any) => r.fn).join(", "));
 
   const defLeak: any[] = (await oi(
     `select pg_get_userbyid(d.defaclrole) as for_role,

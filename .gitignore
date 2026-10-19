@@ -9,3 +9,5 @@ coverage/
 *.tsbuildinfo
 desktop.ini
 Thumbs.db
+.qoder/
+.zcode/
