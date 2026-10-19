@@ -16,8 +16,14 @@ const readJson = (res: Response) => res.json().catch(() => null) as Promise<any>
 interface Bounds {
   from: string; to: string; countedUpTo: string; today: string; workingDays: number;
 }
+interface TripPayEntry {
+  entry_id: string; trip_id: string; reference: string | null; driver_id: string;
+  basis: string; rate: string; quantity: string; amount: string;
+  earned_on: string; paid_run_id: string | null;
+}
 interface Charge {
   unpaid_leave_dates: string[]; absence_dates: string[]; unrecorded_dates: string[];
+  trip_pay?: TripPayEntry[]; trip_pay_count?: number; trip_pay_total?: string;
 }
 interface Line {
   id?: string;
@@ -25,7 +31,7 @@ interface Line {
   monthly_salary: string; working_days: number;
   unpaid_leave_days: number; absence_days: number; unrecorded_days: number;
   half_days: number; late_minutes: number; days_paid: number;
-  base_amount: string; deduction_amount: string;
+  base_amount: string; deduction_amount: string; trip_pay_amount: string;
   adjustment_amount?: string; adjustment_label?: string | null;
   net_amount: string; detail?: Charge | null;
   // only on a line that is stored in a run
@@ -33,7 +39,8 @@ interface Line {
   hired_date?: string | null; note?: string | null;
 }
 interface Totals {
-  gross_total: string; deduction_total: string; net_total: string; headcount: number;
+  gross_total: string; deduction_total: string; trip_pay_total: string;
+  net_total: string; headcount: number;
 }
 interface Preview {
   period: string; bounds: Bounds; totals: Totals; lines: Line[];
@@ -42,7 +49,8 @@ interface Preview {
 }
 interface Run {
   id: string; period: string; status: string; currency: string; working_days: number;
-  gross_total: string; deduction_total: string; adjustment_total: string; net_total: string;
+  gross_total: string; deduction_total: string; adjustment_total: string;
+  trip_pay_total: string; net_total: string;
   headcount: number; payment_reference: string | null; paid_on: string | null; note: string | null;
   issued_at: string | null; issued_by_name: string | null;
   cancelled_at: string | null; cancelled_by_name: string | null; cancel_reason: string | null;
@@ -59,7 +67,7 @@ interface Slip {
   department: string | null; monthly_salary: string; working_days: number;
   unpaid_leave_days: number; absence_days: number; unrecorded_days: number;
   half_days: number; late_minutes: number; days_paid: number;
-  base_amount: string; deduction_amount: string;
+  base_amount: string; deduction_amount: string; trip_pay_amount: string;
   adjustment_amount: string; adjustment_label: string | null;
   net_amount: string; detail: Charge | null; note: string | null;
   employment_type: string; hired_date: string | null;
@@ -69,18 +77,34 @@ interface RegisterRow {
   run_id: string; period: string; status: string; monthly_salary: string;
   days_paid: number; working_days: number; unpaid_leave_days: number; absence_days: number;
   unrecorded_days: number; base_amount: string; deduction_amount: string;
-  adjustment_amount: string; adjustment_label: string | null; net_amount: string;
+  trip_pay_amount: string; adjustment_amount: string; adjustment_label: string | null;
+  net_amount: string;
   paid_on: string | null; payment_reference: string | null;
 }
 interface Register {
   window: { from: string | null; to: string | null };
-  totals: { people: number; net: string; base: string; deductions: string; adjustments: string };
+  totals: { people: number; net: string; base: string; trip_pay: string; deductions: string; adjustments: string };
   rows: RegisterRow[];
   employees: {
     employee_id: string; full_name: string; job_title: string | null; department: string | null;
     months: number; days_paid: number; periods: string[];
-    net_total: string; base_total: string; deduction_total: string; adjustment_total: string;
+    net_total: string; base_total: string; trip_pay_total: string;
+    deduction_total: string; adjustment_total: string;
   }[];
+}
+/** What the trip register says about a run right now, against what the run was stamped with. */
+interface TripPayPanel {
+  run: { run_id: string; period: string; status: string; run_trip_pay_total: string } | null;
+  lines: {
+    line_id: string; employee_id: string; employee_name: string;
+    stored_amount: string; current_amount: string; trips: number;
+    entries: TripPayEntry[]; drift: boolean;
+  }[];
+  totals: {
+    stored: string; current: string; drift: string;
+    company_waiting: { entries: number; total: string; unlinked: number };
+  };
+  lines_out_of_date: number;
 }
 
 const TABS = [
@@ -100,6 +124,11 @@ const STATUS_COLORS: Record<string, string> = {
 };
 const EMPLOYMENT_LABELS: Record<string, string> = {
   permanent: "Permanent", fixed_term: "Fixed-term", intern: "Trainee"
+};
+/** The pay-basis keys 094 seeds, shortened for a payslip column that has room for two words. */
+const BASIS_SHORT: Record<string, string> = {
+  per_trip: "per trip", per_km: "per km", per_tonne: "per tonne",
+  percent_of_freight: "percent of freight", salary_only: "salary only"
 };
 
 const localToday = () => {
@@ -151,6 +180,7 @@ export default function OfficePayrollPage() {
   const [issueForm, setIssueForm] = useState({ paymentReference: "", paidOn: "" });
   const [book, setBook] = useState({ paymentReference: "", paidOn: "", note: "" });
   const [cancelReason, setCancelReason] = useState("");
+  const [tripPay, setTripPay] = useState<TripPayPanel | null>(null);
 
   const [slipRunId, setSlipRunId] = useState("");
   const [slipRun, setSlipRun] = useState<Run | null>(null);
@@ -201,6 +231,16 @@ export default function OfficePayrollPage() {
     else { setPreview(null); setError(errorText(j, "Could not read that month's derivation.")); }
   }, [period]);
 
+  /**
+   * The legs behind the run's trip-pay figure, read beside what each line was stamped with.
+   * A panel that will not load is no reason to fail the run — the stamped column on the line
+   * is still the figure the payslip prints.
+   */
+  const loadTripPay = useCallback(async (id: string) => {
+    const res = await apiFetch(`/payroll/runs/${id}/trip-pay`);
+    setTripPay(res.ok ? await readJson(res) : null);
+  }, []);
+
   const loadRun = useCallback(async (id: string) => {
     const res = await apiFetch(`/payroll/runs/${id}`);
     const j = await readJson(res);
@@ -214,7 +254,8 @@ export default function OfficePayrollPage() {
     } else {
       setRun(null); setError(errorText(j, "Could not open that payroll run."));
     }
-  }, []);
+    loadTripPay(id);
+  }, [loadTripPay]);
 
   useEffect(() => {
     (async () => {
@@ -421,6 +462,16 @@ export default function OfficePayrollPage() {
         −{money(l.deduction_amount)}
       </td>
       <td className="p-12 text-right tabular-nums">{money(l.base_amount)}</td>
+      <td className="p-12 text-right tabular-nums">
+        {toCents(l.trip_pay_amount)
+          ? <>
+            <p style={{ color: "var(--brand)" }}>{money(l.trip_pay_amount)}</p>
+            <p className="text-[10px]" style={{ color: "var(--ink-soft)" }}>
+              {l.detail?.trip_pay_count ?? 0} leg{l.detail?.trip_pay_count === 1 ? "" : "s"}
+            </p>
+          </>
+          : <span style={{ color: "var(--ink-soft)" }}>—</span>}
+      </td>
       {persisted && (
         <td className="p-12 text-right tabular-nums">
           {toCents(l.adjustment_amount) ? (
@@ -455,8 +506,8 @@ export default function OfficePayrollPage() {
         <div>
           <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Payroll</h1>
           <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
-            A month's pay derived from the attendance register and the leave queue — one figure per person,
-            adjusted only by a named hand, frozen the day it is issued. Every amount is {runs[0]?.currency ?? "TZS"}.
+            A month&apos;s pay derived from the attendance register, the leave queue and the legs each driver completed —
+            one figure per person, adjusted only by a named hand, frozen the day it is issued. Every amount is {runs[0]?.currency ?? "TZS"}.
           </p>
         </div>
         <Link href="/app/office" className="pane-note text-xs underline">← Office area</Link>
@@ -515,7 +566,7 @@ export default function OfficePayrollPage() {
                 </div>
               )}
 
-              <section className="mt-24 grid grid-cols-2 gap-16 md:grid-cols-3 xl:grid-cols-6">
+              <section className="mt-24 grid grid-cols-2 gap-16 md:grid-cols-4">
                 <div className={card} style={cardStyle}>
                   <p className={labelCls} style={{ color: "var(--ink-soft)" }}>In the run</p>
                   <p className="mt-8 text-2xl font-bold tabular-nums">{previewTotals?.headcount ?? 0}</p>
@@ -534,6 +585,18 @@ export default function OfficePayrollPage() {
                 <div className={card} style={cardStyle}>
                   <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Payable after deduction</p>
                   <p className="mt-8 text-lg font-bold tabular-nums">{money(previewTotals?.gross_total)}</p>
+                  <p className="mt-4 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                    Days worked plus the legs driven
+                  </p>
+                </div>
+                <div className={card} style={cardStyle}>
+                  <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Trip pay inside it</p>
+                  <p className="mt-8 text-lg font-bold tabular-nums" style={{ color: "var(--brand)" }}>
+                    {money(previewTotals?.trip_pay_total)}
+                  </p>
+                  <p className="mt-4 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                    Completed legs, priced by each driver&apos;s own terms
+                  </p>
                 </div>
                 <div className={card} style={cardStyle}>
                   <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Net to pay</p>
@@ -550,13 +613,14 @@ export default function OfficePayrollPage() {
               <section className="mt-32">
                 <h2 className={`${h2Cls} pane-note`}>What the register says — {preview.lines.length} payable line{preview.lines.length === 1 ? "" : "s"}</h2>
                 <div className="mt-16 overflow-x-auto rounded-card border bg-surface" style={cardStyle}>
-                  <table className="w-full min-w-[860px] text-sm">
+                  <table className="w-full min-w-[920px] text-sm">
                     <thead>
                       <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
                         <th className={thCls}>Member</th><th className={thCls}>Salary</th>
                         <th className={thCls}>Unpaid leave</th><th className={thCls}>Absent</th>
                         <th className={thCls}>Unrecorded</th><th className={thCls}>Days paid</th>
-                        <th className={thCls}>Deducted</th><th className={thCls}>Payable</th><th className={thCls}>Net</th>
+                        <th className={thCls}>Deducted</th><th className={thCls}>Payable</th>
+                        <th className={thCls}>Trip pay</th><th className={thCls}>Net</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -566,7 +630,7 @@ export default function OfficePayrollPage() {
                         </tr>
                       ))}
                       {!preview.lines.length && (
-                        <tr><td colSpan={9} className="p-24 text-center text-xs" style={{ color: "var(--ink-soft)" }}>
+                        <tr><td colSpan={10} className="p-24 text-center text-xs" style={{ color: "var(--ink-soft)" }}>
                           Nobody on the roster is active with a salary on file, so there is nothing to pay this month.
                         </td></tr>
                       )}
@@ -652,10 +716,16 @@ export default function OfficePayrollPage() {
                   )}
                   {run.note && <p className="mt-8 whitespace-pre-line text-xs">{run.note}</p>}
                 </div>
-                <div className="grid grid-cols-3 gap-16 text-right">
+                <div className="grid grid-cols-2 gap-16 text-right sm:grid-cols-4">
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Payable</p>
                     <p className="text-sm font-bold tabular-nums">{money(run.gross_total)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>of which trip pay</p>
+                    <p className="text-sm font-bold tabular-nums" style={{ color: toCents(run.trip_pay_total) ? "var(--brand)" : "var(--ink-soft)" }}>
+                      {money(run.trip_pay_total)}
+                    </p>
                   </div>
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Deducted</p>
@@ -671,7 +741,7 @@ export default function OfficePayrollPage() {
                       {money(Math.abs(toCents(run.adjustment_total) / 100))}
                     </p>
                   </div>
-                  <div className="col-span-3 border-t pt-12" style={{ borderColor: "var(--line)" }}>
+                  <div className="col-span-2 border-t pt-12 sm:col-span-4" style={{ borderColor: "var(--line)" }}>
                     <p className="text-[10px] uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Net for the month</p>
                     <p className="text-2xl font-bold tabular-nums" style={{ color: "var(--success)" }}>{money(run.net_total)}</p>
                   </div>
@@ -727,17 +797,129 @@ export default function OfficePayrollPage() {
                 </div>
               )}
 
+              {/* trip pay: the register beside the figure the lines were stamped with */}
+              {tripPay && (
+                <section className="mt-32">
+                  <h2 className={`${h2Cls} pane-note`}>The legs behind the trip-pay column</h2>
+                  <div className="mt-16 rounded-card border bg-surface p-24" style={cardStyle}>
+                    <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                      A driver&apos;s pay for a leg is worked out once, by the database, when the trip is marked completed.
+                      This is that register read against the lines of {fmtPeriod(tripPay.run?.period ?? run.period)} — the
+                      column in the table below is what this run will pay, and issuing the run claims exactly those legs.
+                    </p>
+                    <div className="mt-16 grid grid-cols-2 gap-16 md:grid-cols-4">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+                          Stamped on the lines
+                        </p>
+                        <p className="text-sm font-bold tabular-nums">{money(tripPay.totals.stored)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+                          The register says now
+                        </p>
+                        <p className="text-sm font-bold tabular-nums">{money(tripPay.totals.current)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+                          Difference
+                        </p>
+                        <p className="text-sm font-bold tabular-nums"
+                          style={{ color: toCents(tripPay.totals.drift) ? "var(--warning)" : "var(--ink-soft)" }}>
+                          {toCents(tripPay.totals.drift)
+                            ? `${toCents(tripPay.totals.drift) > 0 ? "+" : "−"}${money(Math.abs(toCents(tripPay.totals.drift) / 100))}`
+                            : "level"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+                          Still unpaid company-wide
+                        </p>
+                        <p className="text-sm font-bold tabular-nums">
+                          {money(tripPay.totals.company_waiting.total)}
+                          <span className="ml-6 text-[10px] font-normal" style={{ color: "var(--ink-soft)" }}>
+                            {tripPay.totals.company_waiting.entries} leg{tripPay.totals.company_waiting.entries === 1 ? "" : "s"}
+                          </span>
+                        </p>
+                        {tripPay.totals.company_waiting.unlinked > 0 && (
+                          <p className="text-[10px]" style={{ color: "var(--danger)" }}>
+                            {tripPay.totals.company_waiting.unlinked} of them have no roster seat yet — they cannot be paid
+                            until a driver is named on Office → Employees.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {!!tripPay.lines_out_of_date && run.status === "draft" && (
+                      <p className="mt-16 text-xs" style={{ color: "var(--warning)" }}>
+                        {tripPay.lines_out_of_date} line{tripPay.lines_out_of_date === 1 ? " is" : "s are"} behind the register —
+                        a leg was completed since this draft was built. Rebuild re-prices them; issuing does the same, but the
+                        figure you have adjusted against would move under you.
+                      </p>
+                    )}
+                    {!!tripPay.lines_out_of_date && run.status !== "draft" && (
+                      <p className="mt-16 text-xs" style={{ color: "var(--ink-soft)" }}>
+                        A leg earned after this run was issued is not this month&apos;s money — it waits for the next run, and
+                        a frozen payroll is corrected by a new month, never by editing this one.
+                      </p>
+                    )}
+
+                    <div className="mt-16 overflow-x-auto rounded-card border" style={cardStyle}>
+                      <table className="w-full min-w-[720px] text-xs">
+                        <thead>
+                          <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+                            <th className="p-12">Member</th><th className="p-12">This run</th>
+                            <th className="p-12">Register now</th><th className="p-12">Legs</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tripPay.lines.filter(l => toCents(l.stored_amount) || toCents(l.current_amount) || l.trips).map(l => (
+                            <tr key={l.line_id} className="border-t align-top" style={{ borderColor: "var(--line)" }}>
+                              <td className="p-12 font-semibold">{l.employee_name}</td>
+                              <td className="p-12 text-right tabular-nums">{money(l.stored_amount)}</td>
+                              <td className="p-12 text-right tabular-nums"
+                                style={{ color: l.drift ? "var(--warning)" : "var(--ink)" }}>{money(l.current_amount)}</td>
+                              <td className="p-12">
+                                <span className="flex flex-wrap gap-4">
+                                  {(l.entries ?? []).map(e => (
+                                    <span key={e.entry_id} className="px-6 py-2 text-[10px]"
+                                      style={{ background: "color-mix(in srgb, var(--ink) 6%, transparent)", color: "var(--ink-soft)" }}>
+                                      {e.reference || "a leg"} · {dayTag(e.earned_on)} · {money(e.amount)}
+                                    </span>
+                                  ))}
+                                  {!l.entries?.length && <span style={{ color: "var(--ink-soft)" }}>—</span>}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                          {!tripPay.lines.some(l => toCents(l.stored_amount) || toCents(l.current_amount) || l.trips) && (
+                            <tr><td colSpan={4} className="p-24 text-center text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                              Nobody in this run drove a priced leg. Drivers whose pay terms say &ldquo;salary only&rdquo;, and
+                              legs completed before a driver had terms, deliberately put nothing here.
+                            </td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="pane-note mt-12 text-[11px]">
+                      What each driver is paid for a leg is set on <Link href="/app/drivers" className="underline">Drivers</Link>,
+                      and the register behind these figures is read there too.
+                    </p>
+                  </div>
+                </section>
+              )}
+
               {/* lines */}
               <section className="mt-32">
                 <h2 className={`${h2Cls} pane-note`}>Lines {run.status === "draft" ? "— derived, and the adjustment block is yours" : "— as issued"}</h2>
                 <div className="mt-16 overflow-x-auto rounded-card border bg-surface" style={cardStyle}>
-                  <table className="w-full min-w-[980px] text-sm">
+                  <table className="w-full min-w-[1040px] text-sm">
                     <thead>
                       <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
                         <th className={thCls}>Member</th><th className={thCls}>Salary</th>
                         <th className={thCls}>Unpaid leave</th><th className={thCls}>Absent</th>
                         <th className={thCls}>Unrecorded</th><th className={thCls}>Days paid</th>
                         <th className={thCls}>Deducted</th><th className={thCls}>Payable</th>
+                        <th className={thCls}>Trip pay</th>
                         <th className={thCls}>Adjustment</th><th className={thCls}>Net</th>
                         {run.status === "draft" && <th className={thCls}>&nbsp;</th>}
                       </tr>
@@ -764,7 +946,7 @@ export default function OfficePayrollPage() {
                         </tr>
                       ))}
                       {!(run.lines ?? []).length && (
-                        <tr><td colSpan={run.status === "draft" ? 11 : 10} className="p-24 text-center text-xs" style={{ color: "var(--ink-soft)" }}>
+                        <tr><td colSpan={run.status === "draft" ? 12 : 11} className="p-24 text-center text-xs" style={{ color: "var(--ink-soft)" }}>
                           No lines. Rebuild the draft to derive them from the register.
                         </td></tr>
                       )}
@@ -879,11 +1061,12 @@ export default function OfficePayrollPage() {
         <section className="mt-24">
           <h2 className={`${h2Cls} pane-note`}>Every month this company has run payroll for</h2>
           <div className="mt-16 overflow-x-auto rounded-card border bg-surface" style={cardStyle}>
-            <table className="w-full min-w-[900px] text-sm">
+            <table className="w-full min-w-[980px] text-sm">
               <thead>
                 <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
                   <th className={thCls}>Month</th><th className={thCls}>Status</th><th className={thCls}>People</th>
-                  <th className={thCls}>Payable</th><th className={thCls}>Deducted</th><th className={thCls}>Adjusted</th>
+                  <th className={thCls}>Payable</th><th className={thCls}>Trip pay</th><th className={thCls}>Deducted</th>
+                  <th className={thCls}>Adjusted</th>
                   <th className={thCls}>Net</th><th className={thCls}>Issued by</th><th className={thCls}>Paid</th>
                   <th className={thCls}>&nbsp;</th>
                 </tr>
@@ -900,6 +1083,10 @@ export default function OfficePayrollPage() {
                     <td className="p-12">{chip(STATUS_LABELS[r.status] ?? r.status, STATUS_COLORS[r.status] ?? "var(--ink-soft)")}</td>
                     <td className="p-12 tabular-nums">{r.headcount}</td>
                     <td className="p-12 text-right tabular-nums">{money(r.gross_total)}</td>
+                    <td className="p-12 text-right tabular-nums"
+                      style={{ color: toCents(r.trip_pay_total) ? "var(--brand)" : "var(--ink-soft)" }}>
+                      {toCents(r.trip_pay_total) ? money(r.trip_pay_total) : "—"}
+                    </td>
                     <td className="p-12 text-right tabular-nums" style={{ color: toCents(r.deduction_total) ? "var(--danger)" : "var(--ink-soft)" }}>
                       −{money(r.deduction_total)}
                     </td>
@@ -925,7 +1112,7 @@ export default function OfficePayrollPage() {
                   </tr>
                 ))}
                 {!runs.length && (
-                  <tr><td colSpan={10} className="p-24 text-center text-xs" style={{ color: "var(--ink-soft)" }}>
+                  <tr><td colSpan={11} className="p-24 text-center text-xs" style={{ color: "var(--ink-soft)" }}>
                     No payroll has been built yet. Prepare a month to see the derivation before anything is written.
                   </td></tr>
                 )}
@@ -933,7 +1120,7 @@ export default function OfficePayrollPage() {
               {!!runs.length && (
                 <tfoot>
                   <tr className="border-t" style={{ borderColor: "var(--line)" }}>
-                    <td className="p-12 text-[11px] uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }} colSpan={6}>
+                    <td className="p-12 text-[11px] uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }} colSpan={7}>
                       Net paid across the months that were issued
                     </td>
                     <td className="p-12 text-right font-bold tabular-nums" style={{ color: "var(--success)" }}>{money(issuedNetCents / 100)}</td>
@@ -1045,6 +1232,19 @@ export default function OfficePayrollPage() {
                       <td className="py-8 text-right tabular-nums">{slip.days_paid}</td>
                       <td className="py-8 text-right tabular-nums">{money(slip.base_amount)}</td>
                     </tr>
+                    {toCents(slip.trip_pay_amount) !== 0 && (
+                      <tr className="border-t" style={{ borderColor: "var(--line)" }}>
+                        <td className="py-8">
+                          Pay for legs driven
+                          <p className="text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                            {slip.detail?.trip_pay_count ?? 0} completed trip{slip.detail?.trip_pay_count === 1 ? "" : "s"} priced
+                            by the driver&apos;s own terms
+                          </p>
+                        </td>
+                        <td className="py-8 text-right tabular-nums" style={{ color: "var(--ink-soft)" }}>—</td>
+                        <td className="py-8 text-right tabular-nums">{money(slip.trip_pay_amount)}</td>
+                      </tr>
+                    )}
                     {toCents(slip.adjustment_amount) !== 0 && (
                       <tr className="border-t" style={{ borderColor: "var(--line)" }}>
                         <td className="py-8">
@@ -1080,6 +1280,40 @@ export default function OfficePayrollPage() {
                 </div>
               </section>
 
+              {!!slip.detail?.trip_pay?.length && (
+                <section className="mt-20">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+                    The legs behind the trip pay
+                  </p>
+                  <table className="mt-8 w-full text-[10px]">
+                    <thead>
+                      <tr className="border-b text-left" style={{ borderColor: "var(--line)" }}>
+                        <th className="py-6">Trip</th><th className="py-6">Earned</th>
+                        <th className="py-6">Basis</th><th className="py-6 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {slip.detail.trip_pay.map(e => (
+                        <tr key={e.entry_id} className="border-t" style={{ borderColor: "var(--line)" }}>
+                          <td className="py-6">{e.reference || "—"}</td>
+                          <td className="py-6">{dayTag(e.earned_on)}</td>
+                          <td className="py-6" style={{ color: "var(--ink-soft)" }}>
+                            {BASIS_SHORT[e.basis] ?? e.basis} {money(e.rate)}
+                            {e.basis !== "per_trip" && e.basis !== "percent_of_freight" && (
+                              <span style={{ color: "var(--ink-soft)" }}> × {Number(e.quantity).toLocaleString()}</span>
+                            )}
+                          </td>
+                          <td className="py-6 text-right tabular-nums">{money(e.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                    Priced by the trip database when each leg was completed, not typed onto this slip.
+                  </p>
+                </section>
+              )}
+
               {slip.note && (
                 <section className="mt-20">
                   <p className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Note on this line</p>
@@ -1100,7 +1334,7 @@ export default function OfficePayrollPage() {
 
               <p className="mt-20 text-[10px]" style={{ color: "var(--ink-soft)" }}>
                 {slip.status === "issued"
-                  ? "This slip is a record of what was paid. It is derived from the attendance register and the leave queue; the only hand-written figure on it is the labelled adjustment."
+                  ? "This slip is a record of what was paid. It is derived from the attendance register, the leave queue and the trip-pay ledger; the only hand-written figure on it is the labelled adjustment."
                   : "Draft slip — the run has not been issued, so these figures can still move. It is not yet a record of pay."}
               </p>
             </div>
@@ -1137,14 +1371,20 @@ export default function OfficePayrollPage() {
 
           {register && (
             <>
-              <section className="mt-24 grid grid-cols-2 gap-16 md:grid-cols-4">
+              <section className="mt-24 grid grid-cols-2 gap-16 md:grid-cols-5">
                 <div className={card} style={cardStyle}>
                   <p className={labelCls} style={{ color: "var(--ink-soft)" }}>People paid</p>
                   <p className="mt-8 text-2xl font-bold tabular-nums">{register.totals.people}</p>
                 </div>
                 <div className={card} style={cardStyle}>
-                  <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Payable (after deduction)</p>
+                  <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Pay for days worked</p>
                   <p className="mt-8 text-lg font-bold tabular-nums">{money(register.totals.base)}</p>
+                </div>
+                <div className={card} style={cardStyle}>
+                  <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Trip pay</p>
+                  <p className="mt-8 text-lg font-bold tabular-nums" style={{ color: "var(--brand)" }}>
+                    {money(register.totals.trip_pay)}
+                  </p>
                 </div>
                 <div className={card} style={cardStyle}>
                   <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Deducted</p>
@@ -1163,11 +1403,12 @@ export default function OfficePayrollPage() {
               <section className="mt-32">
                 <h2 className={`${h2Cls} pane-note`}>Per person, across the months that were actually paid</h2>
                 <div className="mt-16 overflow-x-auto rounded-card border bg-surface" style={cardStyle}>
-                  <table className="w-full min-w-[820px] text-sm">
+                  <table className="w-full min-w-[880px] text-sm">
                     <thead>
                       <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
                         <th className={thCls}>Member</th><th className={thCls}>Months</th><th className={thCls}>Days paid</th>
-                        <th className={thCls}>Deducted</th><th className={thCls}>Payable</th><th className={thCls}>Adjustments</th>
+                        <th className={thCls}>Deducted</th><th className={thCls}>Payable</th><th className={thCls}>Trip pay</th>
+                        <th className={thCls}>Adjustments</th>
                         <th className={thCls}>Net</th><th className={thCls}>Periods</th>
                       </tr>
                     </thead>
@@ -1186,6 +1427,10 @@ export default function OfficePayrollPage() {
                             −{money(p.deduction_total)}
                           </td>
                           <td className="p-12 text-right tabular-nums">{money(p.base_total)}</td>
+                          <td className="p-12 text-right tabular-nums"
+                            style={{ color: toCents(p.trip_pay_total) ? "var(--brand)" : "var(--ink-soft)" }}>
+                            {toCents(p.trip_pay_total) ? money(p.trip_pay_total) : "—"}
+                          </td>
                           <td className="p-12 text-right tabular-nums">
                             {toCents(p.adjustment_total) ? `${toCents(p.adjustment_total) > 0 ? "+" : "−"}${money(Math.abs(toCents(p.adjustment_total) / 100))}` : "—"}
                           </td>
@@ -1197,7 +1442,7 @@ export default function OfficePayrollPage() {
                         </tr>
                       ))}
                       {!register.employees.length && (
-                        <tr><td colSpan={8} className="p-24 text-center text-xs" style={{ color: "var(--ink-soft)" }}>
+                        <tr><td colSpan={9} className="p-24 text-center text-xs" style={{ color: "var(--ink-soft)" }}>
                           Nothing has been paid in this window. A cancelled run does not appear here — what was not paid is not totalled.
                         </td></tr>
                       )}
@@ -1209,11 +1454,12 @@ export default function OfficePayrollPage() {
               <section className="mt-32">
                 <h2 className={`${h2Cls} pane-note`}>Line by line — {register.rows.length} month{register.rows.length === 1 ? "" : "s"} of pay</h2>
                 <div className="mt-16 overflow-x-auto rounded-card border bg-surface" style={cardStyle}>
-                  <table className="w-full min-w-[900px] text-sm">
+                  <table className="w-full min-w-[980px] text-sm">
                     <thead>
                       <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
                         <th className={thCls}>Member</th><th className={thCls}>Month</th><th className={thCls}>Status</th>
                         <th className={thCls}>Days</th><th className={thCls}>Deducted</th><th className={thCls}>Payable</th>
+                        <th className={thCls}>Trip pay</th>
                         <th className={thCls}>Adjustment</th><th className={thCls}>Net</th><th className={thCls}>Paid</th>
                       </tr>
                     </thead>
@@ -1228,6 +1474,10 @@ export default function OfficePayrollPage() {
                             −{money(r.deduction_amount)}
                           </td>
                           <td className="p-12 text-right text-xs tabular-nums">{money(r.base_amount)}</td>
+                          <td className="p-12 text-right text-xs tabular-nums"
+                            style={{ color: toCents(r.trip_pay_amount) ? "var(--brand)" : "var(--ink-soft)" }}>
+                            {toCents(r.trip_pay_amount) ? money(r.trip_pay_amount) : "—"}
+                          </td>
                           <td className="p-12 text-right text-xs tabular-nums">
                             {toCents(r.adjustment_amount)
                               ? <>{money(r.adjustment_amount)}<p className="text-[10px]" style={{ color: "var(--ink-soft)" }}>{r.adjustment_label ?? ""}</p></>

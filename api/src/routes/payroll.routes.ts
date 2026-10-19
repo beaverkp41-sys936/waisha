@@ -60,6 +60,7 @@ async function periodBounds(c: PoolClient, tenantId: string, period: string) {
 const RUN_SELECT_SQL = `r.id, r.period::text as period, r.status, r.currency,
   r.working_days, r.gross_total::text as gross_total,
   r.deduction_total::text as deduction_total, r.adjustment_total::text as adjustment_total,
+  r.trip_pay_total::text as trip_pay_total,
   r.net_total::text as net_total, r.headcount, r.payment_reference,
   r.paid_on::text as paid_on, r.note, r.created_at, r.updated_at,
   r.issued_at, ui.full_name as issued_by_name,
@@ -86,14 +87,16 @@ const RUN_FROM_SQL = " from payroll_runs r" +
  * all is `unrecorded_days` — reported on the payslip and worth nothing — because a
  * clerk who forgot to clock four people in must not cost them four days' pay.
  *
- * The money columns come from `public.payroll_derive` (073), which is the same
+ * The money columns come from `public.payroll_derive` (073, grown by 095), which is the same
  * function the line trigger stamps the stored row with. That is why a preview can
  * promise the number it shows is the number a build produces: they read one body of
- * arithmetic, not two copies of it.
+ * arithmetic, not two copies of it — including the trip pay, which comes from the same
+ * `trip_pay_claim` (095) the trigger calls, off the legs the driver's own register holds.
  *
- * $1 tenant, $2 first day, $3 last day counted, $4 divisor — and the insert variant
- * adds $5 as the run. Every parameter a caller sends is referenced, because
- * PostgreSQL cannot infer the type of one the query never mentions.
+ * $1 tenant, $2 first day, $3 last day counted, $4 divisor, $5 the run being built — and a
+ * preview passes NULL for the run, which is exactly the reading it needs: every earning that
+ * no run has claimed yet. Every parameter a caller sends is referenced, because PostgreSQL
+ * cannot infer the type of one the query never mentions.
  */
 const DERIVATION_SQL = `
   with pd as (
@@ -154,37 +157,45 @@ const DERIVATION_SQL = `
            (x.v ->> 'days_paid')::int         as days_paid,
            (x.v ->> 'base_amount')::numeric(14,2)      as base_amount,
            (x.v ->> 'deduction_amount')::numeric(14,2) as deduction_amount,
+           (x.v ->> 'trip_pay_amount')::numeric(14,2)  as trip_pay_amount,
            (x.v ->> 'net_amount')::numeric(14,2)       as net_amount,
            jsonb_build_object(
              'unpaid_leave_dates', coalesce(s.unpaid_dates, '[]'::jsonb),
              'absence_dates',      coalesce(s.absence_dates, '[]'::jsonb),
-             'unrecorded_dates',   coalesce(s.unrecorded_dates, '[]'::jsonb)
+             'unrecorded_dates',   coalesce(s.unrecorded_dates, '[]'::jsonb),
+             'trip_pay',           coalesce(p.tp -> 'entries', '[]'::jsonb),
+             'trip_pay_count',     (p.tp ->> 'count')::int,
+             'trip_pay_total',     (p.tp ->> 'total')::numeric(14,2)::text
            ) as detail
       from employees e
       join stats s on s.employee_id = e.id
       cross join lateral (
+        select public.trip_pay_claim($5, e.id, $2::date) as tp
+      ) p
+      cross join lateral (
         select public.payroll_derive(e.monthly_salary, $4::int,
-               coalesce(s.unpaid_days, 0), coalesce(s.absence_days, 0), 0) as v
+               coalesce(s.unpaid_days, 0), coalesce(s.absence_days, 0), 0,
+               (p.tp ->> 'total')::numeric) as v
       ) x
      where e.tenant_id = $1 and e.deleted_at is null and e.status = 'active'
        and e.monthly_salary is not null
   )`;
 
 /**
- * Money columns are written as 0 here on purpose: 073's trigger overwrites all four
- * from the same derivation, so a route that forgets the arithmetic cannot put a
- * wrong number on a payslip — and the RETURNING clause reads back what was stamped.
+ * The derived columns are written as 0 here on purpose: 073's trigger overwrites every one of
+ * them from the same derivation, so a route that forgets the arithmetic cannot put a wrong
+ * number on a payslip — and the RETURNING clause reads back what was stamped.
  */
 const BUILD_LINES_SQL = `${DERIVATION_SQL}
   insert into payroll_lines
     (tenant_id, run_id, employee_id, employee_name, job_title, department,
      monthly_salary, working_days, unpaid_leave_days, absence_days, unrecorded_days,
-     half_days, late_minutes, days_paid, base_amount, deduction_amount,
+     half_days, late_minutes, days_paid, base_amount, deduction_amount, trip_pay_amount,
      adjustment_amount, net_amount, detail)
   select tenant_id, $5, employee_id, employee_name, job_title, department,
          monthly_salary, working_days, unpaid_leave_days, absence_days,
          unrecorded_days, half_days, late_minutes,
-         0, 0, 0, 0, 0, detail
+         0, 0, 0, 0, 0, 0, detail
     from derived
    order by employee_name
   returning id, employee_id, employee_name, job_title, department,
@@ -192,6 +203,7 @@ const BUILD_LINES_SQL = `${DERIVATION_SQL}
             unpaid_leave_days, absence_days, unrecorded_days, half_days, late_minutes,
             days_paid, base_amount::text as base_amount,
             deduction_amount::text as deduction_amount,
+            trip_pay_amount::text as trip_pay_amount,
             adjustment_amount::text as adjustment_amount,
             net_amount::text as net_amount, detail`;
 
@@ -201,10 +213,13 @@ const PREVIEW_LINES_SQL = `${DERIVATION_SQL}
          monthly_salary::text as monthly_salary, working_days,
          unpaid_leave_days, absence_days, unrecorded_days, half_days, late_minutes,
          days_paid, base_amount::text as base_amount,
-         deduction_amount::text as deduction_amount, net_amount::text as net_amount,
+         deduction_amount::text as deduction_amount,
+         trip_pay_amount::text as trip_pay_amount,
+         net_amount::text as net_amount,
          detail,
-         coalesce(sum(base_amount) over (), 0)::numeric(14,2)::text as gross_total,
+         coalesce(sum(base_amount + trip_pay_amount) over (), 0)::numeric(14,2)::text as gross_total,
          coalesce(sum(deduction_amount) over (), 0)::numeric(14,2)::text as deduction_total,
+         coalesce(sum(trip_pay_amount) over (), 0)::numeric(14,2)::text as trip_pay_total,
          coalesce(sum(net_amount) over (), 0)::numeric(14,2)::text as net_total,
          count(*) over ()::int as headcount
     from derived
@@ -259,7 +274,8 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
             [{ field: "period" }]);
         }
         const lines = await c.query(PREVIEW_LINES_SQL,
-          [req.user.tid, bounds.from, bounds.upto, bounds.workingDays]);
+          // NULL for the run: a preview claims nothing, it reads what is unclaimed.
+          [req.user.tid, bounds.from, bounds.upto, bounds.workingDays, null]);
         const existing = await c.query(
           `select id, status, headcount, net_total::text as net_total from payroll_runs
             where tenant_id = $1 and period = $2::date and deleted_at is null`,
@@ -270,8 +286,10 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
           bounds: boundsBody(bounds),
           totals: first
             ? { gross_total: first.gross_total, deduction_total: first.deduction_total,
+                trip_pay_total: first.trip_pay_total,
                 net_total: first.net_total, headcount: first.headcount }
-            : { gross_total: "0.00", deduction_total: "0.00", net_total: "0.00", headcount: 0 },
+            : { gross_total: "0.00", deduction_total: "0.00", trip_pay_total: "0.00",
+                net_total: "0.00", headcount: 0 },
           lines: lines.rows.map((r: any) => ({
             employee_id: r.employee_id, employee_name: r.employee_name,
             job_title: r.job_title, department: r.department,
@@ -280,6 +298,7 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
             unrecorded_days: r.unrecorded_days, half_days: r.half_days,
             late_minutes: r.late_minutes, days_paid: r.days_paid,
             base_amount: r.base_amount, deduction_amount: r.deduction_amount,
+            trip_pay_amount: r.trip_pay_amount,
             net_amount: r.net_amount, detail: r.detail
           })),
           alreadyBuilt: existing.rows[0] ?? null,
@@ -357,6 +376,7 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
                   l.unrecorded_days, l.half_days, l.late_minutes, l.days_paid,
                   l.base_amount::text as base_amount,
                   l.deduction_amount::text as deduction_amount,
+                  l.trip_pay_amount::text as trip_pay_amount,
                   l.adjustment_amount::text as adjustment_amount,
                   l.adjustment_label, l.net_amount::text as net_amount,
                   l.detail, l.note, l.created_at, l.updated_at
@@ -455,6 +475,7 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
         const saved = await c.query(
           `select id, employee_name, days_paid, base_amount::text as base_amount,
                   deduction_amount::text as deduction_amount,
+                  trip_pay_amount::text as trip_pay_amount,
                   adjustment_amount::text as adjustment_amount, adjustment_label,
                   net_amount::text as net_amount, note, updated_at
              from payroll_lines where id = $1 and tenant_id = $2`,
@@ -520,7 +541,8 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
       }).strict().parse(req.body ?? {});
       return withTenant(req.user.tid, async (c) => {
         const prev = await c.query(
-          `select status, period::text as period, headcount, net_total::text as net_total
+          `select status, period::text as period, headcount, net_total::text as net_total,
+                  trip_pay_total::text as trip_pay_total
              from payroll_runs where id = $1 and tenant_id = $2 and deleted_at is null`,
           [runId, req.user.tid]);
         if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Payroll run not found", 404);
@@ -537,6 +559,13 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
         if (Number(prev.rows[0].headcount) === 0) {
           throw new ApiError("CONFLICT", "There is nobody in this run to issue.", 409);
         }
+        // 095's settle runs first, while the run is still a draft: it re-prices the lines
+        // against the register as it stands this minute — a leg completed since the build is
+        // inside the month and the driver is owed it — then marks those earnings claimed by
+        // this run so no other month can pay them, and refreshes the company's other drafts.
+        // Same transaction as the status flip below, so the two cannot be separated.
+        const settled = await c.query("select public.trip_pay_settle($1, true, $2) as v",
+          [runId, req.user.sub]);
         // The reference is typed after the fact, by the person who actually moved
         // the money, and it may be filled in later — issuing does not require it.
         await c.query(
@@ -552,13 +581,16 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
           requestId: req.requestId, entity: "payroll_runs", entityId: runId,
           action: "payroll.run.issued",
-          before: { status: prev.rows[0].status, netTotal: prev.rows[0].net_total },
+          before: { status: prev.rows[0].status, netTotal: prev.rows[0].net_total,
+                    tripPayTotal: prev.rows[0].trip_pay_total },
           after: { period: saved.rows[0]?.period, headcount: saved.rows[0]?.headcount,
                    netTotal: saved.rows[0]?.net_total,
+                   tripPayTotal: saved.rows[0]?.trip_pay_total ?? null,
+                   tripPayClaimed: settled.rows[0]?.v ?? null,
                    paymentReference: saved.rows[0]?.payment_reference ?? null,
                    paidOn: saved.rows[0]?.paid_on ?? null }
         });
-        return saved.rows[0];
+        return { ...saved.rows[0], trip_pay_settled: settled.rows[0]?.v ?? null };
       });
     });
 
@@ -582,14 +614,20 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
                   updated_by = $2, updated_at = now()
             where id = $1 and tenant_id = $4 and deleted_at is null`,
           [runId, req.user.sub, body.reason, req.user.tid]);
+        // The earnings go back on the shelf. The issued lines are not touched — the document
+        // says what was paid — but the legs this run claimed are unclaimed again, so the next
+        // draft pays them, and every other draft is re-derived in the same statement (095).
+        const released = await c.query("select public.trip_pay_settle($1, false, $2) as v",
+          [runId, req.user.sub]);
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
           requestId: req.requestId, entity: "payroll_runs", entityId: runId,
           action: "payroll.run.cancelled",
           before: { status: prev.rows[0].status, period: prev.rows[0].period },
-          after: { status: "cancelled", reason: body.reason }
+          after: { status: "cancelled", reason: body.reason,
+                   tripPayReleased: released.rows[0]?.v ?? null }
         });
-        return { ok: true, status: "cancelled" };
+        return { ok: true, status: "cancelled", trip_pay_released: released.rows[0]?.v ?? null };
       });
     });
 
@@ -640,6 +678,75 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
       });
     });
 
+  // ---------- Trip pay inside a run ----------
+
+  /**
+   * The legs behind a draft's trip-pay figure, and whether the register has moved since the
+   * build. Issuing re-prices the lines (095's settle), so the desk must be able to see the
+   * difference before it signs rather than after: a leg completed after the build is owed to
+   * the driver, and an earning another month has already claimed is not.
+   */
+  app.get("/payroll/runs/:id/trip-pay",
+    { preHandler: [requireAuth, requirePermission("payroll.view")] },
+    async (req: any) => {
+      const runId = z.string().uuid().parse((req.params as { id: string }).id);
+      return withTenant(req.user.tid, async (c) => {
+        const { rows } = await c.query(
+          `select r.id as run_id, r.period::text as period, r.status,
+                  r.trip_pay_total::text as run_trip_pay_total,
+                  l.id as line_id, l.employee_id, l.employee_name,
+                  l.trip_pay_amount::text as stored_amount,
+                  ((c.tp ->> 'total')::numeric(14,2))::text as current_amount,
+                  (c.tp ->> 'count')::int as trips,
+                  c.tp -> 'entries' as entries
+             from payroll_runs r
+             join payroll_lines l on l.run_id = r.id
+             cross join lateral (
+               select public.trip_pay_claim(r.id, l.employee_id, r.period) as tp
+             ) c
+            where r.id = $1 and r.tenant_id = $2 and r.deleted_at is null
+            order by l.employee_name`,
+          [runId, req.user.tid]);
+        if (!rows.length) {
+          const exists = await c.query(
+            "select id from payroll_runs where id = $1 and tenant_id = $2 and deleted_at is null",
+            [runId, req.user.tid]);
+          if (!exists.rowCount) throw new ApiError("NOT_FOUND", "Payroll run not found", 404);
+        }
+        const cents = (v: unknown) => Math.round(Number(v ?? 0) * 100);
+        const stored = rows.reduce((s: number, r: any) => s + cents(r.stored_amount), 0);
+        const current = rows.reduce((s: number, r: any) => s + cents(r.current_amount), 0);
+        // What the whole company is still waiting on, whether or not this month's period
+        // covers it — the sentence the desk needs before it signs the month off.
+        const waiting = await c.query(
+          `select count(*)::int as entries,
+                  coalesce(sum(amount), 0)::numeric(14,2)::text as total,
+                  count(*) filter (where employee_id is null)::int as unlinked
+             from trip_pay_entries
+            where tenant_id = $1 and paid_run_id is null`, [req.user.tid]);
+        return {
+          run: rows[0]
+            ? { run_id: rows[0].run_id, period: rows[0].period, status: rows[0].status,
+                run_trip_pay_total: rows[0].run_trip_pay_total }
+            : null,
+          lines: rows.map((r: any) => ({
+            line_id: r.line_id, employee_id: r.employee_id, employee_name: r.employee_name,
+            stored_amount: r.stored_amount, current_amount: r.current_amount,
+            trips: r.trips, entries: r.entries, drift: r.stored_amount !== r.current_amount
+          })),
+          totals: {
+            stored: (stored / 100).toFixed(2),
+            current: (current / 100).toFixed(2),
+            // A draft that has fallen behind the register is not an error; it is a run that
+            // has not been re-derived since the last leg was completed.
+            drift: ((current - stored) / 100).toFixed(2),
+            company_waiting: waiting.rows[0]
+          },
+          lines_out_of_date: rows.filter((r: any) => r.stored_amount !== r.current_amount).length
+        };
+      });
+    });
+
   // ---------- The payslip and the salary register ----------
 
   /**
@@ -667,6 +774,7 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
                   l.unpaid_leave_days, l.absence_days, l.unrecorded_days, l.half_days,
                   l.late_minutes, l.days_paid, l.base_amount::text as base_amount,
                   l.deduction_amount::text as deduction_amount,
+                  l.trip_pay_amount::text as trip_pay_amount,
                   l.adjustment_amount::text as adjustment_amount, l.adjustment_label,
                   l.net_amount::text as net_amount, l.detail, l.note,
                   e.employment_type, e.hired_date::text as hired_date
@@ -702,6 +810,7 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
                   l.unpaid_leave_days, l.absence_days, l.unrecorded_days,
                   l.base_amount::text as base_amount,
                   l.deduction_amount::text as deduction_amount,
+                  l.trip_pay_amount::text as trip_pay_amount,
                   l.adjustment_amount::text as adjustment_amount,
                   l.adjustment_label, l.net_amount::text as net_amount,
                   r.paid_on::text as paid_on, r.payment_reference
@@ -724,12 +833,13 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
           const cur = perEmployee.get(r.employee_id) ?? {
             employee_id: r.employee_id, full_name: r.full_name, job_title: r.job_title,
             department: r.department, periods: [] as string[],
-            months: 0, days_paid: 0, net: 0, base: 0, deductions: 0, adjustments: 0
+            months: 0, days_paid: 0, net: 0, base: 0, tripPay: 0, deductions: 0, adjustments: 0
           };
           cur.months += 1;
           cur.days_paid += Number(r.days_paid);
           cur.net += toCents(r.net_amount);
           cur.base += toCents(r.base_amount);
+          cur.tripPay += toCents(r.trip_pay_amount);
           cur.deductions += toCents(r.deduction_amount);
           cur.adjustments += toCents(r.adjustment_amount);
           cur.periods.push(r.period);
@@ -737,7 +847,7 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
         }
         const people = [...perEmployee.values()]
           .sort((a: any, b: any) => String(a.full_name).localeCompare(String(b.full_name)));
-        const money = (key: "net" | "base" | "deductions" | "adjustments") =>
+        const money = (key: "net" | "base" | "tripPay" | "deductions" | "adjustments") =>
           asMoney(people.reduce((s: number, p: any) => s + p[key], 0));
         return {
           window: { from: q.from ?? null, to: q.to ?? null },
@@ -745,6 +855,7 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
             people: people.length,
             net: money("net"),
             base: money("base"),
+            trip_pay: money("tripPay"),
             deductions: money("deductions"),
             adjustments: money("adjustments")
           },
@@ -754,6 +865,7 @@ export async function payrollRoutes(app: FastifyInstance, _opts: unknown) {
             department: p.department, months: p.months, days_paid: p.days_paid,
             periods: p.periods,
             net_total: asMoney(p.net), base_total: asMoney(p.base),
+            trip_pay_total: asMoney(p.tripPay),
             deduction_total: asMoney(p.deductions), adjustment_total: asMoney(p.adjustments)
           }))
         };

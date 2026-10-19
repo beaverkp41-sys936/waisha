@@ -57,6 +57,7 @@ import { traineeReportsRoutes } from "./routes/trainee-reports.routes.js";
 import { officeCostsRoutes } from "./routes/office-costs.routes.js";
 import { attendanceRoutes } from "./routes/attendance.routes.js";
 import { payrollRoutes } from "./routes/payroll.routes.js";
+import { driverPayRoutes } from "./routes/driver-pay.routes.js";
 import { financeRoutes } from "./routes/finance.routes.js";
 import { healthRoutes } from "./routes/health.routes.js";
 import { debitNotesRoutes } from "./routes/debitnotes.routes.js";
@@ -160,6 +161,7 @@ async function main() {
   await app.register(officeCostsRoutes, { prefix: "/api/v1" });
   await app.register(attendanceRoutes, { prefix: "/api/v1" });
   await app.register(payrollRoutes, { prefix: "/api/v1" });
+  await app.register(driverPayRoutes, { prefix: "/api/v1" });
   await app.register(financeRoutes, { prefix: "/api/v1" });
   await app.register(debitNotesRoutes, { prefix: "/api/v1" });
   await app.register(shipperAccountsRoutes, { prefix: "/api/v1" });
