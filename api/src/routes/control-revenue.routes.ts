@@ -8,7 +8,8 @@ import { requireControl } from "./control.routes.js";
 import { controlCan } from "./control-analytics.routes.js";
 
 /**
- * The customer and money registers, and the bundle price list (spec §8; task #104).
+ * The customer and money registers, the bundle price list (spec §8; task #104) and the
+ * churn half of the advisory (task #155).
  *
  * 068 does the arithmetic. A register that crossed tenants from a route would either
  * return nothing (RLS, no app.tenant_id) or everything (the owner connection), and
@@ -18,13 +19,26 @@ import { controlCan } from "./control-analytics.routes.js";
  *
  * The gate is the role_permissions matrix, not the role keys in the session, for the
  * same reason 066's is: get_control_session returns roles only.
+ *
+ * 086 added the exit door, and it is gated on control.subscriptions.manage rather than on
+ * whoever can read the register: recording that a customer is gone is an act with a reason
+ * attached to it, and the seats that watch numbers are not the seats that sign them. The
+ * audit row is written inside the definer, as it is on the tenants desk — one door, one
+ * register, one trail, so a handler cannot record an exit without saying why.
  */
 
 const VIEW = "control.subscriptions.view";
+const MANAGE = "control.subscriptions.manage";
 const ANALYTICS = "control.analytics.view";
 const PRICING = "control.plans.manage";
 
 const SUB_STATUS = ["pending", "trial", "active", "grace", "expired", "suspended", "cancelled"];
+/** Exported so the SQL gate can prove the zod enum, the definer's guard and the table's
+ *  CHECK are the same seven words. */
+export const EXIT_REASONS = [
+  "company_decision", "price", "went_dormant", "service_failure",
+  "terms_violation", "payment_default", "other"
+];
 const LEDGER_STATUS = [
   "draft", "issued", "paid", "void", "refunded",
   "awaiting_verification", "live", "rejected", "expired", "cancelled"
@@ -44,6 +58,16 @@ export const LEDGER_SQL =
 
 /** Params: days. */
 export const MIX_SQL = "select * from platform_auth.control_revenue_mix($1)";
+
+/** Params: subscription, reason, note, actor user, actor role, ip. */
+export const CANCEL_SQL =
+  "select platform_auth.cancel_subscription($1,$2,$3,$4,$5,$6) as r";
+
+/** Params: days. */
+export const CHURN_SQL = "select platform_auth.churn_report($1) as r";
+
+/** Params: tenant, limit. */
+export const EXITS_SQL = "select platform_auth.control_subscription_exits($1,$2) as a";
 
 export const GROUPS_SQL = `
   select id, key, name, description, services, seat_limit,
@@ -78,6 +102,77 @@ export const GROUP_UPDATE_SQL = `
 const money = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 const count = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
 
+/**
+ * The two lines the churn half of the advisory can raise (task #155).
+ *
+ * Both come from the same definer the Customers desk reads, so the advisory and the desk
+ * cannot quote different numbers for the same window. The first is about the register: an
+ * exit nobody recorded is a lost customer the office has not admitted to yet. The second is
+ * about the clock: 008's gate reads tenants.licence_expires_at, not subscriptions.status, so
+ * a company whose term has passed keeps its 'active' status forever and no status-based
+ * query can see it. That is exactly why the card on the advisory used to say churn was
+ * unmeasurable, and it is why this line quotes the date instead of the column.
+ */
+export async function churnAdvisory(days = 90) {
+  const items: Array<Record<string, unknown>> = [];
+  const { rows } = await pool.query(CHURN_SQL, [days]);
+  const r = rows[0]?.r ?? {};
+  const exits = Number(r.exits?.companies ?? 0);
+  const lost = Number(r.exits?.mrr_lost ?? 0);
+  const outOfTerm = Number(r.today?.out_of_term ?? 0);
+  const atRisk = Number(r.today?.mrr_at_risk ?? 0);
+  const topReason = (r.by_reason ?? [])[0] ?? null;
+
+  if (exits > 0) {
+    items.push({
+      item_id: "churn_recorded_exits", rank: 4,
+      priority: exits >= 3 ? "high" : "medium", kind: "retention",
+      area: "Revenue",
+      title: `${exits} customer${exits === 1 ? "" : "s"} recorded as an exit in the last ${r.window_days ?? days} days`,
+      detail: "An exit is a person on the desk writing down that a company is gone and why — "
+        + "the only churn figure this system can state as a fact rather than as an inference "
+        + "from a date. The monthly rate they were paying is deducted from the recurring line; "
+        + "what they had already paid stays on the ledger, because a refund is a different act "
+        + "and the system moves no money.",
+      metric: Math.round(lost), unit: "TZS monthly lost",
+      action: topReason
+        ? `Read Who left on the Customers desk — the commonest reason so far is "${topReason.reason_code}".`
+        : "Read Who left on the Customers desk.",
+      evidence: (r.by_reason ?? []).slice(0, 6).map((x: any) => `${x.reason_code}: ${x.companies}`)
+    });
+  }
+  if (outOfTerm > 0) {
+    items.push({
+      item_id: "churn_out_of_term", rank: 6,
+      priority: outOfTerm >= 5 ? "high" : "medium", kind: "retention",
+      area: "Revenue",
+      title: `${outOfTerm} customer${outOfTerm === 1 ? "" : "s"} are past their term with no exit recorded`,
+      detail: "The licence gate compares tenants.licence_expires_at with now() and never "
+        + "writes subscriptions.status, so a company that stopped paying sits at 'active' in the "
+        + "status column while its term date runs behind it. These are not yet churn — some of "
+        + "them will renew — but they are the set a renewal call is for, and until the desk "
+        + "records each one as an exit or a sale, no churn rate in this system can count them.",
+      metric: Math.round(atRisk), unit: "TZS monthly at risk",
+      action: "Work the renewal window on the Customers desk, then record an exit for whoever "
+        + "is not coming back.",
+      evidence: []
+    });
+  }
+
+  return {
+    items,
+    headline: {
+      exits,
+      mrr_lost: Math.round(lost),
+      exit_rate_pct: r.exit_rate_pct === null || r.exit_rate_pct === undefined
+        ? null : Number(r.exit_rate_pct),
+      out_of_term: outOfTerm,
+      mrr_at_risk: Math.round(atRisk),
+      window_days: Number(r.window_days ?? days)
+    }
+  };
+}
+
 export async function controlRevenueRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- the customer register ----------
@@ -105,6 +200,10 @@ export async function controlRevenueRoutes(app: FastifyInstance, _opts: unknown)
       total: count(rows[0]?.matched),
       mrr: money(rows[0]?.matched_mrr),
       currency: "TZS",
+      // The desk renders the exit control only when this is true. It is read from the same
+      // matrix the POST checks, so a seat can never be shown a door it is about to be
+      // refused at.
+      can_manage: await controlCan(req, MANAGE),
       companies: rows.map(r => ({
         tenant_id: r.tenant_id,
         company_name: r.company_name,
@@ -129,6 +228,124 @@ export async function controlRevenueRoutes(app: FastifyInstance, _opts: unknown)
         grace_ends_at: r.grace_ends_at,
         trial_ends_at: r.trial_ends_at,
         signed_up_at: r.signed_up_at
+      }))
+    };
+  });
+
+  // ---------- record an exit ----------
+  //
+  // The reason and the note come from the person at the desk; the before-image comes from
+  // the database, priced the way the register prices. This handler cannot invent a lost
+  // month's revenue, and the definer refuses a second exit on a row already cancelled, so
+  // the register cannot be padded by a double click.
+  app.post("/control/subscriptions/:id/cancel", { preHandler: [requireControl] }, async (req: any) => {
+    if (!(await controlCan(req, MANAGE))) {
+      throw new ApiError("FORBIDDEN", "Only the seats that sell a subscription may end one.", 403);
+    }
+    await enforceRateLimit(`cancel:uid:${req.control.user_id}`, 12, 3600);
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      reasonCode: z.enum(EXIT_REASONS as [string, ...string[]]),
+      // The sentence that explains this exit in a year. A floor, not just a ceiling:
+      // "left" is not a reason, and 8 characters is the cheapest way to say that in a
+      // schema instead of in a policy nobody reads.
+      note: z.string().trim().min(8).max(600)
+    }).strict().parse(req.body);
+
+    const { rows } = await pool.query(CANCEL_SQL, [
+      id, body.reasonCode, body.note, req.control.user_id,
+      (req.control.roles ?? [])[0] ?? null, req.ip
+    ]);
+    const res = rows[0]?.r as { status?: string; message?: string } | undefined;
+    if (!res) throw new ApiError("UPSTREAM_ERROR", "The exit could not be recorded.", 502);
+    if (res.status !== "ok") {
+      if (res.status === "not_found") {
+        throw new ApiError("NOT_FOUND", `No subscription ${id} on the register.`, 404);
+      }
+      if (res.status === "conflict") {
+        throw new ApiError("CONFLICT", res.message ?? "That exit is already recorded.", 409);
+      }
+      throw new ApiError("VALIDATION_FAILED", res.message ?? "The exit was refused.", 400);
+    }
+    return res;
+  });
+
+  // ---------- who left, and what the base looks like today ----------
+  app.get("/control/churn", { preHandler: [requireControl] }, async (req: any) => {
+    if (!(await controlCan(req, VIEW)) && !(await controlCan(req, ANALYTICS))) {
+      throw new ApiError("FORBIDDEN", "Your platform role does not allow this.", 403);
+    }
+    await enforceRateLimit(`churn:uid:${req.control.user_id}`, 60, 60);
+    const q = z.object({
+      days: z.coerce.number().int().min(7).max(730).default(90)
+    }).parse(req.query ?? {});
+    const { rows } = await pool.query(CHURN_SQL, [q.days]);
+    const r = rows[0]?.r ?? {};
+    // The definer hands back jsonb, so its numerics are already JSON numbers; only the
+    // missing-figure cases need a decision, and the desk says "no exits recorded" when the
+    // rate has no denominator rather than printing 0%.
+    return {
+      ...r,
+      exits: {
+        companies: count(r.exits?.companies),
+        mrr_lost: money(r.exits?.mrr_lost),
+        seats_lost: count(r.exits?.seats_lost),
+        paid_before_exit: money(r.exits?.paid_before_exit),
+        avg_tenure_days: r.exits?.avg_tenure_days === null || r.exits?.avg_tenure_days === undefined
+          ? null : count(r.exits.avg_tenure_days),
+        still_cancelled: count(r.exits?.still_cancelled),
+        came_back: count(r.exits?.came_back),
+        currency: r.exits?.currency ?? "TZS"
+      },
+      exit_rate_pct: r.exit_rate_pct === null || r.exit_rate_pct === undefined
+        ? null : Number(r.exit_rate_pct),
+      sold_before_window: count(r.sold_before_window),
+      by_reason: (r.by_reason ?? []).map((x: any) => ({
+        reason_code: x.reason_code,
+        companies: count(x.companies),
+        mrr_lost: money(x.mrr_lost)
+      })),
+      by_month: (r.by_month ?? []).map((x: any) => ({
+        month: x.month,
+        cancellations: count(x.cancellations),
+        out_of_term: count(x.out_of_term),
+        mrr_lost: money(x.mrr_lost)
+      })),
+      today: {
+        customers: count(r.today?.customers),
+        live: count(r.today?.live),
+        out_of_term: count(r.today?.out_of_term),
+        cancelled: count(r.today?.cancelled),
+        blocked: count(r.today?.blocked),
+        closed: count(r.today?.closed),
+        mrr_live: money(r.today?.mrr_live),
+        mrr_at_risk: money(r.today?.mrr_at_risk),
+        seats_live: count(r.today?.seats_live),
+        currency: r.today?.currency ?? "TZS"
+      },
+      recent: (r.recent ?? []).map((x: any) => ({
+        ...x,
+        monthly_equivalent: money(x.monthly_equivalent),
+        collected: money(x.collected)
+      }))
+    };
+  });
+
+  // Every exit one company has, newest first — the sentence a renewal conversation needs
+  // before it is had ("you left us in March, and said it was the price").
+  app.get("/control/churn/exits/:tenantId", { preHandler: [requireControl] }, async (req: any) => {
+    if (!(await controlCan(req, VIEW)) && !(await controlCan(req, MANAGE))) {
+      throw new ApiError("FORBIDDEN", "Your platform role does not allow this.", 403);
+    }
+    const { tenantId } = req.params as { tenantId: string };
+    const q = z.object({
+      limit: z.coerce.number().int().min(1).max(50).default(20)
+    }).parse(req.query ?? {});
+    const { rows } = await pool.query(EXITS_SQL, [tenantId, q.limit]);
+    return {
+      tenant_id: tenantId,
+      exits: (rows[0]?.a ?? []).map((x: any) => ({
+        ...x, monthly_equivalent: money(x.monthly_equivalent), collected: money(x.collected)
       }))
     };
   });

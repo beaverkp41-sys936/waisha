@@ -9,6 +9,7 @@ import { requireControl } from "./control.routes.js";
 import { requireControlPermission } from "./control-analytics.routes.js";
 import { ERROR_SUMMARY_SQL } from "./control-errors.routes.js";
 import { reliabilityAdvisory } from "./control-reliability.routes.js";
+import { churnAdvisory } from "./control-revenue.routes.js";
 
 /**
  * The technical report and the advisory (069).
@@ -23,9 +24,10 @@ import { reliabilityAdvisory } from "./control-reliability.routes.js";
  * The advisory rules are queries with guards, so the list is short when the system is
  * healthy. `not_measured` is part of that honesty: the office asked for forecasts of
  * churn, funnel conversion and reliability, and some of those still have no data behind
- * them. Saying so is better than drawing a line through nothing. Reliability stopped
- * being one of them in 085 — its lines come from the same definers the Reliability desk
- * reads, through reliabilityAdvisory().
+ * them. Saying so is better than drawing a line through nothing. Two of them stopped being
+ * unknowns: reliability, from 085's stores through reliabilityAdvisory(), and churn, from
+ * 086's exit register through churnAdvisory() — both read by the same definers their desks
+ * read, so a headline here and a figure on a desk can never be two different numbers.
  */
 
 const SYSTEM = "control.system.view";
@@ -187,18 +189,12 @@ function runtimeAdvisory(drift: {
   return items;
 }
 
-const NOT_MEASURED = [
+export const NOT_MEASURED = [
   {
     thing: "Conversion between signup and first real use",
     why: "There is no funnel to measure: no page views, no signup source and no "
       + "invitation table. tenants.created_at is the only door anyone walks through, so "
       + "a rate drawn from it would be invented."
-  },
-  {
-    thing: "Churn",
-    why: "subscriptions.status 'cancelled' has no writer anywhere in the API. A lapse "
-      + "is recorded by the licence gate as expired or suspended, which is a different "
-      + "event — the register can show lapsed companies, not companies that chose to leave."
   },
   {
     thing: "Revenue per feature or per module",
@@ -303,7 +299,12 @@ export async function controlSystemRoutes(app: FastifyInstance, _opts: unknown) 
     // a percentiles figure the store cannot support yet.
     const reliability = await reliabilityAdvisory(7);
 
-    const items = [...dbItems, ...driftItems, ...errorItems, ...reliability.items]
+    // Who left, and who is past their term without the office having written it down. The
+    // same churn_report the Customers desk draws, on the same window, so the two agree.
+    const churn = await churnAdvisory(90);
+
+    const items = [...dbItems, ...driftItems, ...errorItems, ...reliability.items,
+      ...churn.items]
       .sort((a: any, b: any) => {
       if (a.rank !== b.rank) return a.rank - b.rank;
       const p = PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority);
@@ -333,7 +334,9 @@ export async function controlSystemRoutes(app: FastifyInstance, _opts: unknown) 
           || reliability.overall.p95_ms === undefined
           ? null : Number(reliability.overall.p95_ms),
         captures: Number(reliability.snapshot.captures ?? 0)
-      }
+      },
+      // The same for the churn lines: four figures off one churn_report call.
+      churn: churn.headline
     };
   });
 }

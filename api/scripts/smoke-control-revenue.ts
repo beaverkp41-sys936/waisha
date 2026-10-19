@@ -17,8 +17,11 @@
  *    money date, and neither has a pass whose reference is still queued — then the
  *    verify endpoint turns it into money and the ledger follows;
  *  - the register's total line describes the whole filtered set, not the page shown;
- *  - a price the pricing desk moves is the price every customer reads a second later,
+ *  - a price the desk moves is the price every customer reads a second later,
  *    and the correction is written to the trail with the figure it replaced;
+ *  - an exit recorded by the seat that sells moves the churn figures by exactly that
+ *    customer's month, does not touch the company's licence, cannot be written twice, and
+ *    is read as a return rather than a second exit when the office sells to them again;
  *  - nothing in these payloads carries a phone number, an email, a NIDA or a TIN.
  *
  * Run: DNS_FALLBACK=1 npx tsx scripts/smoke-control-revenue.ts   (API on :4000)
@@ -117,6 +120,7 @@ async function main() {
       await oi(`delete from user_roles where user_id = any($1::uuid[])`, [uids]).catch(() => { });
       await oi(`delete from sessions where user_id = any($1::uuid[])`, [uids]).catch(() => { });
     }
+    await oi(`delete from subscription_cancellations where tenant_id = any($1::uuid[])`, [all]).catch(() => { });
     await oi(`delete from payments where tenant_id = any($1::uuid[])`, [all]).catch(() => { });
     await oi(`delete from invoices where tenant_id = any($1::uuid[])`, [all]).catch(() => { });
     await oi(`delete from subscriptions where tenant_id = any($1::uuid[])`, [all]).catch(() => { });
@@ -125,7 +129,8 @@ async function main() {
     await oi(`delete from tenants where id = any($1::uuid[])`, [all]);
   };
   await sweep();
-  for (const b of ["register:", "ledger:", "bundles:", "activate:", "pass-verify:"]) {
+  for (const b of ["register:", "ledger:", "bundles:", "activate:", "pass-verify:",
+    "cancel:", "churn:"]) {
     await oi(`delete from rate_limits where bucket like $1`, [`${b}%`]);
   }
 
@@ -451,6 +456,209 @@ async function main() {
     check("the seats the bundle licensed stay where they were, because the customer keeps them",
       Number(row2?.seats_licensed) === suite.seat_limit, { seats: row2?.seats_licensed });
 
+    // ---------------- who left ----------------
+    phase("recording an exit, and reading churn");
+    const subId = row2?.subscription_id;
+    const ladderMonthly = Number(starter.price_monthly);
+    // The sentence the desk is allowed to leave, and the one it will be reading in a year.
+    const NOTE = `released at ${STAMP}: the office said a neighbouring agent was cheaper for the same lanes`;
+    const sumBy = (rows: any[], k: string) =>
+      (rows ?? []).reduce((s: number, x: any) => s + Number(x[k]), 0);
+    const smokeExits = () => oi(
+      `select count(*)::int as n from subscription_cancellations where company_name like $1`,
+      [TENANT_SWEEP]);
+
+    const manageAsAnalyst = await call(`/control/subscriptions?q=${encodeURIComponent(COMPANY)}`, ck("an"));
+    const manageAsBilling = await call(`/control/subscriptions?q=${encodeURIComponent(COMPANY)}`, ck("bill"));
+    check("the register itself tells the seat that only reads whether it may close a customer, " +
+      "so the desk never shows a door that is about to be refused",
+      manageAsAnalyst.json?.can_manage === false && manageAsBilling.json?.can_manage === true,
+      { an: manageAsAnalyst.json?.can_manage, bill: manageAsBilling.json?.can_manage });
+
+    const churnBefore = (await call("/control/churn?days=90", ck("an"))).json;
+    check("a departed customer is an analyst's number as well as a billing one",
+      churnBefore?.exits?.companies !== undefined && churnBefore?.today?.customers !== undefined,
+      { s: churnBefore?.exits, keys: Object.keys(churnBefore ?? {}) });
+    const churnAsSupport = await call("/control/churn", ck("se"));
+    check("…and the seat that fixes faults is not allowed to read the money it lost",
+      churnAsSupport.status === 403, { s: churnAsSupport.status });
+    const shortWindow = await call("/control/churn?days=3", ck("an"));
+    check("a window shorter than a week is refused rather than drawn", shortWindow.status === 400,
+      { s: shortWindow.status });
+
+    const inventedReason = await send(`/control/subscriptions/${subId}/cancel`, ck("bill"), {
+      reasonCode: "cheaper_elsewhere", note: NOTE
+    });
+    check("a reason the vocabulary does not contain is refused", inventedReason.status === 400,
+      { s: inventedReason.status, m: inventedReason.json?.error?.message });
+    const thinNote = await send(`/control/subscriptions/${subId}/cancel`, ck("bill"), {
+      reasonCode: "price", note: "left"
+    });
+    check("…and so is a note too short to explain the exit later", thinNote.status === 400,
+      { s: thinNote.status, m: thinNote.json?.error?.message });
+    const ghostSub = await send(`/control/subscriptions/${randomUUID()}/cancel`, ck("bill"), {
+      reasonCode: "price", note: NOTE
+    });
+    check("a subscription that is not on the register answers not found", ghostSub.status === 404,
+      { s: ghostSub.status });
+    const cancelAsAnalyst = await send(`/control/subscriptions/${subId}/cancel`, ck("an"), {
+      reasonCode: "price", note: NOTE
+    });
+    check("reading the register is not closing a customer on it", cancelAsAnalyst.status === 403,
+      { s: cancelAsAnalyst.status, m: cancelAsAnalyst.json?.error?.message });
+    const cancelAsSupport = await send(`/control/subscriptions/${subId}/cancel`, ck("se"), {
+      reasonCode: "price", note: NOTE
+    });
+    check("…nor is fixing the fault that lost them", cancelAsSupport.status === 403,
+      { s: cancelAsSupport.status });
+    check("none of the five refusals wrote an exit", (await smokeExits()).rows[0].n === 0,
+      (await smokeExits()).rows[0]);
+
+    const exited = await send(`/control/subscriptions/${subId}/cancel`, ck("bill"), {
+      reasonCode: "price", note: NOTE
+    });
+    const ladderTotal = Number(resold.json?.total);
+    check("the exit is recorded, priced the way the register prices this customer",
+      exited.status === 200 && exited.json?.status === "ok"
+      && Math.abs(Number(exited.json?.monthly_equivalent) - ladderMonthly) < 0.01
+      && exited.json?.prior_status === "active" && exited.json?.offering === "starter",
+      { s: exited.status, j: exited.json });
+    check("…and the money already paid is on the receipt rather than lost from it, " +
+      "because an exit does not refund",
+      Math.abs(Number(exited.json?.collected) - (bundleTotal + ladderTotal)) < 0.01
+      && Number(exited.json?.paid_invoices) === 2,
+      { collected: exited.json?.collected, n: exited.json?.paid_invoices });
+    check("…and the reason and the sentence the desk wrote are what came back",
+      exited.json?.reason_code === "price" && exited.json?.note === NOTE,
+      { r: exited.json?.reason_code });
+
+    const nowRow = (await call(`/control/subscriptions?q=${encodeURIComponent(COMPANY)}`, ck("an")))
+      .json?.companies?.find((c: any) => c.tenant_id === TT);
+    check("the register stops calling the company a live customer",
+      nowRow?.subscription_status === "cancelled" && nowRow?.auto_renew === false,
+      { st: nowRow?.subscription_status, ar: nowRow?.auto_renew });
+    const tenantNow = (await oi(
+      "select status, licence_expires_at from tenants where id = $1", [TT])).rows[0];
+    check("…but the company is still open and its term is untouched, because ending a sale is " +
+      "not a sanction — that is the tenants desk's act on its own duty",
+      tenantNow?.status === "active" && tenantNow?.licence_expires_at !== null, tenantNow);
+
+    const churnAfter = (await call("/control/churn?days=90", ck("an"))).json;
+    check("one more company left, and the money lost moved by exactly this customer's figure",
+      churnAfter.exits.companies === churnBefore.exits.companies + 1
+      && Math.abs(Number(churnAfter.exits.mrr_lost) - Number(churnBefore.exits.mrr_lost)
+        - ladderMonthly) < 0.01,
+      { n: churnAfter.exits.companies, was: churnBefore.exits.companies,
+        lost: churnAfter.exits.mrr_lost, was_lost: churnBefore.exits.mrr_lost });
+    check("today's states follow: the customer leaves live and joins cancelled, while the " +
+      "register still counts the company it sold",
+      churnAfter.today.live === churnBefore.today.live - 1
+      && churnAfter.today.cancelled === churnBefore.today.cancelled + 1
+      && churnAfter.today.customers === churnBefore.today.customers,
+      { live: churnAfter.today.live, canc: churnAfter.today.cancelled,
+        cust: churnAfter.today.customers, before: churnBefore.today });
+    check("the MRR the landing screen draws loses exactly that month",
+      Math.abs(Number(churnAfter.today.mrr_live) - Number(churnBefore.today.mrr_live)
+        + ladderMonthly) < 0.01,
+      { mrr: churnAfter.today.mrr_live, was: churnBefore.today.mrr_live });
+    check("a customer sold today is not counted as having been open before the window, so the " +
+      "rate's denominator did not move with its numerator",
+      churnAfter.sold_before_window === churnBefore.sold_before_window
+      && (churnAfter.sold_before_window === 0 ? churnAfter.exit_rate_pct === null
+        : Math.abs(100 * churnAfter.exits.companies / churnAfter.sold_before_window
+          - Number(churnAfter.exit_rate_pct)) <= 0.06),
+      { base: churnAfter.sold_before_window, rate: churnAfter.exit_rate_pct });
+    check("the same exits are counted once each by reason and by month",
+      sumBy(churnAfter.by_reason, "companies") === churnAfter.exits.companies
+      && sumBy(churnAfter.by_month, "cancellations") === churnAfter.exits.companies
+      && churnAfter.exits.still_cancelled + churnAfter.exits.came_back
+        === churnAfter.exits.companies,
+      { reasons: churnAfter.by_reason, months: churnAfter.by_month,
+        c: churnAfter.exits.companies });
+    check("the price reason carries its money, and the recent list holds the sentence the " +
+      "desk wrote against the company that said it",
+      churnAfter.by_reason.some((r: any) => r.reason_code === "price"
+        && Number(r.mrr_lost) >= ladderMonthly)
+      && churnAfter.recent[0]?.company_name === COMPANY && churnAfter.recent[0]?.note === NOTE
+      && churnAfter.recent[0]?.came_back === false
+      && ["billing_admin", "super_admin"].includes(churnAfter.recent[0]?.actor_role),
+      { reasons: churnAfter.by_reason, first: churnAfter.recent?.[0] });
+    check("out-of-term is still its own number — a licence that passed is not an exit",
+      churnAfter.today.out_of_term === churnBefore.today.out_of_term,
+      { now: churnAfter.today.out_of_term, was: churnBefore.today.out_of_term });
+
+    const adv = await call("/control/system/advisory", ck("sa"));
+    const churnLine = (adv.json?.items ?? []).find((i: any) => i.item_id === "churn_recorded_exits");
+    check("the advisory carries the line it used to say it could not draw, and sends the " +
+      "reader to the desk that wrote it",
+      adv.status === 200 && !!churnLine && churnLine.kind === "retention"
+      && churnLine.area === "Revenue" && /Customers desk/.test(String(churnLine.action ?? "")),
+      { s: adv.status, line: churnLine && { id: churnLine.item_id, m: churnLine.metric } });
+    check("…and its headline is the churn reader's own figures on the same window, not a " +
+      "second arithmetic done here",
+      Number(adv.json?.churn?.exits) === churnAfter.exits.companies
+      && Math.abs(Number(adv.json?.churn?.mrr_lost) - Number(churnAfter.exits.mrr_lost)) <= 1
+      && Number(adv.json?.churn?.window_days) === 90, adv.json?.churn);
+    const notMeasured = (adv.json?.not_measured ?? []).map((u: any) => String(u.thing));
+    check("…and the card that admitted churn was unmeasurable no longer says so",
+      notMeasured.length === 3 && !notMeasured.some((t) => /churn|cancell|retention/i.test(t)),
+      notMeasured);
+
+    const history = await call(`/control/churn/exits/${TT}`, ck("an"));
+    check("the company's own history is the exit, with the reason the office chose",
+      history.status === 200 && history.json?.exits?.length === 1
+      && history.json.exits[0].reason_code === "price"
+      && history.json.exits[0].note === NOTE
+      && history.json.exits[0].subscription_id === subId
+      && Math.abs(Number(history.json.exits[0].monthly_equivalent) - ladderMonthly) < 0.01,
+      { s: history.status, e: history.json?.exits });
+    const dupe = await send(`/control/subscriptions/${subId}/cancel`, ck("bill"), {
+      reasonCode: "went_dormant", note: "a second attempt at the same door"
+    });
+    check("a double click cannot pad the churn figure", dupe.status === 409,
+      { s: dupe.status, m: dupe.json?.error?.message });
+    check("…and the register still holds one exit for this company",
+      (await smokeExits()).rows[0].n === 1, (await smokeExits()).rows[0]);
+
+    const trail2 = (await oi(
+      `select actor_role, before, after from audit_logs
+        where tenant_id = $1 and action = 'subscription.cancelled'
+        order by ts desc limit 2`, [TT])).rows;
+    check("the trail carries the before-image and the id of the row it wrote, and it is the " +
+      "definer that wrote it — the handler has no audit call to forget",
+      trail2.length === 1 && trail2[0].after?.cancel_id === exited.json?.cancel_id
+      && trail2[0].before?.status === "active" && trail2[0].before?.auto_renew !== null
+      && trail2[0].after?.reason_code === "price" && trail2[0].after?.note === NOTE,
+      trail2.map(t => ({ b: t.before?.status, a: t.after?.cancel_id })));
+
+    const backAgain = await send(`/control/tenants/${TT}/activate`, ck("bill"), {
+      planKey: "starter", billingCycle: "monthly", provider: "bank"
+    });
+    check("the office can sell again to a customer that left", backAgain.status === 200,
+      { s: backAgain.status, j: backAgain.json });
+    const churnBack = (await call("/control/churn?days=90", ck("an"))).json;
+    check("…and the desk sees a return rather than a second exit",
+      churnBack.exits.companies === churnAfter.exits.companies
+      && churnBack.exits.came_back === churnAfter.exits.came_back + 1
+      && churnBack.exits.still_cancelled === churnAfter.exits.still_cancelled - 1,
+      { c: churnBack.exits.companies, back: churnBack.exits.came_back,
+        still: churnBack.exits.still_cancelled });
+    check("the money lost and the money collected stay frozen at the figures the exit wrote, " +
+      "because the before-image is history not a live read",
+      Math.abs(Number(churnBack.exits.mrr_lost) - Number(churnAfter.exits.mrr_lost)) < 0.01
+      && Math.abs(Number(churnBack.exits.paid_before_exit)
+        - Number(churnAfter.exits.paid_before_exit)) < 0.01,
+      { lost: churnBack.exits.mrr_lost, paid: churnBack.exits.paid_before_exit });
+    check("…and the recent line says so, while the company's history still holds the exit " +
+      "that was recorded",
+      churnBack.recent[0]?.came_back === true
+      && (await call(`/control/churn/exits/${TT}`, ck("an"))).json?.exits?.length === 1,
+      { came: churnBack.recent?.[0]?.came_back });
+    check("today's live and cancelled are back where they were, because the customer came",
+      churnBack.today.live === churnBefore.today.live
+      && churnBack.today.cancelled === churnBefore.today.cancelled,
+      { live: churnBack.today.live, canc: churnBack.today.cancelled });
+
     // ---------------- the overview agrees ----------------
     phase("the numbers on the landing screen agree with the registers");
     const ov = await call("/control/analytics/overview", ck("sa"));
@@ -486,7 +694,8 @@ async function main() {
     await oi(`delete from seekers where user_id = $1`, [uSEEK]);
     await oi(`delete from users where id = $1`, [uSEEK]);
     await sweep();
-    for (const b of ["register:", "ledger:", "bundles:", "activate:", "pass-verify:"]) {
+    for (const b of ["register:", "ledger:", "bundles:", "activate:", "pass-verify:",
+      "cancel:", "churn:"]) {
       await oi(`delete from rate_limits where bucket like $1`, [`${b}%`]);
     }
     const residue = (await oi(
@@ -498,15 +707,17 @@ async function main() {
                 where t.name like $1)::int as invoices,
               (select count(*) from payments p join tenants t on t.id = p.tenant_id
                 where t.name like $1)::int as payments,
+              (select count(*) from subscription_cancellations
+                where company_name like $1)::int as exits,
               (select count(*) from seeker_search_passes where payment_reference like 'RVSM%')::int as passes,
               (select count(*) from service_groups where key like 'rvsm-%')::int as groups`,
       [TENANT_SWEEP, EMAIL_SWEEP])).rows[0];
     const price = (await oi(
       "select price_monthly from service_groups where key = 'transport_cfa_office'")).rows[0];
-    check("the smoke left no company, no money row, no seat and no package behind",
+    check("the smoke left no company, no money row, no exit, no seat and no package behind",
       residue.tenants === 0 && residue.users === 0 && residue.subs === 0
       && residue.invoices === 0 && residue.payments === 0 && residue.passes === 0
-      && residue.groups === 0, residue);
+      && residue.groups === 0 && residue.exits === 0, residue);
     check("the price the desk moved is back on the list",
       Number(price?.price_monthly) === bundleMonthly, price);
     await owner.end();
