@@ -25,7 +25,11 @@ const schema = z.object({
   DOCUMENTS_BUCKET: z.string().default("waisha-documents"),
   // Shared secret for the internal scheduler endpoint (booking timers).
   // Never sent to a browser; the in-process loop calls the same functions.
-  INTERNAL_TICK_SECRET: z.string().optional().default("")
+  INTERNAL_TICK_SECRET: z.string().optional().default(""),
+  // Set by the deploy platform, absent locally. The health answer names the build that is
+  // actually serving, which is the first question an operator asks after a bad deploy — so
+  // it is optional rather than required, and the field is simply left out when unknown.
+  RENDER_GIT_COMMIT: z.string().optional().default("")
 });
 
 const parsed = schema.safeParse(process.env);

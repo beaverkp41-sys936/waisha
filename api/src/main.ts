@@ -5,7 +5,7 @@ import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import { env } from "./env.js";
 import { enforceRateLimit } from "./security/ratelimit.js";
-import { requireStaffAudience } from "./security/audience.js";
+import { isHealthPath, requireStaffAudience } from "./security/audience.js";
 import { requireOperationalTenant } from "./security/tenant-state.js";
 import { registerErrorHandling } from "./plugins/errors.js";
 import { registerReliability, startReliabilityLoops } from "./security/reliability.js";
@@ -58,6 +58,7 @@ import { officeCostsRoutes } from "./routes/office-costs.routes.js";
 import { attendanceRoutes } from "./routes/attendance.routes.js";
 import { payrollRoutes } from "./routes/payroll.routes.js";
 import { financeRoutes } from "./routes/finance.routes.js";
+import { healthRoutes } from "./routes/health.routes.js";
 import { debitNotesRoutes } from "./routes/debitnotes.routes.js";
 import { shipperAccountsRoutes } from "./routes/shipper-accounts.routes.js";
 import { portalRoutes } from "./routes/portal.routes.js";
@@ -89,9 +90,11 @@ async function main() {
   registerReliability(app);
 
   // Global baseline cap per client IP — backstops probing/flooding on routes
-  // that have no stricter dedicated bucket (auth buckets stay tighter).
+  // that have no stricter dedicated bucket (auth buckets stay tighter). The health
+  // surface is exempt because a platform probe shares its source IP with everyone
+  // behind it, and a check that gets a 429 answers "unhealthy" for a service that is fine.
   app.addHook("onRequest", async (req) => {
-    if (req.method === "OPTIONS" || req.url.startsWith("/api/v1/health")) return;
+    if (req.method === "OPTIONS" || isHealthPath(req.url)) return;
     await enforceRateLimit(`ip:${req.ip}`, 600, 60);
   });
 
@@ -106,7 +109,9 @@ async function main() {
   // issue and nothing else consults the database about it — this closes that window.
   app.addHook("preHandler", requireOperationalTenant);
 
-  app.get("/api/v1/health", async () => ({ status: "ok", time: new Date().toISOString() }));
+  // Registered without the prefix: the deploy platform probes the root of the service, and
+  // this module also answers /api/v1/health for the clients that learned that path first.
+  await app.register(healthRoutes);
   await app.register(authRoutes, { prefix: "/api/v1" });
   await app.register(contentRoutes, { prefix: "/api/v1" });
   await app.register(controlRoutes, { prefix: "/api/v1" });

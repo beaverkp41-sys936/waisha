@@ -62,4 +62,14 @@ describe("open surface allowlist", () => {
     expect(isOpenSurface("/api/v1/directory-x")).toBe(false);
     expect(isOpenSurface("/api/v1/seeker")).toBe(false);
   });
+  it("opens the root health probes exactly, because the deploy platform has no token", () => {
+    expect(isOpenSurface("/health")).toBe(true);
+    expect(isOpenSurface("/health/ready")).toBe(true);
+    expect(isOpenSurface("/health?deep=1")).toBe(true);
+  });
+  it("does not open the rest of the root beside them", () => {
+    expect(isOpenSurface("/health-x")).toBe(false);
+    expect(isOpenSurface("/health/ready/deep")).toBe(false);
+    expect(isOpenSurface("/healthz")).toBe(false);
+  });
 });

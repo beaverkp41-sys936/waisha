@@ -51,9 +51,26 @@ const OPEN_PREFIXES = [
   "/api/v1/client-errors"
 ];
 
+/**
+ * The health surface, listed here because this file owns what is open to every caller: the
+ * root the deploy platform probes (a bare 404 there reads the same as a dead service), the
+ * readiness twin that is allowed to answer 503, and the prefixed alias the portal client and
+ * the smoke suites learned first. The route registration and the IP-limiter exemption both
+ * read these constants, so a path cannot be added to one list and forgotten in another.
+ */
+export const HEALTH_LIVENESS = "/health";
+export const HEALTH_READINESS = "/health/ready";
+export const HEALTH_ALIAS = "/api/v1/health";
+const HEALTH_PATHS: string[] = [HEALTH_LIVENESS, HEALTH_READINESS, HEALTH_ALIAS];
+
+export function isHealthPath(url: string): boolean {
+  return HEALTH_PATHS.includes(url.split("?")[0]);
+}
+
 export function isOpenSurface(url: string): boolean {
-  const path = url.split("?")[0];
-  return OPEN_PREFIXES.some((p) => path.startsWith(p));
+  // The root health probes are exact paths, not a prefix: "/health" sits at the root of
+  // the service, where anything added beside it later should not inherit an open door.
+  return isHealthPath(url) || OPEN_PREFIXES.some((p) => url.split("?")[0].startsWith(p));
 }
 
 export async function requireStaffAudience(req: FastifyRequest & { user?: any }) {
