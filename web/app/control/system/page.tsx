@@ -32,6 +32,9 @@ type Advisory = {
   by_priority: Record<string, number>; by_kind: Record<string, number>;
   items: AdvisoryItem[];
   not_measured: Array<{ thing: string; why: string }>;
+  reliability?: {
+    uptime_pct: number | null; requests: number; p95_ms: number | null; captures: number;
+  };
 };
 
 type Report = {
@@ -462,7 +465,28 @@ export default function ControlSystemPage() {
                   note={String(report?.migrations?.last_name ?? "").replace(/\.sql$/, "")} />
                 <Tile label="Live sessions" value={int(report?.access?.sessions_live)}
                   note={`${int(report?.access?.accounts_locked)} locked`} />
+                {/* The three reliability halves, on the report that lists their limits. */}
+                <Tile label="Uptime 7d"
+                  value={advisory?.reliability?.uptime_pct === null
+                    || advisory?.reliability?.uptime_pct === undefined
+                    ? "not yet" : `${advisory.reliability.uptime_pct}%`}
+                  note="minutes a worker reported itself alive" />
+                <Tile label="Requests timed 7d" value={int(advisory?.reliability?.requests)}
+                  note="folded to one row per minute per route" />
+                <Tile label="p95 7d"
+                  value={advisory?.reliability?.p95_ms === null
+                    || advisory?.reliability?.p95_ms === undefined
+                    ? "no samples" : `${Math.round(advisory.reliability.p95_ms)} ms`}
+                  note="interpolated from five bands, so a magnitude" />
+                <Tile label="pg_stat captures" value={int(advisory?.reliability?.captures)}
+                  note="two are the minimum for a trend" />
               </div>
+              <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
+                Uptime, per-route latency and bloat history live on their own{" "}
+                <Link href="/control/reliability" className="underline"
+                  style={{ color: "var(--adm-accent)" }}>Reliability desk</Link>, where the gaps,
+                the band edges and the slow routes are named one by one.
+              </p>
             </Section>
 
             {/* ------------------------------------------- deployment */}

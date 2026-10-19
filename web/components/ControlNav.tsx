@@ -33,6 +33,7 @@ const SCREENS: Screen[] = [
     keys: ["control.departments.view", "control.departments.manage"] },
   { href: "/control/forensics", label: "Forensics", keys: ["control.audit.view"] },
   { href: "/control/system", label: "System", keys: ["control.system.view"] },
+  { href: "/control/reliability", label: "Reliability", keys: ["control.system.view"] },
   { href: "/control/errors", label: "Errors", keys: ["control.system.view"] },
   { href: "/control/announcements", label: "Notices", roles: LICENCE }
 ];

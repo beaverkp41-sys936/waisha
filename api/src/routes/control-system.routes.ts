@@ -8,6 +8,7 @@ import { storageConfigured } from "../storage/supabase.js";
 import { requireControl } from "./control.routes.js";
 import { requireControlPermission } from "./control-analytics.routes.js";
 import { ERROR_SUMMARY_SQL } from "./control-errors.routes.js";
+import { reliabilityAdvisory } from "./control-reliability.routes.js";
 
 /**
  * The technical report and the advisory (069).
@@ -21,8 +22,10 @@ import { ERROR_SUMMARY_SQL } from "./control-errors.routes.js";
  *
  * The advisory rules are queries with guards, so the list is short when the system is
  * healthy. `not_measured` is part of that honesty: the office asked for forecasts of
- * churn, funnel conversion and reliability, and some of those have no data behind them
- * at all. Saying so is better than drawing a line through nothing.
+ * churn, funnel conversion and reliability, and some of those still have no data behind
+ * them. Saying so is better than drawing a line through nothing. Reliability stopped
+ * being one of them in 085 — its lines come from the same definers the Reliability desk
+ * reads, through reliabilityAdvisory().
  */
 
 const SYSTEM = "control.system.view";
@@ -198,15 +201,6 @@ const NOT_MEASURED = [
       + "event — the register can show lapsed companies, not companies that chose to leave."
   },
   {
-    thing: "Uptime and request latency",
-    why: "Errors are collected now — every 5xx the API answered and everything the "
-      + "browser reports lands in the register in 082, which the error desk and the "
-      + "advisory both read. What is still missing is the other half of reliability: "
-      + "there is no metrics endpoint and no request-timing store, so /api/v1/health "
-      + "answers 'ok' for a process and nothing else. A route that is merely slow, and "
-      + "the gap between two restarts, are both invisible."
-  },
-  {
     thing: "Revenue per feature or per module",
     why: "invoices link to a subscription, and a bundle is sold as one price, so income "
       + "can be attributed to a package but never split across transport, CFA and office. "
@@ -216,11 +210,6 @@ const NOT_MEASURED = [
     thing: "Storage cost",
     why: "Documents record the byte size the uploader declared; the bucket itself lives "
       + "in Supabase and its true size and egress are not readable from Postgres."
-  },
-  {
-    thing: "Index and table bloat over time",
-    why: "pg_stat is read live and reset by a restart, and nothing stores a history of "
-      + "it, so growth can be reported only as today's snapshot, never as a trend."
   }
 ];
 
@@ -309,7 +298,13 @@ export async function controlSystemRoutes(app: FastifyInstance, _opts: unknown) 
       });
     }
 
-    const items = [...dbItems, ...driftItems, ...errorItems].sort((a: any, b: any) => {
+    // Uptime, latency and bloat, measured from 085's stores. Each line carries its own
+    // guard, so a week with no traffic or no second snapshot says that instead of adding
+    // a percentiles figure the store cannot support yet.
+    const reliability = await reliabilityAdvisory(7);
+
+    const items = [...dbItems, ...driftItems, ...errorItems, ...reliability.items]
+      .sort((a: any, b: any) => {
       if (a.rank !== b.rank) return a.rank - b.rank;
       const p = PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority);
       if (p !== 0) return p;
@@ -328,7 +323,17 @@ export async function controlSystemRoutes(app: FastifyInstance, _opts: unknown) 
       by_priority: count((x: any) => x.priority),
       by_kind: count((x: any) => x.kind),
       items,
-      not_measured: NOT_MEASURED
+      not_measured: NOT_MEASURED,
+      // The headline behind the Reliability lines, so the advisory can point at the desk
+      // instead of restating it: four numbers, all read from the same definers.
+      reliability: {
+        uptime_pct: reliability.uptime.uptime_pct ?? null,
+        requests: Number(reliability.overall.requests ?? 0),
+        p95_ms: reliability.overall.p95_ms === null
+          || reliability.overall.p95_ms === undefined
+          ? null : Number(reliability.overall.p95_ms),
+        captures: Number(reliability.snapshot.captures ?? 0)
+      }
     };
   });
 }

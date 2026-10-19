@@ -8,6 +8,7 @@ import { enforceRateLimit } from "./security/ratelimit.js";
 import { requireStaffAudience } from "./security/audience.js";
 import { requireOperationalTenant } from "./security/tenant-state.js";
 import { registerErrorHandling } from "./plugins/errors.js";
+import { registerReliability, startReliabilityLoops } from "./security/reliability.js";
 import { authRoutes } from "./routes/auth.routes.js";
 import { contentRoutes } from "./routes/content.routes.js";
 import { controlRoutes } from "./routes/control.routes.js";
@@ -16,6 +17,7 @@ import { controlAnalyticsRoutes } from "./routes/control-analytics.routes.js";
 import { controlRevenueRoutes } from "./routes/control-revenue.routes.js";
 import { controlStaffRoutes } from "./routes/control-staff.routes.js";
 import { controlSystemRoutes } from "./routes/control-system.routes.js";
+import { controlReliabilityRoutes } from "./routes/control-reliability.routes.js";
 import { controlRecommendationRoutes } from "./routes/control-recommendations.routes.js";
 import { controlErrorRoutes } from "./routes/control-errors.routes.js";
 import { controlDepartmentRoutes } from "./routes/control-departments.routes.js";
@@ -80,6 +82,11 @@ async function main() {
   });
   registerErrorHandling(app);
 
+  // Uptime and latency are recorded from the same process they describe, so the hooks are
+  // installed before anything else runs — a request that never reaches a handler still
+  // cost the server something, and that is the number worth having during a flood.
+  registerReliability(app);
+
   // Global baseline cap per client IP — backstops probing/flooding on routes
   // that have no stricter dedicated bucket (auth buckets stay tighter).
   app.addHook("onRequest", async (req) => {
@@ -107,6 +114,7 @@ async function main() {
   await app.register(controlRevenueRoutes, { prefix: "/api/v1" });
   await app.register(controlStaffRoutes, { prefix: "/api/v1" });
   await app.register(controlSystemRoutes, { prefix: "/api/v1" });
+  await app.register(controlReliabilityRoutes, { prefix: "/api/v1" });
   await app.register(controlRecommendationRoutes, { prefix: "/api/v1" });
   await app.register(controlErrorRoutes, { prefix: "/api/v1" });
   await app.register(controlDepartmentRoutes, { prefix: "/api/v1" });
@@ -155,6 +163,10 @@ async function main() {
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
   startBookingTimerLoop(app.log);
   startTenantPolicyLoop(app.log);
+  // The boot line and the first beat go out only once the port is actually open: this
+  // register describes the process that was serving, and a boot that died before listen
+  // belongs in the log, not in the uptime figure.
+  startReliabilityLoops(app.log);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
