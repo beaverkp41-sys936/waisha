@@ -43,6 +43,7 @@ export const CFA_NAV: NavItem[] = [
   { href: "/app/cfa/proforma", label: "Proforma & quotes", icon: ReceiptText },
   { href: "/app/cfa/consolidation", label: "Consolidation", icon: Boxes },
   { href: "/app/cfa/ledger", label: "Ledger", icon: ChartColumn },
+  { href: "/app/cfa/finance", label: "Finance & tax", icon: Wallet },
   { href: "/app/documents", label: "Documents", icon: FileSignature },
   { href: "/app/cfa/duty", label: "Duty calculator", icon: Calculator },
   { href: "/app/cfa/messages", label: "Messages", icon: MessageSquare },

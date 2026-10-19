@@ -47,6 +47,12 @@ const MODULES = [
     plan: "Business"
   },
   {
+    name: "Finance & Tax",
+    href: "/app/cfa/finance",
+    description: "The company's own paper, footed: receivables aged into five buckets, cash in against spend out, a VAT position read from the bills, and a register of returns that drafts, prepares, records the filing and supersedes a mistake without ever rewriting filed paper.",
+    plan: "Business"
+  },
+  {
     name: "Documents Vault",
     href: "/app/documents",
     description: "Every file stored in the portal — licences, insurance, invoices, bills of lading and packing lists, filterable by type and entity.",
