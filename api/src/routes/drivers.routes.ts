@@ -7,6 +7,7 @@ import { encryptField, searchHash } from "../util/crypto.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { requirePermission } from "../security/permissions.js";
 import { writeAudit } from "../audit/audit.js";
+import { mirrorScalarAssignment } from "../operations/fleet.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -92,10 +93,20 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
          body.status ?? "available", body.address ?? null, body.nextOfKin ?? null,
          body.nextOfKinPhone ? encryptField(body.nextOfKinPhone) : null,
          body.notes ?? null, req.user.sub, req.user.sub]);
+      // A driver hired straight onto a vehicle opens the same register row the fleet desk
+      // would have written; otherwise the new name is on the truck in one page and absent
+      // from the register in the other.
+      const seat = body.assignedVesselId
+        ? await mirrorScalarAssignment(c, {
+            tenantId: req.user.tid, driverId: id, vesselId: body.assignedVesselId,
+            previousVesselId: null, actorId: req.user.sub
+          })
+        : null;
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         requestId: req.requestId, entity: "drivers", entityId: id,
-        action: "driver.created", after: { name: body.fullName }
+        action: "driver.created",
+        after: { name: body.fullName, assignment_id: seat?.openedId ?? null }
       });
     });
     return reply.status(201).send({ id });
@@ -107,7 +118,7 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
     const body = driverSchema.partial().parse(req.body);
 
     const existing = await withTenant(req.user.tid, (c) => c.query(
-      "select nida_search, phone_search, next_of_kin_phone_encrypted from drivers where id=$1 and tenant_id=$2 and deleted_at is null",
+      "select nida_search, phone_search, next_of_kin_phone_encrypted, assigned_vessel_id from drivers where id=$1 and tenant_id=$2 and deleted_at is null",
       [id, req.user.tid]));
     if (!existing.rowCount) throw new ApiError("NOT_FOUND", "Driver not found", 404);
     const prev = existing.rows[0];
@@ -158,6 +169,16 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
     if ("branchId" in body) set("branch_id", body.branchId ?? null);
 
     await withTenant(req.user.tid, async (c) => {
+      // Before the write, so a vehicle already in another driver's hands refuses the whole
+      // change rather than moving the scalar and leaving the register to disagree with it.
+      const seat = "assignedVesselId" in body
+        ? await mirrorScalarAssignment(c, {
+            tenantId: req.user.tid, driverId: id,
+            vesselId: body.assignedVesselId ?? null,
+            previousVesselId: prev.assigned_vessel_id ?? null,
+            actorId: req.user.sub
+          })
+        : null;
       await c.query(
         `update drivers set ${["updated_by = $2", "updated_at = now()", ...sets].join(", ")}
          where id = $1 and tenant_id = $3 and deleted_at is null`,
@@ -167,7 +188,10 @@ export async function driversRoutes(app: FastifyInstance, _opts: unknown) {
         requestId: req.requestId, entity: "drivers", entityId: id,
         action: "driver.updated",
         before: { nida_search: prev.nida_search, phone_search: prev.phone_search },
-        after: { name: body.fullName ?? null, status: body.status ?? null }
+        after: {
+          name: body.fullName ?? null, status: body.status ?? null,
+          assignment_opened: seat?.openedId ?? null, assignment_ended: seat?.endedId ?? null
+        }
       });
     });
     return reply.send({ ok: true });

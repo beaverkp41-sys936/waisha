@@ -13,6 +13,7 @@ import {
   tripStampsFor,
   type TripStatus
 } from "../operations/trip-status.js";
+import { recordTripLegPosition } from "../operations/fleet.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -378,7 +379,7 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
 
     await withTenant(req.user.tid, async (c) => {
       const prev = await c.query(
-        "select status, reference, vessel_id, driver_id from trips where id=$1 and tenant_id=$2 and deleted_at is null",
+        "select status, reference, vessel_id, driver_id, route_id from trips where id=$1 and tenant_id=$2 and deleted_at is null",
         [id, req.user.tid]);
       if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Trip not found", 404);
       const from = prev.rows[0].status as (typeof TRIP_STATUSES)[number];
@@ -422,13 +423,28 @@ export async function tripsRoutes(app: FastifyInstance, _opts: unknown) {
           prev.rows[0].driver_id, DRIVER_STATUS_FOR_TRIP[body.status]);
       }
 
+      // A leg that starts or ends is the one position the platform knows without a device:
+      // the route's own traced anchor. Recorded from the trip's route, never from a guess —
+      // an uncoordinated route leaves the vehicle unlocated rather than wrongly placed.
+      let positioned = false;
+      if (prev.rows[0].vessel_id && prev.rows[0].route_id &&
+        (body.status === "in_transit" || body.status === "arrived")) {
+        positioned = await recordTripLegPosition(c, {
+          tenantId: req.user.tid, tripId: id, vesselId: prev.rows[0].vessel_id,
+          routeId: prev.rows[0].route_id, driverId: prev.rows[0].driver_id ?? null,
+          reference: prev.rows[0].reference ?? null,
+          source: body.status === "in_transit" ? "trip_departure" : "trip_arrival",
+          actorId: req.user.sub
+        });
+      }
+
       await writeAudit(c, {
         tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
         userAgent: req.headers["user-agent"] ?? null,
         requestId: req.requestId, entity: "trips", entityId: id,
         action: "trip.status_changed",
         before: { status: from },
-        after: { status: body.status, synced }
+        after: { status: body.status, synced, position_recorded: positioned }
       });
     });
     return reply.send({ ok: true });
