@@ -2,11 +2,15 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import {
+  Activity, Banknote, Boxes, Bug, Building2, Globe, Lightbulb, LogOut, Megaphone, ScrollText,
+  Settings2, Tag, TrendingUp, UserCog, Users, type LucideIcon
+} from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 const LICENCE = ["super_admin", "billing_admin"];
 
-type Screen = { href: string; label: string; roles?: string[]; keys?: string[] };
+type Screen = { href: string; label: string; icon: LucideIcon; roles?: string[]; keys?: string[] };
 
 /**
  * Which desk a seat may open, keyed on what each route actually enforces.
@@ -17,25 +21,28 @@ type Screen = { href: string; label: string; roles?: string[]; keys?: string[] }
  * are matched here as roles — a link conditioned on a permission the route never reads
  * would promise a door that then shuts. Tenants carries both: selling a licence is a
  * licence role, shutting a company is control.tenants.manage.
+ *
+ * The icon is the desk's own: fourteen lines of the same colour read as a wall of text,
+ * and an operator hunting for the machine room looks for the gear, not the word.
  */
 const SCREENS: Screen[] = [
-  { href: "/control", label: "Pricing", roles: LICENCE },
-  { href: "/control/revenue", label: "Revenue", keys: ["control.analytics.view"] },
-  { href: "/control/subscriptions", label: "Customers",
+  { href: "/control", label: "Pricing", icon: Tag, roles: LICENCE },
+  { href: "/control/revenue", label: "Revenue", icon: TrendingUp, keys: ["control.analytics.view"] },
+  { href: "/control/subscriptions", label: "Customers", icon: Users,
     keys: ["control.subscriptions.view", "control.analytics.view"] },
-  { href: "/control/payments", label: "Money", keys: ["control.subscriptions.view"] },
-  { href: "/control/tenants", label: "Tenants", roles: LICENCE, keys: ["control.tenants.manage"] },
-  { href: "/control/directory", label: "Directory", roles: LICENCE },
-  { href: "/control/recommendations", label: "Inbox",
+  { href: "/control/payments", label: "Money", icon: Banknote, keys: ["control.subscriptions.view"] },
+  { href: "/control/tenants", label: "Tenants", icon: Building2, roles: LICENCE, keys: ["control.tenants.manage"] },
+  { href: "/control/directory", label: "Directory", icon: Globe, roles: LICENCE },
+  { href: "/control/recommendations", label: "Inbox", icon: Lightbulb,
     keys: ["control.recommendations.view", "control.recommendations.manage"] },
-  { href: "/control/staff", label: "Staff", keys: ["control.staff.view", "control.staff.manage"] },
-  { href: "/control/departments", label: "Departments",
+  { href: "/control/staff", label: "Staff", icon: UserCog, keys: ["control.staff.view", "control.staff.manage"] },
+  { href: "/control/departments", label: "Departments", icon: Boxes,
     keys: ["control.departments.view", "control.departments.manage"] },
-  { href: "/control/forensics", label: "Forensics", keys: ["control.audit.view"] },
-  { href: "/control/system", label: "System", keys: ["control.system.view"] },
-  { href: "/control/reliability", label: "Reliability", keys: ["control.system.view"] },
-  { href: "/control/errors", label: "Errors", keys: ["control.system.view"] },
-  { href: "/control/announcements", label: "Notices", roles: LICENCE }
+  { href: "/control/forensics", label: "Forensics", icon: ScrollText, keys: ["control.audit.view"] },
+  { href: "/control/system", label: "System", icon: Settings2, keys: ["control.system.view"] },
+  { href: "/control/reliability", label: "Reliability", icon: Activity, keys: ["control.system.view"] },
+  { href: "/control/errors", label: "Errors", icon: Bug, keys: ["control.system.view"] },
+  { href: "/control/announcements", label: "Notices", icon: Megaphone, roles: LICENCE }
 ];
 
 function open(s: Screen, roles: string[], permissions: string[]) {
@@ -59,28 +66,50 @@ export function ControlNav() {
 
   const visible = SCREENS.filter((s) => open(s, access.roles, access.permissions));
 
+  // The desks read left to right along their own row under the announcement bar, each
+  // entry one unbreakable line of icon then name. `order: 4` is what keeps it on that
+  // row: the header is a single wrapping flex shared by fifteen desk pages, and below
+  // 560px the ticker claims order 3, so a nav that relied on DOM order alone would jump
+  // back above it. Wrapping rather than columns because a panel this wide is scanned
+  // along the top, not read down a list.
   return (
-    <div className="flex flex-wrap items-center justify-end gap-x-14 gap-y-6 text-xs font-semibold"
-      style={{ maxWidth: 660 }}>
-      {visible.map((s) => {
-        const active = pathname === s.href;
-        return active ? (
-          <span key={s.href} aria-current="page" className="text-white">{s.label}</span>
-        ) : (
-          <Link key={s.href} href={s.href} className="underline" style={{ color: "var(--adm-accent)" }}>
-            {s.label}
-          </Link>
-        );
-      })}
-      <button type="button"
-        className="rounded-input border px-16 py-8 text-white"
-        style={{ borderColor: "rgba(255,255,255,0.4)" }}
-        onClick={async () => {
-          await fetch(`${API}/api/v1/control/auth/logout`, { method: "POST", credentials: "include" });
-          window.location.href = "/control/login";
-        }}>
-        Sign out
-      </button>
-    </div>
+    <nav className="w-full" style={{ order: 4 }} aria-label="Control desks">
+      <ul className="m-0 flex list-none flex-wrap items-center gap-x-20 gap-y-6 p-0">
+        {visible.map((s) => {
+          const active = pathname === s.href;
+          const Icon = s.icon;
+          const row = "flex items-center gap-8 whitespace-nowrap border-l-2 py-4 pl-8 text-xs font-semibold";
+          return (
+            <li key={s.href}>
+              {active ? (
+                <span aria-current="page" className={`${row} text-white`}
+                  style={{ borderColor: "var(--adm-accent)" }}>
+                  <Icon aria-hidden width={15} height={15} strokeWidth={1.9} />
+                  {s.label}
+                </span>
+              ) : (
+                <Link href={s.href} className={`${row} hover:text-white`}
+                  style={{ borderColor: "transparent", color: "var(--adm-accent)" }}>
+                  <Icon aria-hidden width={15} height={15} strokeWidth={1.9} />
+                  {s.label}
+                </Link>
+              )}
+            </li>
+          );
+        })}
+        <li>
+          <button type="button"
+            className="flex items-center gap-8 whitespace-nowrap border-0 bg-transparent py-4 text-xs font-semibold"
+            style={{ color: "var(--adm-accent)" }}
+            onClick={async () => {
+              await fetch(`${API}/api/v1/control/auth/logout`, { method: "POST", credentials: "include" });
+              window.location.href = "/control/login";
+            }}>
+            <LogOut aria-hidden width={15} height={15} strokeWidth={1.9} />
+            Sign out
+          </button>
+        </li>
+      </ul>
+    </nav>
   );
 }

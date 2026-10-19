@@ -306,7 +306,7 @@ export default function ControlDepartmentsPage() {
   if (forbidden) {
     return (
       <div className="control-shell page-shell flex-1">
-        <header className="flex items-center justify-between px-24 py-12"
+        <header className="flex flex-wrap items-center justify-between px-24 py-12"
           style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--adm-accent)" }}>
           <p className="text-sm font-bold tracking-[0.08em] text-white">T ENGO AEGIS Control</p>
           <ControlNav />
@@ -339,7 +339,7 @@ export default function ControlDepartmentsPage() {
 
   return (
     <div className="control-shell page-shell flex-1">
-      <header className="flex items-center justify-between px-24 py-12"
+      <header className="flex flex-wrap items-center justify-between px-24 py-12"
         style={{ background: "var(--brand-deep)", borderBottom: "3px solid var(--adm-accent)" }}>
         <div>
           <p className="text-sm font-bold tracking-[0.08em] text-white">T ENGO AEGIS Control</p>
