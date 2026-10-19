@@ -163,7 +163,11 @@ body {
   position: absolute;
   inset: 0;
   background: #08202f;
-  animation: shellReveal 420ms var(--ease) both;
+  /* Ends invisible, so invisible is the base style and the fill mode is dropped:
+     a `both` here would pin the opaque first keyframe for as long as the
+     document timeline refuses to advance, which is a navy screen, not a reveal. */
+  opacity: 0;
+  animation: shellReveal 420ms var(--ease);
 }
 @keyframes shellReveal {
   from { opacity: 1; }
@@ -317,8 +321,11 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   padding: 20px 0 calc(16px + env(safe-area-inset-bottom));
   padding-left: env(safe-area-inset-left);
   background: linear-gradient(180deg, var(--side-top), var(--side-mid) 48%, var(--side-bottom));
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
+  /* No backdrop-filter here, though every other glass surface has one: this pane is
+     fixed and full-height over three fixed photo layers, so a blur makes the
+     compositor re-sample it on every frame the header's marquee produces. Over a
+     remote-desktop link that reads as the left column shimmering and never settling,
+     and a 3px blur under a 44-60% navy wash is not visible enough to be worth it. */
   border-right: 1px solid rgba(255, 255, 255, 0.22);
 }
 .app-main {
@@ -541,6 +548,9 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   display: flex;
   width: max-content;
   animation: announceScroll var(--announce-dur, 30s) linear infinite;
+  /* Own layer, so the marquee's travel does not re-raster the topbar it lives
+     in — the bar is a backdrop-filter surface and would re-blur per frame. */
+  will-change: transform;
 }
 .announce-viewport:hover .announce-track { animation-play-state: paused; }
 .announce-seq { display: inline-flex; align-items: center; white-space: nowrap; }
@@ -587,16 +597,31 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 }
 .alert-pill:hover { background: rgba(13, 51, 80, 0.62); }
 .alert-dot {
+  position: relative;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--danger);
   box-shadow: 0 0 0 3px rgba(163, 58, 58, 0.28);
 }
-.alert-dot.is-live { animation: alertPulse 2.4s var(--ease) infinite; }
+/* The pulse used to animate box-shadow, which is a paint property — so it
+   repainted the topbar every frame, and the topbar carries a 12px
+   backdrop-filter, so it also re-ran the blur across the whole bar every frame,
+   forever, at a 2.4s cadence. A ring scaled on ::after moves on the compositor
+   and leaves the bar's paint alone. */
+.alert-dot.is-live { box-shadow: none; }
+.alert-dot.is-live::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 3px solid rgba(163, 58, 58, 0.28);
+  animation: alertPulse 2.4s var(--ease) infinite;
+  will-change: transform, opacity;
+}
 @keyframes alertPulse {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(163, 58, 58, 0.28); }
-  50% { box-shadow: 0 0 0 6px rgba(163, 58, 58, 0.08); }
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.5); opacity: 0.3; }
 }
 
 /* Flagpole: the mast reaches the bar's bottom border, the cloth flies from
@@ -636,6 +661,12 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   transform-origin: right center;
   box-shadow: 0 4px 12px rgba(4, 16, 26, 0.45);
   animation: flagWave 4.5s ease-in-out infinite;
+  /* The cloth shading below is mix-blend-mode: overlay. Unconfined, that blend
+     reads the whole topbar behind it and re-composites it on every wave frame;
+     isolation keeps the blend group to the flag itself, which is all it ever
+     sampled visually. */
+  isolation: isolate;
+  will-change: transform;
 }
 .flagpole-flag img { width: 100%; height: 100%; object-fit: cover; display: block; }
 /* Cloth shading: three soft folds riding across the flag. */
@@ -971,19 +1002,25 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 .waisha-btn:active { transform: translateY(1px); }
 .waisha-btn:disabled { opacity: 0.6; }
 
-.panel-enter { animation: panelIn 200ms var(--ease) both; }
+/* No `both` on these three, though it looks like the tidy choice: their last
+   keyframe is the base style, so a fill buys nothing, while `both` also pins the
+   FIRST keyframe whenever the document timeline stalls — which Chromium does in an
+   occluded or remote-desktop-composited tab. The result is a page that renders at
+   opacity 0 and never comes in. Without a fill a stalled frame shows the real
+   content instead. */
+.panel-enter { animation: panelIn 200ms var(--ease); }
 @keyframes panelIn {
   from { opacity: 0; transform: translateX(12px); }
   to { opacity: 1; transform: translateX(0); }
 }
 .underline-slide { transition: transform 200ms var(--ease); }
 
-.sheet-in { animation: sheetIn 220ms var(--ease) both; }
+.sheet-in { animation: sheetIn 220ms var(--ease); }
 @keyframes sheetIn {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.page-enter { animation: pageIn 260ms var(--ease) both; }
+.page-enter { animation: pageIn 260ms var(--ease); }
 @keyframes pageIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
