@@ -9,7 +9,7 @@ import { requireControl } from "./control.routes.js";
 import { requireControlPermission } from "./control-analytics.routes.js";
 import { ERROR_SUMMARY_SQL } from "./control-errors.routes.js";
 import { reliabilityAdvisory } from "./control-reliability.routes.js";
-import { churnAdvisory } from "./control-revenue.routes.js";
+import { churnAdvisory, moduleAllocationAdvisory } from "./control-revenue.routes.js";
 
 /**
  * The technical report and the advisory (069).
@@ -197,10 +197,12 @@ export const NOT_MEASURED = [
       + "a rate drawn from it would be invented."
   },
   {
-    thing: "Revenue per feature or per module",
-    why: "invoices link to a subscription, and a bundle is sold as one price, so income "
-      + "can be attributed to a package but never split across transport, CFA and office. "
-      + "Search-pass money has no offering at all."
+    thing: "Money earned by one feature inside an office",
+    why: "088 splits a bundle across the three offices it sells, weighted by the work each "
+      + "office recorded, so transport, CFA and office each carry a share and the panel says "
+      + "which part came from evidence and which from the even fall-back. Nothing narrower "
+      + "than that exists: payroll and attendance both sit inside the office share, and no "
+      + "table holds a price for a feature, so a per-feature figure would be invented."
   },
   {
     thing: "Storage cost",
@@ -303,8 +305,12 @@ export async function controlSystemRoutes(app: FastifyInstance, _opts: unknown) 
     // same churn_report the Customers desk draws, on the same window, so the two agree.
     const churn = await churnAdvisory(90);
 
+    // How much of the allocation is evidence and how much is a fall-back. Same definer the
+    // Revenue desk reads, same window, so a card and a panel cannot disagree.
+    const allocation = await moduleAllocationAdvisory(90);
+
     const items = [...dbItems, ...driftItems, ...errorItems, ...reliability.items,
-      ...churn.items]
+      ...churn.items, ...allocation.items]
       .sort((a: any, b: any) => {
       if (a.rank !== b.rank) return a.rank - b.rank;
       const p = PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority);
@@ -336,7 +342,10 @@ export async function controlSystemRoutes(app: FastifyInstance, _opts: unknown) 
         captures: Number(reliability.snapshot.captures ?? 0)
       },
       // The same for the churn lines: four figures off one churn_report call.
-      churn: churn.headline
+      churn: churn.headline,
+      // And for the allocation lines: what part of the split is evidence and what is the
+      // even fall-back, off one control_module_allocation call.
+      allocation: allocation.headline
     };
   });
 }

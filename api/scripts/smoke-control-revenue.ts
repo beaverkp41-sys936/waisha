@@ -383,6 +383,88 @@ async function main() {
     check("a window shorter than a week is refused rather than drawn",
       tooShort.status === 400, { s: tooShort.status });
 
+    // ---------------- the allocation across the offices ----------------
+    phase("the module allocation");
+    const alloc = await call("/control/revenue/allocation?days=30", ck("an"));
+    const lines = alloc.json?.lines ?? [];
+    check("the analyst gets six ordered lines, and the panel is told it is an allocation",
+      alloc.status === 200 && lines.length === 6
+      && lines.map((l: any) => l.module).join(",")
+        === "transport,cfa,office,plan_ladder,directory_search,unattributed"
+      && alloc.json?.allocated === true,
+      { s: alloc.status, m: lines.map((l: any) => l.module) });
+    check("…with the definition of a unit of work printed beside the numbers, so a reader " +
+      "knows what the weight is made of",
+      Array.isArray(alloc.json?.unit_definition) && alloc.json.unit_definition.length === 3,
+      alloc.json?.unit_definition);
+    check("every line names the basis it was placed on — an allocation never reads as a price",
+      lines.every((l: any) => typeof l.basis === "string" && l.basis.length > 10),
+      lines.map((l: any) => l.basis));
+    const lineMoney = lines.reduce((s: number, l: any) => s + Number(l.income), 0);
+    check("the six lines add up to the money the window holds, to the penny",
+      Math.abs(lineMoney - Number(alloc.json?.platform_income)) < 0.01,
+      { lines: lineMoney, platform: alloc.json?.platform_income });
+    check("and their shares add up to one whole", Math.abs(
+      lines.reduce((s: number, l: any) => s + Number(l.share), 0) - 1) < 0.001,
+      lines.map((l: any) => l.share));
+    check("the figures arrive as numbers, not as the strings pg hands back",
+      typeof lines[0]?.income === "number" && typeof lines[0]?.customers === "number"
+      && typeof lines[0]?.units === "number", lines[0]);
+    const directoryLine = lines.find((l: any) => l.module === "directory_search");
+    check("a seeker's confirmed pass is its own line beside the split, and the pass this run " +
+      "just confirmed is inside it",
+      Number(directoryLine?.income) >= Number(weekly.price)
+      && Number(directoryLine?.customers) >= 1, directoryLine);
+    check("the three offices are the only lines that claim units of work",
+      lines.filter((l: any) => !["transport", "cfa", "office"].includes(l.module))
+        .every((l: any) => Number(l.units) === 0),
+      lines.map((l: any) => [l.module, l.units]));
+    check("of an office line, the part proved by work plus the part split evenly is the whole " +
+      "of that line", ["transport", "cfa", "office"].every(m => {
+        const l = lines.find((x: any) => x.module === m);
+        return Math.abs(Number(l.usage_income) + Number(l.even_income) - Number(l.income)) < 0.01;
+      }), lines.slice(0, 3).map((l: any) => [l.module, l.usage_income, l.even_income, l.income]));
+
+    const companies = await call("/control/revenue/allocation/companies?days=30&limit=400", ck("an"));
+    const mine = (companies.json?.companies ?? []).find(
+      (c: any) => c.company_name === COMPANY);
+    check("the company this run sold is in the per-company reader with the money it paid",
+      companies.status === 200 && !!mine && Math.abs(Number(mine.income) - bundleTotal) < 0.01,
+      { s: companies.status, got: mine?.income, want: bundleTotal });
+    check("…placed by a basis the panel can say out loud, with its package named",
+      !!mine && ["usage", "even"].includes(mine.basis)
+      && mine.offering === "transport_cfa_office" && (mine.services ?? []).length === 3,
+      mine && { basis: mine.basis, offering: mine.offering, services: mine.services });
+    check("…and its three shares either are null because nothing was split, or add up to the " +
+      "company's whole income to the penny",
+      !!mine && (mine.transport_income === null
+        ? mine.basis === "not split" || mine.basis === "no subscription"
+        : Math.abs(Number(mine.transport_income) + Number(mine.cfa_income)
+          + Number(mine.office_income) - Number(mine.income)) < 0.01
+          && Math.abs(Number(mine.transport_share) + Number(mine.cfa_share)
+            + Number(mine.office_share) - 1) < 0.001),
+      mine);
+    check("the reader's total describes the whole window, not the page it returned",
+      (companies.json?.companies ?? []).length === Math.min(Number(companies.json?.total), 400)
+      && Number(companies.json?.total_income)
+        >= (companies.json?.companies ?? []).reduce(
+          (s: number, c: any) => s + Number(c.income), 0) - 0.01,
+      { total: companies.json?.total, rows: (companies.json?.companies ?? []).length,
+        totalIncome: companies.json?.total_income });
+
+    const allocShort = await call("/control/revenue/allocation?days=3", ck("an"));
+    check("a seven-day floor holds the allocation too — no one draws a window of three days",
+      allocShort.status === 400, { s: allocShort.status });
+    const allocWide = await call("/control/revenue/allocation/companies?days=30&limit=5000", ck("an"));
+    check("and a page of 5,000 companies is refused at the door, not served and truncated",
+      allocWide.status === 400, { s: allocWide.status });
+    const allocAsSupport = await call("/control/revenue/allocation?days=30", ck("se"));
+    check("the seat that only fixes faults is turned away from the allocation",
+      allocAsSupport.status === 403, { s: allocAsSupport.status });
+    const allocAnon = await call("/control/revenue/allocation?days=30");
+    check("an anonymous caller never reads how the money falls across the offices",
+      allocAnon.status === 401, { s: allocAnon.status });
+
     // ---------------- the price list ----------------
     phase("the bundle price list");
     const groups = await call("/control/service-groups", ck("an"));

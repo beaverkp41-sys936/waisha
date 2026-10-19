@@ -46,6 +46,18 @@ type Mix = {
   offering: string; offering_name: string; offering_kind: string;
   customers: number; invoices_paid: number; income: number; share: number;
 };
+type AllocLine = {
+  module: string; module_label: string; basis: string; customers: number; units: number;
+  income: number; share: number; usage_income: number; even_income: number;
+};
+type AllocCompany = {
+  tenant_id: string; company_name: string; company_type: string;
+  offering: string; offering_name: string; services: string[]; basis: string;
+  invoices_paid: number; income: number;
+  transport_units: number; cfa_units: number; office_units: number;
+  transport_income: number | null; cfa_income: number | null; office_income: number | null;
+  transport_share: number | null; cfa_share: number | null; office_share: number | null;
+};
 type Cost = { id: string; period: string; category: string; amount: number; note: string | null };
 
 const n = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
@@ -241,6 +253,13 @@ export default function ControlRevenuePage() {
   const [growth, setGrowth] = useState<Growth[]>([]);
   const [forecast, setForecast] = useState<Record<string, Metric>>({});
   const [mix, setMix] = useState<Mix[]>([]);
+  const [alloc, setAlloc] = useState<AllocLine[]>([]);
+  const [allocUnits, setAllocUnits] = useState<string[]>([]);
+  const [allocMoney, setAllocMoney] = useState(0);
+  const [allocCompanies, setAllocCompanies] = useState<AllocCompany[]>([]);
+  const [allocMatched, setAllocMatched] = useState(0);
+  const [allocMatchedIncome, setAllocMatchedIncome] = useState(0);
+  const [allocLimit, setAllocLimit] = useState(12);
   const [costs, setCosts] = useState<Cost[]>([]);
   const [months, setMonths] = useState(12);
   const [mixDays, setMixDays] = useState(90);
@@ -258,20 +277,28 @@ export default function ControlRevenuePage() {
     return res.json();
   }, []);
 
-  const load = useCallback(async (m: number, d: number) => {
+  const load = useCallback(async (m: number, d: number, al: number) => {
     setLoading(true);
-    const [o, p, g, f, x] = await Promise.all([
+    const [o, p, g, f, x, a, ac] = await Promise.all([
       get("/control/analytics/overview"),
       get(`/control/analytics/revenue?months=${m}`),
       get(`/control/analytics/growth?months=${m}`),
       get(`/control/analytics/forecast?months=${m}&horizon=6`),
-      get(`/control/revenue/mix?days=${d}`)
+      get(`/control/revenue/mix?days=${d}`),
+      get(`/control/revenue/allocation?days=${d}`),
+      get(`/control/revenue/allocation/companies?days=${d}&limit=${al}`)
     ]);
     if (o) setOv(o);
     if (p) setPl(p);
     if (g) setGrowth(g);
     if (f) setForecast(f.metrics ?? {});
     if (x) setMix(x.offerings ?? []);
+    if (a) { setAlloc(a.lines ?? []); setAllocUnits(a.unit_definition ?? []); setAllocMoney(n(a.platform_income)); }
+    if (ac) {
+      setAllocCompanies(ac.companies ?? []);
+      setAllocMatched(n(ac.total));
+      setAllocMatchedIncome(n(ac.total_income));
+    }
     setLoading(false);
   }, [get]);
 
@@ -282,7 +309,7 @@ export default function ControlRevenuePage() {
       setMe(await m.json());
       const pr = await fetch(`${API}/api/v1/control/auth/permissions`, { credentials: "include" });
       if (pr.ok) setPerm((await pr.json()).permissions ?? []);
-      load(12, 90);
+      load(12, 90, 12);
       const c = await get("/control/costs");
       if (c) setCosts(c);
     })();
@@ -291,8 +318,8 @@ export default function ControlRevenuePage() {
   const reloadCosts = useCallback(async () => {
     const c = await get("/control/costs");
     if (c) setCosts(c);
-    load(months, mixDays);
-  }, [get, load, months, mixDays]);
+    load(months, mixDays, allocLimit);
+  }, [get, load, months, mixDays, allocLimit]);
 
   const totals = pl.reduce((t, r) => ({
     net: t.net + r.net, costs: t.costs + r.costs, profit: t.profit + r.profit,
@@ -362,7 +389,7 @@ export default function ControlRevenuePage() {
               <div className="flex items-end gap-16">
                 <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
                   Months
-                  <select value={months} onChange={(e) => { const v = Number(e.target.value); setMonths(v); load(v, mixDays); }}
+                  <select value={months} onChange={(e) => { const v = Number(e.target.value); setMonths(v); load(v, mixDays, allocLimit); }}
                     className="mt-4 block rounded-input border px-10 py-8 text-sm"
                     style={{ borderColor: "var(--line)", background: "var(--milk)", color: "var(--ink)" }}>
                     {[3, 6, 12, 24, 36].map((m) => <option key={m} value={m}>{m}</option>)}
@@ -573,7 +600,7 @@ export default function ControlRevenuePage() {
                 </h2>
                 <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
                   Window
-                  <select value={mixDays} onChange={(e) => { const v = Number(e.target.value); setMixDays(v); load(months, v); }}
+                  <select value={mixDays} onChange={(e) => { const v = Number(e.target.value); setMixDays(v); load(months, v, allocLimit); }}
                     className="ml-8 rounded-input border px-10 py-8 text-sm"
                     style={{ borderColor: "var(--line)", background: "var(--milk)", color: "var(--ink)" }}>
                     {[7, 30, 90, 180, 365].map((d) => <option key={d} value={d}>{d} days</option>)}
@@ -628,6 +655,170 @@ export default function ControlRevenuePage() {
                   </tbody>
                 </table>
               </div>
+            </section>
+
+            <section className="mt-32">
+              <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink)" }}>
+                How the money is allocated across the offices
+              </h2>
+              <p className="mt-8 max-w-[78ch] text-sm" style={{ color: "var(--ink-soft)" }}>
+                No price in this system belongs to one office: a package is sold as one number.
+                So each bundle's income is split across the offices it actually sells, weighted by
+                the work each one recorded inside the window. That is an allocation, printed as
+                one — not a price list. A plan ladder rung is never split, a seeker's pass is its
+                own line, and money with no subscription behind it stays on a line of its own, so
+                the six lines below add up to the {money(allocMoney)} the window holds.
+              </p>
+              {allocUnits.length > 0 && (
+                <ul className="mt-12 max-w-[78ch] space-y-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                  {allocUnits.map((u) => (
+                    <li key={u} className="flex gap-8">
+                      <span style={{ color: "var(--adm-accent)" }}>•</span>
+                      <span>a unit is {u}</span>
+                    </li>
+                  ))}
+                  <li className="flex gap-8">
+                    <span style={{ color: "var(--adm-accent)" }}>•</span>
+                    <span>work done in an office the package never sold earns that office
+                      nothing, and is not counted in its column</span>
+                  </li>
+                </ul>
+              )}
+              <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={{ borderColor: "var(--line)" }}>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+                      <th className="p-12">Office</th>
+                      <th className="p-12">How it was placed</th>
+                      <th className="p-12 text-right">Customers</th>
+                      <th className="p-12 text-right">Units</th>
+                      <th className="p-12 text-right">Income</th>
+                      <th className="p-12" style={{ width: 190 }}>Share</th>
+                      <th className="p-12 text-right">By recorded work</th>
+                      <th className="p-12 text-right">By the even fall-back</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {alloc.map((a, i) => (
+                      <tr key={a.module} style={{ background: i % 2 ? "var(--milk-deep)" : "transparent" }}>
+                        <td className="p-12 font-semibold" style={{ color: "var(--ink)" }}>{a.module_label}</td>
+                        <td className="p-12 text-xs" style={{ color: "var(--ink-soft)" }}>{a.basis}</td>
+                        <td className="p-12 text-right tabular-nums">{a.customers}</td>
+                        <td className="p-12 text-right tabular-nums">{a.units || "—"}</td>
+                        <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink)" }}>{money(a.income)}</td>
+                        <td className="p-12">
+                          <div className="flex items-center gap-8">
+                            <div style={{ height: 8, flex: 1, background: "var(--adm-line)", borderRadius: 4, overflow: "hidden" }}>
+                              <div style={{
+                                height: "100%", width: `${Math.max(1, Math.round(n(a.share) * 100))}%`,
+                                background: ["transport", "cfa", "office"].includes(a.module) ? INCOME : COST,
+                                opacity: 0.8
+                              }} />
+                            </div>
+                            <span className="w-12 text-right text-[11px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                              {Math.round(n(a.share) * 100)}%
+                            </span>
+                          </div>
+                        </td>
+                        <td className="p-12 text-right tabular-nums text-xs" style={{ color: "var(--ink-soft)" }}>
+                          {["transport", "cfa", "office"].includes(a.module) ? money(a.usage_income) : "—"}
+                        </td>
+                        <td className="p-12 text-right tabular-nums text-xs" style={{ color: "var(--ink-soft)" }}>
+                          {["transport", "cfa", "office"].includes(a.module) ? money(a.even_income) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                    {!alloc.length && !loading && (
+                      <tr><td colSpan={8} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+                        Nothing was paid in this window, so there is nothing to allocate.
+                      </td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-20 flex flex-wrap items-center justify-between gap-12">
+                <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+                  {allocMatched} {allocMatched === 1 ? "company" : "companies"} paid {money(allocMatchedIncome)}{" "}
+                  of package money in these {mixDays} days; the table shows the richest{" "}
+                  {allocCompanies.length}.
+                </p>
+                {allocCompanies.length < allocMatched ? (
+                  <button type="button"
+                    onClick={() => { setAllocLimit(400); load(months, mixDays, 400); }}
+                    className="rounded-input border px-12 py-8 text-xs font-semibold"
+                    style={{ borderColor: "var(--adm-accent)", color: "var(--adm-accent)", background: "transparent" }}>
+                    Show every company
+                  </button>
+                ) : allocLimit > 12 ? (
+                  <button type="button"
+                    onClick={() => { setAllocLimit(12); load(months, mixDays, 12); }}
+                    className="rounded-input border px-12 py-8 text-xs font-semibold"
+                    style={{ borderColor: "var(--line)", color: "var(--ink-soft)", background: "transparent" }}>
+                    Back to the top 12
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="mt-12 overflow-x-auto rounded-card border bg-surface" style={{ borderColor: "var(--line)" }}>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+                      <th className="p-12">Company</th>
+                      <th className="p-12">Sold as</th>
+                      <th className="p-12 text-right">Invoices</th>
+                      <th className="p-12 text-right">Income</th>
+                      <th className="p-12 text-right">Work t·c·o</th>
+                      <th className="p-12 text-right">Transport</th>
+                      <th className="p-12 text-right">Clearing</th>
+                      <th className="p-12 text-right">Office</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allocCompanies.map((c, i) => (
+                      <tr key={c.tenant_id} style={{ background: i % 2 ? "var(--milk-deep)" : "transparent" }}>
+                        <td className="p-12 font-semibold" style={{ color: "var(--ink)" }}>
+                          {c.company_name}
+                          <span className="ml-8 text-[10px] font-normal uppercase tracking-[0.1em]"
+                            style={{ color: "var(--ink-soft)" }}>{c.company_type}</span>
+                        </td>
+                        <td className="p-12 text-xs" style={{ color: "var(--ink-soft)" }}>
+                          {c.offering_name}
+                          <span className="mt-2 block text-[10px]" style={{ color: "var(--ink-soft)" }}>{c.basis}</span>
+                        </td>
+                        <td className="p-12 text-right tabular-nums">{c.invoices_paid}</td>
+                        <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink)" }}>{money(c.income)}</td>
+                        <td className="p-12 text-right tabular-nums text-xs" style={{ color: "var(--ink-soft)" }}>
+                          {c.transport_units}·{c.cfa_units}·{c.office_units}
+                        </td>
+                        {(["transport", "cfa", "office"] as const).map((k) => (
+                          <td key={k} className="p-12 text-right tabular-nums text-xs"
+                            style={{ color: c[`${k}_income`] === null ? "var(--ink-soft)" : "var(--ink)" }}>
+                            {c[`${k}_income`] === null
+                              ? "not split"
+                              : `${money(c[`${k}_income`])} · ${Math.round(n(c[`${k}_share`]) * 100)}%`}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    {!allocCompanies.length && !loading && (
+                      <tr><td colSpan={8} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+                        No company paid a subscription invoice inside this window.
+                      </td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-12 max-w-[78ch] text-xs" style={{ color: "var(--ink-soft)" }}>
+                Read the columns as three sentences. "allocated by recorded work" is the weight
+                doing the work. "even" means the company bought the offices but recorded nothing
+                in them, so the money was shared evenly rather than dropped — that part is a
+                convention, not evidence. "not split" and "no subscription" are printed as they
+                are: a ladder rung has no component list to divide, and an invoice with no
+                subscription behind it belongs to no office at all. The last rounding cent of a
+                company's split goes to its busiest office whole, so the three figures always add
+                up to that company's income to the cent.
+              </p>
             </section>
 
             <CostBook costs={costs} canRecord={perm.includes("control.costs.manage")} onRecorded={reloadCosts} />

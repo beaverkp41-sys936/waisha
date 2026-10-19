@@ -69,6 +69,13 @@ export const CHURN_SQL = "select platform_auth.churn_report($1) as r";
 /** Params: tenant, limit. */
 export const EXITS_SQL = "select platform_auth.control_subscription_exits($1,$2) as a";
 
+/** Params: days. 088 — package income allocated across the three offices, six lines. */
+export const ALLOC_LINES_SQL = "select * from platform_auth.control_module_allocation($1)";
+
+/** Params: days, limit. The same allocation one company at a time. */
+export const ALLOC_TENANTS_SQL =
+  "select * from platform_auth.control_module_allocation_tenants($1,$2)";
+
 export const GROUPS_SQL = `
   select id, key, name, description, services, seat_limit,
          price_monthly, price_quarterly, price_annual, currency, sort, is_active, updated_at
@@ -172,6 +179,89 @@ export async function churnAdvisory(days = 90) {
     }
   };
 }
+
+/**
+ * What "a unit of work" means in 088's allocation, in the words the desk prints.
+ *
+ * An allocation weighted by work is only honest if the reader knows what was counted, so the
+ * definition travels with the numbers instead of living in a migration comment nobody opens.
+ */
+export const ALLOCATION_UNITS = [
+  "transport — trips, bookings accepted, and invoices tied to a trip",
+  "cfa — cargo files and invoices that are not tied to a trip",
+  "office — office tasks and payroll runs that were issued"
+];
+
+/**
+ * The two lines the allocation half of the advisory can raise (task #155).
+ *
+ * 088 replaced the card that said revenue per module cannot be measured with a number that is
+ * an allocation, so what is left to report is where that allocation had to lean on a
+ * fall-back: money split evenly because a company recorded no work, and money that no
+ * subscription explains at all. Both are read from the same definer the Revenue desk draws,
+ * so the advisory and the desk cannot quote different figures for the same window.
+ */
+export async function moduleAllocationAdvisory(days = 90) {
+  const items: Array<Record<string, unknown>> = [];
+  const { rows } = await pool.query(ALLOC_LINES_SQL, [days]);
+  const line = (m: string) => rows.find(r => r.module === m) ?? {};
+  const windowDays = Number(rows[0]?.window_days ?? days);
+  const total = Number(rows[0]?.platform_income ?? 0);
+  const offices = ["transport", "cfa", "office"];
+  const evenIncome = offices.reduce((s, m) => s + Number(line(m).even_income ?? 0), 0);
+  const usageIncome = offices.reduce((s, m) => s + Number(line(m).usage_income ?? 0), 0);
+  const unattributed = Number(line("unattributed").income ?? 0);
+  const unattributedCustomers = Number(line("unattributed").customers ?? 0);
+
+  if (evenIncome > 0) {
+    items.push({
+      item_id: "allocation_even_fall_back", rank: 5,
+      priority: total > 0 && evenIncome / total >= 0.2 ? "medium" : "low", kind: "revenue",
+      area: "Revenue",
+      title: `${fmt(evenIncome)} TZS of package income was split evenly because no bought `
+        + `office recorded any work`,
+      detail: "088 splits a bundle across the offices it sells in proportion to the work each "
+        + "one recorded in the window. A company that recorded none still has to be placed "
+        + "somewhere, so its money is shared evenly between the offices it bought and the row "
+        + "is labelled 'even'. That part of each column is a convention, not evidence — the "
+        + "rest is usage.",
+      metric: Math.round(evenIncome), unit: "TZS allocated by convention",
+      action: "Read Allocation on the Revenue desk: every company in the even column is one "
+        + "whose offices recorded nothing, which is also a retention conversation.",
+      evidence: offices.map(m => `${m}: ${fmt(Number(line(m).even_income ?? 0))}`)
+    });
+  }
+  if (unattributed > 0) {
+    items.push({
+      item_id: "allocation_unattributed", rank: 5,
+      priority: "medium", kind: "revenue", area: "Revenue",
+      title: `${fmt(unattributed)} TZS was paid with no subscription behind the invoice`,
+      detail: "A paid invoice is money the window holds, but with no subscription it has no "
+        + "package, so nothing says which office it belongs to. 088 keeps it as its own line "
+        + "instead of dropping it or guessing: it is in the total and in no office. Every "
+        + "rupee of it is a register that has not been finished.",
+      metric: Math.round(unattributed), unit: "TZS with no offering",
+      action: `Open the Allocation panel's company list and look for the ${unattributedCustomers} `
+        + "company rows basis 'no subscription', then link each payment to the subscription it "
+        + "was made against.",
+      evidence: []
+    });
+  }
+
+  return {
+    items,
+    headline: {
+      window_days: windowDays,
+      income: Math.round(total),
+      usage_income: Math.round(usageIncome),
+      even_income: Math.round(evenIncome),
+      unattributed_income: Math.round(unattributed),
+      currency: "TZS"
+    }
+  };
+}
+
+const fmt = (v: number) => v.toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 export async function controlRevenueRoutes(app: FastifyInstance, _opts: unknown) {
 
@@ -417,6 +507,82 @@ export async function controlRevenueRoutes(app: FastifyInstance, _opts: unknown)
       }))
     };
   });
+
+  // ---------- how the money falls across the offices ----------
+  //
+  // An allocation, not a measurement: no table holds a price per office, so 088 splits a
+  // bundle across the offices it sells in proportion to the work each one recorded, keeps the
+  // ladder rung whole, keeps search passes beside it, and keeps money with no subscription on
+  // a line of its own. The response says so in `basis` on every line and prints the unit
+  // definition, because a split that reads like a measurement is the failure this panel has
+  // to prevent.
+  app.get("/control/revenue/allocation", { preHandler: [requireControl] }, async (req: any) => {
+    if (!(await controlCan(req, ANALYTICS)) && !(await controlCan(req, VIEW))) {
+      throw new ApiError("FORBIDDEN", "Your platform role does not allow this.", 403);
+    }
+    await enforceRateLimit(`alloc:uid:${req.control.user_id}`, 60, 60);
+    const q = z.object({ days: z.coerce.number().int().min(7).max(730).default(90) })
+      .parse(req.query ?? {});
+    const { rows } = await pool.query(ALLOC_LINES_SQL, [q.days]);
+    return {
+      days: Number(rows[0]?.window_days ?? q.days),
+      currency: "TZS",
+      allocated: true,
+      unit_definition: ALLOCATION_UNITS,
+      platform_income: money(rows[0]?.platform_income),
+      lines: rows.map(r => ({
+        module: r.module,
+        module_label: r.module_label,
+        basis: r.basis,
+        customers: count(r.customers),
+        units: count(r.units),
+        income: money(r.income),
+        share: money(r.share),
+        usage_income: money(r.usage_income),
+        even_income: money(r.even_income)
+      }))
+    };
+  });
+
+  /** Params for the per-company reader: days, limit. */
+  app.get("/control/revenue/allocation/companies",
+    { preHandler: [requireControl] }, async (req: any) => {
+      if (!(await controlCan(req, ANALYTICS)) && !(await controlCan(req, VIEW))) {
+        throw new ApiError("FORBIDDEN", "Your platform role does not allow this.", 403);
+      }
+      await enforceRateLimit(`allocco:uid:${req.control.user_id}`, 60, 60);
+      const q = z.object({
+        days: z.coerce.number().int().min(7).max(730).default(90),
+        limit: z.coerce.number().int().min(1).max(400).default(200)
+      }).parse(req.query ?? {});
+      const { rows } = await pool.query(ALLOC_TENANTS_SQL, [q.days, q.limit]);
+      return {
+        days: Number(rows[0]?.window_days ?? q.days),
+        currency: "TZS",
+        total: count(rows[0]?.matched),
+        total_income: money(rows[0]?.matched_income),
+        companies: rows.map(r => ({
+          tenant_id: r.tenant_id,
+          company_name: r.company_name,
+          company_type: r.company_type,
+          offering: r.offering,
+          offering_name: r.offering_name,
+          services: r.services ?? [],
+          basis: r.basis,
+          invoices_paid: count(r.invoices_paid),
+          income: money(r.income),
+          transport_units: count(r.transport_units),
+          cfa_units: count(r.cfa_units),
+          office_units: count(r.office_units),
+          transport_income: money(r.transport_income),
+          cfa_income: money(r.cfa_income),
+          office_income: money(r.office_income),
+          transport_share: money(r.transport_share),
+          cfa_share: money(r.cfa_share),
+          office_share: money(r.office_share)
+        }))
+      };
+    });
 
   // ---------- the bundle price list ----------
   //
