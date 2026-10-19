@@ -255,9 +255,14 @@ async function main() {
   checkMoney("days to collect is the amount-weighted gap", o.collection?.daysToCollect, 15);
   check("one payment behind it", o.collection?.payments === 1, o.collection?.payments);
   checkMoney("tax block charges what the bills charged", o.tax?.outputCharged, 540000);
-  checkMoney("tax block base splits own from statutory", o.tax?.baseAmount, 3300000);
+  checkMoney("tax block base counts rated lines only", o.tax?.baseAmount, 3000000);
   checkMoney("tax block zero-rated", o.tax?.zeroRatedBase, 300000);
   checkMoney("tax block statutory memo", o.tax?.statutoryCollected, 500000);
+  // A supply is in one column of a return or another, never both: rated base +
+  // zero-rated + statutory has to be the three bills' own subtotals, no more.
+  checkMoney("a zero-rated supply is not also inside the taxable base",
+    Number(o.tax?.baseAmount ?? 0) + Number(o.tax?.zeroRatedBase ?? 0) +
+    Number(o.tax?.statutoryCollected ?? 0), 3800000);
   check("tax block counts three bills", o.tax?.invoicesCount === 3, o.tax?.invoicesCount);
   check("tax block names the hand-built one", o.tax?.handBuiltCount === 1, o.tax?.handBuiltCount);
   check("the window is one month of trend", o.months?.length === 1, o.months?.map((m: any) => m.month));
@@ -313,7 +318,7 @@ async function main() {
   // -------------------------------------------------------------------------
   const pos = await call(`/finance/tax/position?kind=vat&periodStart=${P_FROM}&periodEnd=${P_TO}`, fin);
   check("the position answers", pos.status === 200, pos.json);
-  checkMoney("position base", pos.json?.figures?.baseAmount, 3300000);
+  checkMoney("position base", pos.json?.figures?.baseAmount, 3000000);
   checkMoney("position charge", pos.json?.figures?.taxCharged, 540000);
   checkMoney("position statutory", pos.json?.figures?.statutoryCollected, 500000);
   checkMoney("position billed", pos.json?.figures?.billedTotal, 4340000);
@@ -357,7 +362,7 @@ async function main() {
   const got1 = await call(`/finance/tax/returns/${R1}`, fin);
   check("it is born a draft", got1.json?.status === "draft", got1.json?.status);
   check("its basis is computed", got1.json?.basis === "computed", got1.json?.basis);
-  checkMoney("a typed charge is ignored: the base is the paper's", got1.json?.baseAmount, 3300000);
+  checkMoney("a typed charge is ignored: the base is the paper's", got1.json?.baseAmount, 3000000);
   checkMoney("a typed charge is ignored: the charge is the paper's", got1.json?.taxCharged, 540000);
   checkMoney("a typed charge is ignored: the net is the paper's", got1.json?.netPayable, 540000);
   check("the schedule was copied in", got1.json?.scheduleLines === 3, got1.json?.scheduleLines);
@@ -428,6 +433,9 @@ async function main() {
   check("the schedule carries the proforma split",
     gotPrepared.json?.schedule?.some((r: any) => r.from_proforma === true &&
       Number(r.statutory_base) === 500000), gotPrepared.json?.schedule);
+  check("the zero-rated bill is on the schedule as zero-rated, not as a base",
+    gotPrepared.json?.schedule?.some((r: any) => Number(r.untaxed_base) === 300000 &&
+      Number(r.base_amount) === 0), gotPrepared.json?.schedule);
 
   const noRef = await call(`/finance/tax/returns/${R1}/file`, fin, {
     method: "PUT", body: JSON.stringify({ filedAt: TODAY })
@@ -544,7 +552,11 @@ async function main() {
   });
   const RJ = june.json?.id as string;
   const gotJ = await call(`/finance/tax/returns/${RJ}`, fin);
-  checkMoney("an older period foots its own paper", gotJ.json?.baseAmount, 500000);
+  // This period holds one bill and it carries no VAT, so the paper it foots is a
+  // zero-rated supply: the 500,000 appears in the zero-rated column and not also
+  // inside the base a rate is applied to.
+  checkMoney("an older period foots its own paper", gotJ.json?.zeroRatedBase, 500000);
+  checkMoney("and a zero-rated bill is never also a taxable base", gotJ.json?.baseAmount, 0);
   checkMoney("a zero-VAT bill charges nothing", gotJ.json?.taxCharged, 0);
   check("a nil return is still a return", gotJ.json?.netPayable === 0 && gotJ.json?.invoicesCount === 1,
     gotJ.json);
@@ -566,6 +578,12 @@ async function main() {
   const cells = (row: string) => row.split(",").map((c) => c.replace(/^"(.*)"$/s, "$1"));
   check("the customer is the fourth column", cells(rows[1])[3] === "'=cmd|'/C calc'!A0",
     cells(rows[1]));
+  // The bill of this period carries no VAT, so its 500,000 must leave the file in
+  // the zero-rated column. A sheet that only had "Taxable base" would show this
+  // supply as a bill of nothing, and the accountant would drop it off the return.
+  check("the zero-rated supply is exported in its own column",
+    /"Zero-rated base"/.test(rows[0]) && Number(cells(rows[1])[6]) === 0 &&
+    Number(cells(rows[1])[7]) === 500000, cells(rows[1]).slice(6, 9));
   const live = rows.flatMap(cells).filter((v) => /^[=+\-@\t\r]/.test(v));
   check("no cell is left as a live formula", live.length === 0, live);
   const csvWh = await call(`/finance/tax/returns/${wh.json?.id}/schedule.csv`, fin);

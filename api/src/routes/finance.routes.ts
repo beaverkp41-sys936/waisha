@@ -72,7 +72,11 @@ export const COST_IN_TZS_SQL = " and currency = 'TZS'";
  */
 export const LINES_AGG_SQL =
   "select invoice_id," +
-  " sum(amount) filter (where section in ('port', 'transport')) as own_base," +
+  // Rated and untaxed port/transport lines are kept apart on purpose: a zero-rated
+  // supply belongs on the return in the zero-rated column only. Fold it into the
+  // taxable base as well and the same shilling is declared twice, once as a base
+  // the VAT rate is applied to and once as a supply that owed none.
+  " sum(amount) filter (where section in ('port', 'transport') and tax_kind <> 'none') as rated_base," +
   " sum(amount) filter (where section = 'statutory') as statutory_base," +
   " sum(amount) filter (where section in ('port', 'transport') and tax_kind = 'none') as untaxed_base," +
   " sum(tax_amount) filter (where tax_kind = 'excise') as excise_amount" +
@@ -85,7 +89,8 @@ export const POSITION_SQL =
   " coalesce(sum(i.total), 0)::text as billed_total," +
   " coalesce(sum(i.amount_paid), 0)::text as collected_total," +
   " coalesce(sum(case when i.source_quotation_id is not null" +
-  "                   then coalesce(li.own_base, 0) else i.subtotal end), 0)::text as base_amount," +
+  "                   then coalesce(li.rated_base, 0)" +
+  "                   when i.vat_rate > 0 then i.subtotal else 0 end), 0)::text as base_amount," +
   " coalesce(sum(case when i.source_quotation_id is not null" +
   "                   then coalesce(li.statutory_base, 0) else 0 end), 0)::text as statutory_collected," +
   " coalesce(sum(case when i.source_quotation_id is not null" +
@@ -107,8 +112,8 @@ export const SCHEDULE_SQL =
   " i.vat_amount::text as vat_amount, i.total::text as total," +
   " i.amount_paid::text as amount_paid," +
   " (i.source_quotation_id is not null) as from_proforma," +
-  " case when i.source_quotation_id is not null then coalesce(li.own_base, 0)" +
-  "      else i.subtotal end::text as base_amount," +
+  " case when i.source_quotation_id is not null then coalesce(li.rated_base, 0)" +
+  "      when i.vat_rate > 0 then i.subtotal else 0 end::text as base_amount," +
   " case when i.source_quotation_id is not null then coalesce(li.statutory_base, 0)" +
   "      else 0 end::text as statutory_base," +
   " case when i.source_quotation_id is not null then coalesce(li.untaxed_base, 0)" +
@@ -987,21 +992,25 @@ export async function financeRoutes(app: FastifyInstance, _opts: unknown) {
         const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
         return `"${safe.replace(/"/g, '""')}"`;
       };
+      // The zero-rated column is printed next to the taxable base on purpose: a
+      // supply that owed no VAT still has to be declared, and a sheet that shows
+      // only the base would read as if that bill were missing from the return.
       const lines: string[] = [
         ["Invoice", "Issue date", "Due date", "Customer", "Customer TIN", "Currency",
-          "Taxable base", "VAT rate", "VAT charged", "Statutory pass-through", "Bill total",
+          "Taxable base", "Zero-rated base", "VAT rate", "VAT charged",
+          "Statutory pass-through", "Bill total",
           "Collected", "From proforma"].map(cell).join(",")
       ];
       const detail = head.detail ?? {};
       for (const r of (Array.isArray(detail.schedule) ? detail.schedule : [])) {
         lines.push([r.invoice_number, r.issue_date, r.due_date, r.customer_name, r.customer_tin,
-          r.currency, r.base_amount, r.vat_rate, r.vat_amount, r.statutory_base, r.total,
-          r.amount_paid, r.from_proforma ? "yes" : "no"].map(cell).join(","));
+          r.currency, r.base_amount, r.untaxed_base, r.vat_rate, r.vat_amount, r.statutory_base,
+          r.total, r.amount_paid, r.from_proforma ? "yes" : "no"].map(cell).join(","));
       }
       const footer = (Array.isArray(detail.schedule) ? detail.schedule.length : 0) === 0
         ? (head.basis === "declared"
           ? ["", "", "", "Declared return — these records hold no schedule for it.", "", "",
-            "", "", "", "", "", head.net_payable, ""]
+            "", "", "", "", "", head.net_payable, "", ""]
           : ["", "", "", "No issued bill falls in this period."])
         : null;
       if (footer) lines.push(footer.map(cell).join(","));
