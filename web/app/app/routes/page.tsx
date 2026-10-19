@@ -832,7 +832,7 @@ export default function RoutesPage() {
               <p className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
                 {traceStatus === "loading" && "Tracing the road through your chain…"}
                 {traceStatus === "road" && `Road trace: ${traceRoutes[chosen]?.distanceKm ?? ""} km over ${traceRoutes.length} option${traceRoutes.length === 1 ? "" : "s"}.`}
-                {traceStatus === "failed" && "Road routing unavailable — distance is a straight-line estimate."}
+                {traceStatus === "failed" && "The road router did not answer — the distance shown is a straight-line estimate. The route still saves; re-trace it when the router answers."}
                 {traceStatus === "idle" && (mapPoints.length >= 2
                   ? "Pick towns or pins, then the trace follows the road."
                   : "Click “Pin on map” then the map to place an exact point.")}

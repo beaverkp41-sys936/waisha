@@ -7,6 +7,7 @@ import { uuidv7 } from "../util/uuid.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { writeAudit } from "../audit/audit.js";
 import { requirePermission } from "../security/permissions.js";
+import { RoutingUnavailable, traceRoad, type RoadTrace } from "../util/road-router.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -221,7 +222,17 @@ function thinGeometry(points: [number, number][] | undefined, max = 1200): [numb
 /** Road routing cache: key = the whole waypoint chain (~1 km rounding), because
  *  the same pair through a different set of VIA anchors is a different road. */
 const roadCache = new Map<string, RoadTrace & { alternatives: RoadTrace[] }>();
-interface RoadTrace { distanceKm: number; durationHours: number; geometry: [number, number][] }
+
+/** What the stored distance was actually based on. A traced line means the road
+ *  network; without one, a caller that said "estimate" is still believed and
+ *  recorded — otherwise a route saved while the router was silent reads as a
+ *  route nothing was ever worked out for. */
+function sourceOf(
+  geo: [number, number][] | null,
+  declared: "osrm" | "estimate" | undefined
+): "osrm" | "estimate" | null {
+  return geo ? "osrm" : declared === "estimate" ? "estimate" : null;
+}
 
 /** "lat,lng;lat,lng;..." — strict, so nothing built from user text reaches the router URL. */
 function parseWaypoints(raw: string): [number, number][] | null {
@@ -360,26 +371,8 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
     const hit = roadCache.get(key);
     if (hit) return reply.send({ ...hit, cached: true });
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
     try {
-      const coords = chain.map(p => `${p[1]},${p[0]}`).join(";");
-      const url = `https://router.project-osrm.org/route/v1/driving/${coords}`
-        + `?overview=full&geometries=geojson${parsed.alternatives ? `&alternatives=${parsed.alternatives}` : ""}`;
-      const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) throw new Error(`osrm ${res.status}`);
-      const j: any = await res.json();
-      // OSRM v1 answers under `routes`; reading `route` yields nothing and every
-      // caller silently falls back to a straight line.
-      const traced: (RoadTrace & { geometry: [number, number][] })[] = (j.routes ?? [])
-        .map((r: any) => ({
-          distanceKm: Math.round((r?.distance ?? 0) / 1000),
-          durationHours: Math.round((r?.duration ?? 0) / 3600),
-          geometry: ((r?.geometry?.coordinates ?? []) as [number, number][])
-            .map((c: [number, number]) => [c[1], c[0]] as [number, number])
-        }))
-        .filter((r: RoadTrace) => r.geometry.length >= 2 && r.distanceKm > 0);
-      if (!traced.length) throw new Error("osrm empty");
+      const traced = await traceRoad(chain, parsed.alternatives);
       const payload = {
         ...traced[0], geometry: thinGeometry(traced[0].geometry) ?? traced[0].geometry,
         alternatives: traced.slice(1).map(a => ({ ...a, geometry: thinGeometry(a.geometry) ?? a.geometry }))
@@ -388,12 +381,14 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
       roadCache.set(key, payload);
       return reply.send(payload);
     } catch (e: any) {
-      req.log.warn({ err: e?.message ?? e }, "road routing unavailable");
+      const why = e instanceof RoutingUnavailable ? e.cause : String(e?.message ?? e);
+      req.log.warn({ err: why }, "road routing unavailable");
       return reply.status(502).send({
-        error: { code: "ROUTING_UNAVAILABLE", message: "Road routing is temporarily unavailable." }
+        error: {
+          code: "ROUTING_UNAVAILABLE",
+          message: "The road router did not answer for this chain, so the distance is a straight-line estimate."
+        }
       });
-    } finally {
-      clearTimeout(timer);
     }
   });
 
@@ -502,7 +497,7 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
          body.fuelSurchargePct ?? null,
          head?.lat ?? null, head?.lng ?? null, tail?.lat ?? null, tail?.lng ?? null,
          geo ? JSON.stringify(geo) : null, geo ? new Date() : null,
-         geo ? body.routeSource ?? "osrm" : null,
+         sourceOf(geo, body.routeSource),
          req.user.sub]);
       if (stops) await storeStops(c, id, req.user.tid, stops);
       await writeAudit(c, {
@@ -553,7 +548,7 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
          body.fuelSurchargePct ?? null,
          head?.lat ?? null, head?.lng ?? null, tail?.lat ?? null, tail?.lng ?? null,
          geo ? JSON.stringify(geo) : null, geo ? new Date() : null,
-         geo ? body.routeSource ?? "osrm" : null,
+         sourceOf(geo, body.routeSource),
          req.user.sub, req.user.tid]);
       if (res.rowCount) {
         if (stops) await storeStops(c, id, req.user.tid, stops);

@@ -3,7 +3,9 @@
  * gazetteer, both corridor options for Dar es Salaam -> Mbamba Bay, a chain of
  * origin + VIA + destination stops with three coordinate tiers, the ordered
  * stop rows, the multi-waypoint road trace, and the guards that refuse a stop
- * with no coordinate or a chain in the wrong order. Tenant isolation is proven
+ * with no coordinate or a chain in the wrong order. It also proves the degraded
+ * path: a corridor the road network cannot answer still saves, and is stored as
+ * the estimate it is. Tenant isolation is proven
  * through the API and, when the app role is available, against route_stops RLS.
  *
  * Runs against a booted API on port 4000. Hard-deletes every route it creates
@@ -271,8 +273,8 @@ async function main() {
     const afterEdit = await call(`/routes/${id}`, token);
     check("an edit rewrites the chain instead of stacking a second one",
       edited.status === 200 && (afterEdit.json?.stops ?? []).length === 3
-        && (afterEdit.json?.stops ?? []).map(s => s.kind).join() === "origin,via,dest",
-      [edited.status, (afterEdit.json?.stops ?? []).map(s => [s.kind, s.place_name])]);
+        && (afterEdit.json?.stops ?? []).map((s: any) => s.kind).join() === "origin,via,dest",
+      [edited.status, (afterEdit.json?.stops ?? []).map((s: any) => [s.kind, s.place_name])]);
 
     // ---------- Multi-waypoint trace ----------
     const chainPts = [pin, town("Kilwa"), town("Mtwara"), town("Mbamba Bay")]
@@ -318,6 +320,43 @@ async function main() {
       stored.status === 200 && Array.isArray(withLine.json?.geometry)
         && withLine.json.geometry.length > 20 && withLine.json?.route_source === "osrm",
       [stored.status, withLine.json?.route_source, withLine.json?.geometry?.length]);
+
+    // ---------- Saving while the router cannot answer ----------
+    // Two pins in open water off the coast have no road to snap to, so the router
+    // can only refuse. That is the same answer the builder gets when the shared
+    // demo router sheds a big corridor, and the transporter must still be able to
+    // save the route he planned.
+    const sea = { from: { lat: -6.2, lng: 41.6 }, to: { lat: -6.9, lng: 42.2 } };
+    const seaWps = `${sea.from.lat},${sea.from.lng};${sea.to.lat},${sea.to.lng}`;
+    const noRoad = await call(`/geo/road-route?wps=${encodeURIComponent(seaWps)}`, token);
+    check("a chain the road network does not reach is refused, never invented",
+      noRoad.status === 502 && code(noRoad.json) === "ROUTING_UNAVAILABLE",
+      [noRoad.status, code(noRoad.json)]);
+
+    const est = await call("/routes", token, post({
+      name: `${FIXTURE} estimate only`, distanceKm: 120, expectedDurationHours: 4,
+      routeSource: "estimate",
+      stops: [
+        { kind: "origin", lat: sea.from.lat, lng: sea.from.lng, place: "Off the coast" },
+        { kind: "dest", lat: sea.to.lat, lng: sea.to.lng, place: "Further out" }
+      ]
+    }));
+    const estId = est.json?.id as string | undefined;
+    const estBack = estId ? await call(`/routes/${estId}`, token) : { status: 0, json: null as any };
+    check("with no road to trace the route still saves",
+      est.status === 201 && estBack.status === 200,
+      [est.status, code(estId ? estBack.json : est.json)]);
+    check("and the row says the distance is an estimate rather than nothing",
+      estBack.json?.route_source === "estimate" && estBack.json?.geometry == null
+        && estBack.json?.routed_at == null,
+      [estBack.json?.route_source, estBack.json?.routed_at]);
+    const listed = (await call("/routes", token).then(r => r.json ?? []) as any[])
+      .find(r => r.id === estId);
+    check("the register shows which basis each route was planned on",
+      listed?.route_source === "estimate", listed?.route_source);
+    check("and the traced corridor is still shown as traced beside it",
+      (await call("/routes", token).then(r => r.json ?? []) as any[])
+        .find(r => r.id === id)?.route_source === "osrm");
 
     // ---------- Isolation ----------
     const strangerRead = await call(`/routes/${id}`, strangerToken);
