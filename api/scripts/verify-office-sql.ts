@@ -108,23 +108,71 @@ const checks: [string, string, unknown[]][] = [
      where tenant_id = $1 and employee_id = $3 and status in ('pending','in_progress')`,
     [FAKE_TENANT, FAKE_USER, FAKE_EMP]],
 
-  ["office tasks: list with filters", `select t.id, t.employee_id, e.full_name as employee_name, e.department,
-              t.shipment_id, cs.file_number,
+  ["office tasks: list with filters, file state and requester", `select t.id, t.employee_id, e.full_name as employee_name, e.department,
+              t.shipment_id, cs.file_number, cs.stage as file_stage,
+              cs.status as file_status, cs.shipment_type,
+              cs.consignee_name as file_consignee, cs.eta::text as file_eta,
+              (t.shipment_id is not null and cs.deleted_at is null) as file_live,
+              (select count(*)::int from job_stages js
+                where js.shipment_id = t.shipment_id and js.deleted_at is null) as file_stages_total,
+              (select count(*)::int from job_stages js
+                where js.shipment_id = t.shipment_id and js.deleted_at is null
+                  and js.status = 'done') as file_stages_done,
+              (select count(*)::int from cargo_tasks kt
+                where kt.shipment_id = t.shipment_id and kt.status = 'pending') as file_tasks_open,
               t.title, t.priority, t.due_date::text as due_date,
               (t.due_date - current_date)::int as days,
-              t.status, t.done_at, t.on_time, t.notes, t.created_at
+              t.status, t.done_at, t.on_time, t.notes, t.created_at,
+              t.created_by, ru.full_name as requested_by_name,
+              t.procedure_id, p.name as procedure_name,
+              (select count(*)::int from office_task_steps s
+                where s.office_task_id = t.id) as steps_total,
+              (select count(*)::int from office_task_steps s
+                where s.office_task_id = t.id and s.status = 'done') as steps_done,
+              (select coalesce(max(s.seq), 0)::int from office_task_steps s
+                where s.office_task_id = t.id and s.status <> 'done') as current_step
        from office_tasks t
        join employees e on e.id = t.employee_id
        left join cargo_shipments cs on cs.id = t.shipment_id
+       left join task_procedures p on p.id = t.procedure_id
+       left join users ru on ru.id = t.created_by
        where t.tenant_id = $1
          and ($2::text is null or t.status = $2)
          and ($3::uuid is null or t.employee_id = $3)
+         and ($4::uuid is null or t.shipment_id = $4)
        order by case when t.status in ('pending','in_progress') then 0 else 1 end,
                 case t.priority when 'urgent' then 0 when 'high' then 1 when 'normal' then 2 else 3 end,
                 t.due_date asc nulls last,
                 t.created_at desc
        limit 300`,
-    [FAKE_TENANT, "pending", FAKE_EMP]],
+    [FAKE_TENANT, "pending", FAKE_EMP, FAKE_SHIPMENT]],
+
+  // What a desk picks from when it hands a job over. The roster columns this
+  // statement must NOT carry are the point of it: no pay, no phone, no account.
+  ["office tasks: assignee shortlist", `select e.id, e.full_name, e.job_title, e.department, e.employment_type,
+                (e.user_id is not null) as has_account,
+                (select count(*)::int from office_tasks t
+                  where t.employee_id = e.id
+                    and t.status in ('pending','in_progress')) as open_tasks,
+                (select count(*)::int from office_tasks t
+                  where t.employee_id = e.id and t.status in ('pending','in_progress')
+                    and t.due_date < current_date) as overdue_tasks,
+                (select count(distinct t.shipment_id)::int from office_tasks t
+                  where t.employee_id = e.id and t.shipment_id is not null
+                    and t.status in ('pending','in_progress')) as open_files
+         from employees e
+         where e.tenant_id = $1 and e.deleted_at is null and e.status = 'active'
+         order by open_tasks asc, e.full_name asc
+         limit 200`,
+    [FAKE_TENANT]],
+
+  ["auth: the seat reads its own duties", `select distinct rp.permission_key as key
+         from user_roles ur
+         join role_permissions rp on rp.role_id = ur.role_id
+         where ur.user_id = $1
+           and (ur.expires_at is null or ur.expires_at > now())
+         order by 1`,
+    [FAKE_USER]],
 
   ["office tasks: employee guard", `select id from employees
      where id = $1 and tenant_id = $2 and deleted_at is null`,

@@ -2,6 +2,9 @@
  * End-to-end smoke test for Office/Employees against a running API (port 4000).
  * Forges access tokens exactly like the other module smoke tests: real director
  * for the flow, random user for the 403 gate, fake tenant for scoping.
+ * The cargo↔office interlink runs in a tenant of its own, because proving which
+ * duty stands in front of which door means writing portal seats — and the probe
+ * tenant belongs to a real company. That tenant is swept whole.
  * Cleans up everything it creates (office_tasks are hard-deleted — the table
  * keeps no history for tenants; employees/evaluations soft-delete).
  *
@@ -81,6 +84,104 @@ async function main() {
      returning id`, [tenant_id, SMOKE_FILE, user_id]);
   const fileId: string = file.rows[0].id;
 
+  // ---- interlink fixture ----
+  // This phase opens doors per duty, so it writes portal seats. Seats do not go
+  // into the probe tenant — that one belongs to a real company — so the phase
+  // runs in a tenant of its own and the sweep hard-deletes it by tenant id.
+  const I_TENANT = crypto.randomUUID();
+  const I_STAMP = Date.now().toString().slice(-8);
+  const I_FILE = `9SMOKE-004-${today.slice(0, 4)}`;
+  const I_COMPANY = `Interlink Smoke Office ${I_STAMP}`;
+  const I_EMP = "Kilian Smoke Clerk";
+  const SEAT_DUTIES: [string, string][] = [
+    ["general_manager", "Kilian Smoke General Manager"],
+    ["customer_service", "Kilian Smoke Customer Service"],
+    ["dispatcher", "Kilian Smoke Dispatcher"],
+    ["hr_officer", "Kilian Smoke HR Officer"],
+    ["auditor", "Kilian Smoke Auditor"],
+    ["trainee", "Kilian Smoke Trainee"]
+  ];
+  const seatToken: Record<string, string> = {};
+
+  // audit_logs rows stay behind: the register is append-only by design.
+  const sweepTenant = async (tid: string) => {
+    for (const sql of [
+      `delete from office_task_steps where office_task_id in (select id from office_tasks where tenant_id = $1)`,
+      `delete from messages where tenant_id = $1`,
+      `delete from message_reads where tenant_id = $1`,
+      `delete from alert_reads where tenant_id = $1`,
+      `delete from office_tasks where tenant_id = $1`,
+      `delete from cargo_tasks where tenant_id = $1`,
+      `delete from job_stages where tenant_id = $1`,
+      `delete from jobs where tenant_id = $1`,
+      `delete from documents where tenant_id = $1`,
+      `delete from employees where tenant_id = $1`,
+      `delete from cargo_shipments where tenant_id = $1`,
+      `delete from users where tenant_id = $1`,
+      `delete from company_profiles where tenant_id = $1`,
+      `delete from tenants where id = $1`
+    ]) {
+      await owner.query(sql, [tid]).catch(() => { });
+    }
+  };
+
+  // A crashed run leaves its tenant behind, and the next hand-over would then
+  // count against somebody else's leftovers.
+  const stale = await owner.query(`select id from tenants where name like 'Interlink Smoke Office %'`);
+  for (const r of stale.rows) await sweepTenant(r.id);
+
+  await owner.query(`insert into tenants (id, type, name, status) values ($1,'transporter',$2,'active')`,
+    [I_TENANT, I_COMPANY]);
+  await owner.query(
+    `insert into company_profiles (id, tenant_id, company_name) values (gen_random_uuid(),$1,$2)`,
+    [I_TENANT, I_COMPANY]);
+
+  const dutyRoles = await owner.query(
+    `select key, id from roles where tenant_id is null and key = any($1::text[])`,
+    [SEAT_DUTIES.map(([key]) => key)]);
+  const missing = SEAT_DUTIES.filter(([key]) => !dutyRoles.rows.some((r: any) => r.key === key));
+  if (missing.length) throw new Error(`No platform role for ${missing.map(([k]) => k).join(", ")}`);
+
+  for (const [key, name] of SEAT_DUTIES) {
+    const role = dutyRoles.rows.find((r: any) => r.key === key)!;
+    const seat = await owner.query(
+      `insert into users (id, tenant_id, user_type, full_name, status, email)
+       values (gen_random_uuid(), $1,'staff',$2,'active',$3)
+       returning id`, [I_TENANT, name, `ilk.${key}.${I_STAMP}@waisha.test`]);
+    await owner.query(`insert into user_roles (user_id, role_id) values ($1,$2)`,
+      [seat.rows[0].id, role.id]);
+    seatToken[key] = await mint(seat.rows[0].id, I_TENANT, [key]);
+  }
+
+  const iFileRow = await owner.query(
+    `insert into cargo_shipments (id, tenant_id, file_number, seq, file_year, shipment_type,
+        container_type, consignee_name, consignor_name, status, stage, eta)
+     values (gen_random_uuid(), $1, $2, 9103, date_part('year', now())::int, 'import',
+        '40ft', 'Interlink Smoke Consignee', 'Interlink Smoke Consignor', 'open', 'customs',
+        current_date + 5)
+     returning id`, [I_TENANT, I_FILE]);
+  const iFileId: string = iFileRow.rows[0].id;
+
+  const iJob = await owner.query(
+    `insert into jobs (tenant_id, shipment_id) values ($1,$2) returning id`,
+    [I_TENANT, iFileId]);
+  await owner.query(
+    `insert into job_stages (tenant_id, job_id, shipment_id, stage_key, name, position, status, completed_at)
+     values ($1,$2,$3,'declaration','Entry declaration',1,'done',now()),
+           ($1,$2,$3,'assessment','Duty assessment',2,'in_progress',null)`,
+    [I_TENANT, iJob.rows[0].id, iFileId]);
+  await owner.query(
+    `insert into cargo_tasks (tenant_id, shipment_id, title, status)
+     values ($1,$2,'Interlink smoke checklist item','pending')`, [I_TENANT, iFileId]);
+
+  const iEmpRow = await owner.query(
+    `insert into employees (id, tenant_id, full_name, job_title, department, employment_type,
+        status, monthly_salary, phone_encrypted, phone_search, hired_date)
+     values (gen_random_uuid(), $1, $2, 'Documents clerk', 'Back office', 'permanent', 'active',
+        850000, decode('2d696e7465726c696e6b2d636970686572','hex'), 'ilk-phone-hash', $3)
+     returning id`, [I_TENANT, I_EMP, hired]);
+  const iEmpId: string = iEmpRow.rows[0].id;
+
   const token = await mint(user_id, tenant_id);
   const bogusUserToken = await mint("99999999-9999-7999-8999-999999999999", tenant_id, ["staff"]);
   const fakeTenantToken = await mint(user_id, "00000000-0000-7000-8000-000000000000");
@@ -114,6 +215,137 @@ async function main() {
     check("foreign tenant → no data (403, or empty view)",
       fakeTenant.status === 403 || (fakeTenant.status === 200 && (fakeTenant.json ?? []).length === 0),
       { status: fakeTenant.status, rows: fakeTenant.json?.length });
+
+    // ---- the interlink: which door each duty stands in front of ----
+    const noPermProbe = await call("/auth/permissions", null);
+    check("permissions probe without auth → 401", noPermProbe.status === 401, noPermProbe.status);
+
+    const dirKeys = (await call("/auth/permissions", token)).json?.keys ?? [];
+    const matrix = await owner.query(
+      `select count(distinct rp.permission_key)::int as n from user_roles ur
+        join role_permissions rp on rp.role_id = ur.role_id
+        where ur.user_id = $1 and (ur.expires_at is null or ur.expires_at > now())`, [user_id]);
+    check("permissions probe returns the director's own keys",
+      dirKeys.includes("shipments.view") && dirKeys.includes("office_tasks.create") &&
+      dirKeys.includes("employees.view"), dirKeys.length);
+    check("permissions probe matches the matrix requirePermission gates on",
+      dirKeys.length === matrix.rows[0].n, { probe: dirKeys.length, matrix: matrix.rows[0].n });
+
+    const dispKeys = (await call("/auth/permissions", seatToken.dispatcher)).json?.keys ?? [];
+    check("dispatcher holds the file door, not the office door",
+      dispKeys.includes("shipments.view") && dispKeys.includes("messages.send") &&
+      !dispKeys.includes("office_tasks.view"), dispKeys);
+
+    // Before 089 every one of these was a 403, which is exactly why the assignment
+    // picker on the office page could only ever offer "No cargo file".
+    const hrCargo = await call("/cargo", seatToken.hr_officer);
+    const hrFileRow = (hrCargo.json ?? []).find((s: any) => s.file_number === I_FILE);
+    check("office seat reads cargo files → 200", hrCargo.status === 200 && !!hrFileRow,
+      { status: hrCargo.status, rows: hrCargo.json?.length });
+    check("cargo row carries the stage the picker shows",
+      hrFileRow?.stage === "customs" && hrFileRow?.status === "open" && hrFileRow?.open_tasks === 1,
+      { stage: hrFileRow?.stage, open: hrFileRow?.open_tasks });
+
+    const dispCargo = await call("/cargo", seatToken.dispatcher);
+    check("dispatcher reads cargo files → 200", dispCargo.status === 200, dispCargo.status);
+
+    const dispTasks = await call(`/office-tasks?shipmentId=${iFileId}`, seatToken.dispatcher);
+    check("dispatcher without office_tasks.view → 403 on the jobs read",
+      dispTasks.status === 403, dispTasks.status);
+    const traineeTasks = await call(`/office-tasks?shipmentId=${iFileId}`, seatToken.trainee);
+    check("trainee still has no office door → 403", traineeTasks.status === 403, traineeTasks.status);
+
+    // A desk hands the job over; it does not close it.
+    const handover = await call("/office-tasks", seatToken.customer_service, {
+      method: "POST",
+      body: JSON.stringify({
+        employeeId: iEmpId, shipmentId: iFileId, title: "Interlink smoke pull the assessment slip",
+        priority: "high", dueDate: soon
+      })
+    });
+    check("CFA desk hands a job to the office → 201", handover.status === 201,
+      handover.status + " " + JSON.stringify(handover.json));
+    const iTaskId: string | null = handover.json?.id ?? null;
+
+    const auditorPost = await call("/office-tasks", seatToken.auditor, {
+      method: "POST",
+      body: JSON.stringify({ employeeId: iEmpId, shipmentId: iFileId, title: "Interlink smoke auditor job" })
+    });
+    check("read-only office seat cannot hand over → 403", auditorPost.status === 403, auditorPost.status);
+
+    const deskEdit = await call(`/office-tasks/${iTaskId}`, seatToken.customer_service, {
+      method: "PUT", body: JSON.stringify({ status: "done" })
+    });
+    check("the desk that handed over cannot close the job → 403", deskEdit.status === 403, deskEdit.status);
+
+    const gmTasks = await call(`/office-tasks?shipmentId=${iFileId}`, seatToken.general_manager);
+    const handed = (gmTasks.json ?? []).find((t: any) => t.id === iTaskId);
+    check("file-keyed jobs read → 200 with the handed job",
+      gmTasks.status === 200 && (gmTasks.json ?? []).length === 1 && handed?.title === "Interlink smoke pull the assessment slip",
+      { status: gmTasks.status, rows: gmTasks.json?.length });
+    check("the office sees the file the job is about",
+      handed?.file_number === I_FILE && handed?.file_stage === "customs" &&
+      handed?.file_status === "open" && handed?.file_live === true &&
+      handed?.file_consignee === "Interlink Smoke Consignee" && handed?.shipment_type === "import",
+      { file: handed?.file_number, stage: handed?.file_stage, live: handed?.file_live });
+    check("the office sees how far the file has got",
+      handed?.file_stages_total === 2 && handed?.file_stages_done === 1 &&
+      handed?.file_tasks_open === 1 && handed?.file_eta === iso(new Date(Date.now() + 5 * DAY)),
+      { stages: `${handed?.file_stages_done}/${handed?.file_stages_total}`, open: handed?.file_tasks_open, eta: handed?.file_eta });
+    check("the office sees who asked",
+      handed?.requested_by_name === "Kilian Smoke Customer Service", handed?.requested_by_name);
+
+    const empTasks = await call(`/office-tasks?employeeId=${iEmpId}`, seatToken.hr_officer);
+    check("office read by employee keeps the file columns",
+      empTasks.status === 200 && (empTasks.json ?? []).find((t: any) => t.id === iTaskId)?.file_number === I_FILE,
+      empTasks.status);
+
+    const emptyFile = await call(`/office-tasks?shipmentId=${crypto.randomUUID()}`, seatToken.general_manager);
+    check("a file with no jobs reads empty, not an error",
+      emptyFile.status === 200 && (emptyFile.json ?? []).length === 0, emptyFile.status);
+    const otherTenantFile = await call(`/office-tasks?shipmentId=${iFileId}`, token);
+    check("the file filter cannot reach across a tenant",
+      otherTenantFile.status === 200 && (otherTenantFile.json ?? []).length === 0,
+      { status: otherTenantFile.status, rows: otherTenantFile.json?.length });
+    const fakeFile = await call(`/office-tasks?shipmentId=${iFileId}`, fakeTenantToken);
+    // The duty gate looks grants up by user id, so a token carrying a foreign
+    // tenant claim still passes it — the boundary that holds is the tenant the
+    // query runs inside. Empty is the right answer; their rows would be a breach.
+    check("a foreign tenant claim reads no jobs on this file",
+      fakeFile.status === 200 && (fakeFile.json ?? []).length === 0,
+      { status: fakeFile.status, rows: fakeFile.json?.length });
+
+    // The shortlist is not the roster: a name, the job and the load, nothing else.
+    const assignees = await call("/office-assignees", seatToken.general_manager);
+    const clerk = (assignees.json ?? []).find((e: any) => e.id === iEmpId);
+    check("assignee shortlist → 200 with the active clerk",
+      assignees.status === 200 && !!clerk && clerk.full_name === I_EMP &&
+      clerk.department === "Back office", { status: assignees.status, rows: assignees.json?.length });
+    check("assignee shortlist carries the load, after the hand-over",
+      clerk?.open_tasks === 1 && clerk?.open_files === 1 && clerk?.overdue_tasks === 0,
+      { open: clerk?.open_tasks, files: clerk?.open_files, over: clerk?.overdue_tasks });
+    const leaky = ["monthly_salary", "salary", "phone", "phone_encrypted", "phone_search",
+      "notes", "user_id", "contract_start", "contract_end", "hired_date", "rating"].filter(
+      (k) => k in (clerk ?? {}));
+    check("assignee shortlist leaks no pay, no phone, no account link", leaky.length === 0, leaky);
+    check("a seat without office_tasks.create gets no shortlist",
+      (await call("/office-assignees", seatToken.auditor)).status === 403 &&
+      (await call("/office-assignees", seatToken.dispatcher)).status === 403);
+    check("trainee gets no shortlist", (await call("/office-assignees", seatToken.trainee)).status === 403);
+
+    // The reach the other way: the office writes on the file's own channel and
+    // the desk that owns the file reads it back.
+    const officeNote = await call("/messages", seatToken.hr_officer, {
+      method: "POST",
+      body: JSON.stringify({ shipmentId: iFileId, body: "Interlink smoke: the slip is with the assessor." })
+    });
+    check("office seat posts on the cargo file channel → 201", officeNote.status === 201,
+      officeNote.status + " " + JSON.stringify(officeNote.json));
+    const fileThread = await call(`/messages?shipmentId=${iFileId}`, seatToken.dispatcher);
+    const noteRow = (fileThread.json?.messages ?? []).find((m: any) => m.id === officeNote.json?.id);
+    check("the CFA desk reads the office note on its file", !!noteRow &&
+      noteRow?.senderName === "Kilian Smoke HR Officer" && fileThread.json?.shipment?.fileNumber === I_FILE,
+      { status: fileThread.status, scope: fileThread.json?.scope });
 
     // ---- roster ----
     const sup = await call("/employees", token, {
@@ -449,6 +681,8 @@ async function main() {
     const delSup = await call(`/employees/${supId}`, token, { method: "DELETE" });
     check("delete supervisor → 200", delSup.status === 200, delSup.status);
   } finally {
+    await sweepTenant(I_TENANT);
+
     // Cleanup. API deletes exercise the real paths where still live; owner
     // sweeps handle rows already deleted above plus the hard delete of
     // office_tasks (the table keeps no deleted_at).
@@ -485,10 +719,14 @@ async function main() {
            where t.tenant_id = $1 and e.full_name like 'Kilian Smoke%')::int as tasks,
          (select count(*) from employee_evaluations ev join employees e on e.id = ev.employee_id
            where ev.tenant_id = $1 and e.full_name like 'Kilian Smoke%' and ev.deleted_at is null)::int as evals,
-         (select count(*) from cargo_shipments where tenant_id = $1 and file_number = $2 and deleted_at is null)::int as files`,
-      [tenant_id, SMOKE_FILE]);
+         (select count(*) from cargo_shipments where tenant_id = $1 and file_number = $2 and deleted_at is null)::int as files,
+         (select count(*) from tenants where id = $3)::int as interlink_tenant,
+         (select count(*) from users where tenant_id = $3)::int as interlink_seats,
+         (select count(*) from office_tasks where tenant_id = $3)::int as interlink_tasks`,
+      [tenant_id, SMOKE_FILE, I_TENANT]);
     const L = left.rows[0];
-    console.log(`cleanup: employees=${L.employees} tasks=${L.tasks} evals=${L.evals} files=${L.files} remaining`);
+    console.log(`cleanup: employees=${L.employees} tasks=${L.tasks} evals=${L.evals} files=${L.files} remaining, ` +
+      `interlink: tenant=${L.interlink_tenant} seats=${L.interlink_seats} tasks=${L.interlink_tasks} remaining`);
     await owner.end();
   }
 

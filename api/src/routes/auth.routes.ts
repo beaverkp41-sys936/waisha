@@ -618,6 +618,22 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
     });
   });
 
+  // What this seat is allowed to do, read from the same role_permissions matrix
+  // requirePermission gates against. A page that cannot see its own duties can
+  // only guess, and a guess means offering a button the server will refuse.
+  app.get("/auth/permissions", { preHandler: [requireAuth] }, async (req: any) => {
+    return withTenant(req.user.tid, async (c) => {
+      const r = await c.query(
+        `select distinct rp.permission_key as key
+           from user_roles ur
+           join role_permissions rp on rp.role_id = ur.role_id
+          where ur.user_id = $1
+            and (ur.expires_at is null or ur.expires_at > now())
+          order by 1`, [req.user.sub]);
+      return { keys: r.rows.map((x: { key: string }) => x.key) };
+    });
+  });
+
   app.get("/auth/sessions", { preHandler: [requireAuth] }, async (req: any) => {
     return withTenant(req.user.tid, async (c) => {
       const rows = await c.query(

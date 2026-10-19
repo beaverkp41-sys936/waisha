@@ -17,6 +17,25 @@ export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
 }
 
 /**
+ * The duties this seat holds, so a page can offer only the buttons it may
+ * actually press. A route the role does not hold answers 403, which is the right
+ * answer for the server and a dead end for a page — the office desk used to
+ * fetch the cargo list for its file picker, get a silent 403 and show an
+ * empty picker with no reason. An empty set means "no extra affordances", never
+ * "allow it anyway".
+ */
+export async function seatPermissions(): Promise<Set<string>> {
+  try {
+    const res = await apiFetch("/auth/permissions");
+    if (!res.ok) return new Set();
+    const j = await res.json();
+    return new Set<string>(Array.isArray(j?.keys) ? j.keys : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
  * Server-sent events over fetch. EventSource cannot set a header, and a token
  * in the query string would end up in proxies and server logs — so the stream
  * reads the body by hand and keeps the same header auth as every other call.

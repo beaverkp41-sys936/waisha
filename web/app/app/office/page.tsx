@@ -13,7 +13,7 @@ const MODULES = [
   {
     name: "Employees Management",
     href: "/app/office/employees",
-    description: "Your people, ranked by task handling — overview KPIs and a leaderboard, roster with skills and contracts, daily assignments linked to cargo files, monthly evaluations, renewal countdowns and the trainee register with absorption.",
+    description: "Your people, ranked by task handling — overview KPIs and a leaderboard, roster with skills and contracts, daily assignments that carry the cargo file they name (its stage, how far the checklist has got, and a link onto the file when your seat can open it), monthly evaluations, renewal countdowns and the trainee register with absorption.",
     plan: "Enterprise"
   },
   {

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
-import { apiFetch } from "../../../api-client";
+import { apiFetch, seatPermissions } from "../../../api-client";
 
 function errorText(json: any, fallback: string): string {
   const d = json?.error?.details;
@@ -56,6 +56,30 @@ interface Shipment {
 const fmtDate = (v: string | null) => (v ? new Date(v).toLocaleDateString() : "—");
 const money = (v: string | null) => (v ? Number(v).toLocaleString() : "—");
 
+/** An assignment held by the back office that names this file. */
+interface OfficeJob {
+  id: string; employee_name: string; department: string | null;
+  title: string; priority: string; status: string;
+  due_date: string | null; days: number | null;
+  procedure_name: string | null; steps_total: number; steps_done: number;
+  requested_by_name: string | null; notes: string | null; created_at: string;
+}
+/** Who the desk may hand a job to — the minimum the roster exposes to CFA seats. */
+interface Assignee {
+  id: string; full_name: string; job_title: string | null; department: string | null;
+  employment_type: string; has_account: boolean;
+  open_tasks: number; overdue_tasks: number; open_files: number;
+}
+const JOB_STATUS_LABELS: Record<string, string> = {
+  pending: "Not started", in_progress: "In progress", done: "Done", cancelled: "Cancelled"
+};
+const JOB_STATUS_COLORS: Record<string, string> = {
+  pending: "var(--warning)", in_progress: "var(--brand)", done: "var(--success)", cancelled: "var(--ink-soft)"
+};
+const PRIORITY_COLORS: Record<string, string> = {
+  urgent: "var(--danger)", high: "var(--warning)", normal: "var(--brand)", low: "var(--ink-soft)"
+};
+
 export default function CargoDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -67,6 +91,36 @@ export default function CargoDetailPage() {
   const [task, setTask] = useState({ title: "", assignedTo: "", dueDate: "" });
   const [docKind, setDocKind] = useState("invoice");
   const [docFile, setDocFile] = useState<File | null>(null);
+
+  // The office half of the file: the jobs the back office holds on it, and who
+  // the desk may hand a new one to. Both come from office keys the seat may or
+  // may not hold, so nothing here loads until the duties are known.
+  const [officeCan, setOfficeCan] = useState({ view: false, create: false });
+  const [jobs, setJobs] = useState<OfficeJob[]>([]);
+  const [assignees, setAssignees] = useState<Assignee[]>([]);
+  const [jobForm, setJobForm] = useState({ employeeId: "", title: "", priority: "normal", dueDate: "" });
+
+  useEffect(() => {
+    let cancelled = false;
+    seatPermissions().then(keys => {
+      if (cancelled) return;
+      setOfficeCan({ view: keys.has("office_tasks.view"), create: keys.has("office_tasks.create") });
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const loadJobs = useCallback(async () => {
+    if (!officeCan.view) return;
+    const res = await apiFetch(`/office-tasks?shipmentId=${id}`);
+    if (!res.ok) return;
+    setJobs(await res.json());
+    if (officeCan.create) {
+      const people = await apiFetch("/office-assignees");
+      if (people.ok) setAssignees(await people.json());
+    }
+  }, [id, officeCan.view, officeCan.create]);
+
+  useEffect(() => { loadJobs(); }, [loadJobs]);
 
   const load = useCallback(async () => {
     const res = await apiFetch(`/cargo/${id}`);
@@ -153,6 +207,25 @@ export default function CargoDetailPage() {
     const j = await res.json().catch(() => ({}));
     if (!res.ok) setError(errorText(j, "Failed."));
     await load();
+  }
+
+  async function handJob(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setError(null); setNotice(null); setBusy(true);
+    try {
+      const who = assignees.find(a => a.id === jobForm.employeeId);
+      const res = await apiFetch("/office-tasks", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employeeId: jobForm.employeeId, shipmentId: id, title: jobForm.title,
+          priority: jobForm.priority, dueDate: jobForm.dueDate || null
+        })
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(errorText(j, "The office refused the job.")); return; }
+      setNotice(`Handed to ${who?.full_name ?? "the office"} — it is on their desk, and this file stays open until they close it.`);
+      setJobForm({ employeeId: "", title: "", priority: "normal", dueDate: "" });
+      await loadJobs();
+    } finally { setBusy(false); }
   }
 
   async function attachDocument(e: React.ChangeEvent<HTMLInputElement>) {
@@ -335,7 +408,7 @@ export default function CargoDetailPage() {
       {/* Tasks */}
       <section className="no-print mt-24">
         <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">
-          Tasks ({file.tasks.filter(t => t.status === "pending").length} pending)
+          Checklist tasks ({file.tasks.filter(t => t.status === "pending").length} pending)
         </h2>
         <form onSubmit={addTask} className="mt-16 grid grid-cols-[1fr_1fr_150px_140px] items-end gap-12 rounded-card border bg-surface p-24" style={cardStyle}>
           <label className="block">
@@ -397,6 +470,118 @@ export default function CargoDetailPage() {
           )}
         </div>
       </section>
+
+      {/* Office jobs — the back-office half of this file */}
+      {officeCan.view && (
+        <section className="no-print mt-24">
+          <div className="flex flex-wrap items-end justify-between gap-12">
+            <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">
+              Office jobs ({jobs.filter(j => j.status === "pending" || j.status === "in_progress").length} open)
+            </h2>
+            <Link href="/app/office/employees" className="pane-note text-xs underline">
+              Office desk
+            </Link>
+          </div>
+          <p className="pane-note mt-8 text-xs">
+            A job handed to the back office is worked on their desk, with its own flow steps and a
+            punctuality grade. This file stays open until they close it — and they do the closing, not us.
+          </p>
+          {officeCan.create && (
+            <form onSubmit={handJob}
+              className="mt-16 grid grid-cols-1 items-end gap-12 rounded-card border bg-surface p-24 md:grid-cols-[1.2fr_1.6fr_110px_150px_150px]"
+              style={cardStyle}>
+              <label className="block">
+                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Who *</span>
+                <select required value={jobForm.employeeId}
+                  onChange={e => setJobForm(f => ({ ...f, employeeId: e.target.value }))}
+                  className={inputCls} style={inputStyle}>
+                  <option value="">Pick a person…</option>
+                  {assignees.map(a => (
+                    <option key={a.id} value={a.id}>
+                      {a.full_name}
+                      {a.job_title ? ` — ${a.job_title}` : ""}
+                      {` · ${a.open_tasks} open${a.overdue_tasks ? `, ${a.overdue_tasks} overdue` : ""}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>What they must do *</span>
+                <input required value={jobForm.title} maxLength={200}
+                  placeholder="e.g. Collect the delivery note from the shipping line"
+                  onChange={e => setJobForm(f => ({ ...f, title: e.target.value }))}
+                  className={inputCls} style={inputStyle} />
+              </label>
+              <label className="block">
+                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Priority</span>
+                <select value={jobForm.priority}
+                  onChange={e => setJobForm(f => ({ ...f, priority: e.target.value }))}
+                  className={inputCls} style={inputStyle}>
+                  <option value="low">Low</option><option value="normal">Normal</option>
+                  <option value="high">High</option><option value="urgent">Urgent</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Due</span>
+                <input type="date" value={jobForm.dueDate}
+                  onChange={e => setJobForm(f => ({ ...f, dueDate: e.target.value }))}
+                  className={inputCls} style={inputStyle} />
+              </label>
+              <button type="submit" disabled={busy || assignees.length === 0}
+                className="waisha-btn rounded-input py-8 text-xs font-semibold disabled:opacity-60">
+                Hand over
+              </button>
+            </form>
+          )}
+          {officeCan.create && assignees.length === 0 && (
+            <p className="pane-note mt-12 text-xs">
+              The roster has nobody active yet, so there is nobody to hand a job to.
+            </p>
+          )}
+          <div className="mt-16 space-y-8">
+            {jobs.map(j => (
+              <div key={j.id}
+                className="flex flex-wrap items-start justify-between gap-12 rounded-input border bg-surface px-16 py-12"
+                style={cardStyle}>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold" style={{ color: "var(--ink)" }}>{j.title}</p>
+                  <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                    {j.employee_name}
+                    {j.department ? ` · ${j.department}` : ""}
+                    {j.procedure_name && j.steps_total > 0 ? ` · ${j.procedure_name} ${j.steps_done}/${j.steps_total}` : ""}
+                  </p>
+                  <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                    {j.requested_by_name ? `Asked by ${j.requested_by_name}` : "Asked inside the office"}
+                    {` · ${new Date(j.created_at).toLocaleDateString()}`}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-8">
+                  <span className="px-8 py-4 text-[10px] font-bold uppercase"
+                    style={{ borderLeft: `4px solid ${JOB_STATUS_COLORS[j.status] ?? "var(--ink-soft)"}`, color: "var(--ink)" }}>
+                    {JOB_STATUS_LABELS[j.status] ?? j.status}
+                  </span>
+                  <span className="px-8 py-4 text-[10px] font-bold uppercase"
+                    style={{ borderLeft: `4px solid ${PRIORITY_COLORS[j.priority] ?? "var(--ink-soft)"}`, color: "var(--ink)" }}>
+                    {j.priority}
+                  </span>
+                  {j.due_date && (
+                    <span className="text-xs tabular-nums"
+                      style={{ color: (j.status === "pending" || j.status === "in_progress") && j.days !== null && j.days < 0 ? "var(--danger)" : "var(--ink-soft)" }}>
+                      due {fmtDate(j.due_date)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+            {jobs.length === 0 && (
+              <p className="pane-note text-sm">
+                Nobody in the back office holds a job on this file.
+                {officeCan.create ? " Hand one over above." : ""}
+              </p>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Documents */}
       <section className="no-print mt-24">

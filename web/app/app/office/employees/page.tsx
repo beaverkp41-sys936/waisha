@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { apiFetch } from "../../api-client";
+import { apiFetch, seatPermissions } from "../../api-client";
 
 function errorText(json: any, fallback: string): string {
   const d = json?.error?.details;
@@ -30,6 +30,10 @@ interface Employee {
 interface Task {
   id: string; employee_id: string; employee_name: string; department: string | null;
   shipment_id: string | null; file_number: string | null;
+  file_stage: string | null; file_status: string | null; file_eta: string | null;
+  file_consignee: string | null; file_live: boolean;
+  file_stages_total: number; file_stages_done: number; file_tasks_open: number;
+  requested_by_name: string | null;
   title: string; priority: string; due_date: string | null; days: number | null;
   status: string; done_at: string | null; on_time: boolean | null; notes: string | null;
   created_at: string;
@@ -41,7 +45,16 @@ interface Evaluation {
   notes: string | null; evaluated_by: string | null; evaluated_by_name: string | null;
   created_at: string;
 }
-interface FileOption { id: string; file_number: string; status: string }
+interface FileOption { id: string; file_number: string; status: string; stage: string }
+
+/** Where a cargo file has got to, spelled the way the CFA page spells it. */
+const FILE_STAGES: Record<string, string> = {
+  pre_arrival: "Pre-arrival", arrival: "Arrival", customs: "Customs",
+  inspection: "Inspection", release: "Release", exit: "Exit"
+};
+const FILE_STATUS_LABELS: Record<string, string> = {
+  open: "Open", on_hold: "On hold", completed: "Completed", cancelled: "Cancelled"
+};
 
 const EMPLOYMENT_LABELS: Record<string, string> = {
   permanent: "Permanent", fixed_term: "Fixed-term", intern: "Trainee"
@@ -175,6 +188,21 @@ export default function OfficeEmployeesPage() {
   const [renewingId, setRenewingId] = useState<string | null>(null);
   const [renewForm, setRenewForm] = useState({ start: "", end: "" });
 
+  // Whether this seat may follow a job out to the cargo file it names, and
+  // whether it may use the file's conversation. A seat that may not still sees
+  // the file's state on the task — it just gets no link.
+  const [fileAccess, setFileAccess] = useState({ open: false, message: false });
+  const [filesBlocked, setFilesBlocked] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    seatPermissions().then(keys => {
+      if (cancelled) return;
+      setFileAccess({ open: keys.has("shipments.view"), message: keys.has("messages.view") });
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   const attachInput = useRef<HTMLInputElement | null>(null);
   const attachTargetRef = useRef<string | null>(null);
   const photoInput = useRef<HTMLInputElement | null>(null);
@@ -192,6 +220,7 @@ export default function OfficeEmployeesPage() {
     if (t.ok) setTasks(await t.json());
     if (v.ok) setEvaluations(await v.json());
     if (f.ok) setFiles((await f.json()).filter((x: FileOption) => x.status === "open"));
+    else setFilesBlocked(true);
     if (!e.ok && !t.ok && !v.ok) setError(errorText(null, "Could not load office data."));
     setReady(true);
   }, []);
@@ -1030,8 +1059,16 @@ export default function OfficeEmployeesPage() {
                 onChange={e => setTaskForm(f => ({ ...f, shipmentId: e.target.value }))}
                 className={inputCls} style={inputStyle}>
                 <option value="">No file — general task</option>
-                {files.map(f => <option key={f.id} value={f.id}>{f.file_number}</option>)}
+                {files.map(f => <option key={f.id} value={f.id}>
+                  {f.file_number}{f.stage ? ` · ${FILE_STAGES[f.stage] ?? f.stage}` : ""}
+                </option>)}
               </select>
+              {filesBlocked && (
+                <span className="mt-4 block text-[11px]" style={{ color: "var(--warning)" }}>
+                  Cargo files are hidden from your seat, so the list is empty. Ask a director for
+                  shipments.view if your jobs are about them.
+                </span>
+              )}
             </label>
             <label className="block">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Due date</span>
@@ -1066,7 +1103,46 @@ export default function OfficeEmployeesPage() {
                     <td className={tdCls} style={{ color: "var(--ink)" }}>
                       <span className="font-semibold">{t.title}</span>
                       {t.file_number && (
-                        <span className="ml-8 text-[10px] uppercase" style={{ color: "var(--brand)" }}>{t.file_number}</span>
+                        <span className="ml-8 inline-flex flex-wrap items-center gap-8 align-middle">
+                          {fileAccess.open && t.file_live ? (
+                            <Link href={`/app/cfa/cargo/${t.shipment_id}`}
+                              className="text-[10px] font-bold uppercase underline" style={{ color: "var(--brand)" }}>
+                              {t.file_number}
+                            </Link>
+                          ) : (
+                            <span className="text-[10px] font-bold uppercase" style={{ color: "var(--brand)" }}>
+                              {t.file_number}
+                            </span>
+                          )}
+                          {t.file_stage && (
+                            <span className="px-6 py-2 text-[10px] font-bold uppercase"
+                              style={pill(t.file_live ? "var(--brand)" : "var(--ink-soft)")}>
+                              {FILE_STAGES[t.file_stage] ?? t.file_stage}
+                              {t.file_stages_total > 0 ? ` ${t.file_stages_done}/${t.file_stages_total}` : ""}
+                            </span>
+                          )}
+                          {!t.file_live && (
+                            <span className="text-[10px] uppercase" style={{ color: "var(--ink-soft)" }}>file gone</span>
+                          )}
+                        </span>
+                      )}
+                      {t.file_number && t.file_live && (
+                        <span className="block text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                          {FILE_STATUS_LABELS[t.file_status ?? ""] ?? t.file_status}
+                          {t.file_consignee ? ` · ${t.file_consignee}` : ""}
+                          {t.file_tasks_open > 0 ? ` · ${t.file_tasks_open} checklist item${t.file_tasks_open === 1 ? "" : "s"} open` : ""}
+                          {t.file_eta ? ` · ETA ${fmtDate(t.file_eta)}` : ""}
+                          {fileAccess.message ? " · " : ""}
+                          {fileAccess.message && (
+                            <Link href={`/app/cfa/messages?file=${t.shipment_id}`} className="underline"
+                              style={{ color: "var(--brand)" }}>ask on the file</Link>
+                          )}
+                        </span>
+                      )}
+                      {t.requested_by_name && (
+                        <span className="block text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                          asked by {t.requested_by_name}
+                        </span>
                       )}
                       {t.notes && (
                         <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>{t.notes}</span>
