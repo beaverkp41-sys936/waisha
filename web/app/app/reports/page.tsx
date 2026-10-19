@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "../api-client";
+import { ExportButtons } from "@/components/ExportButtons";
 
 function errorText(json: any, fallback: string): string {
   return json?.error?.message ?? fallback;
@@ -28,7 +29,13 @@ interface CargoReport {
 
 const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function iso(d: Date) { return d.toISOString().slice(0, 10); }
+// The operator's own calendar, not UTC. toISOString() answers yesterday between midnight
+// and 03:00 at +03:00, so "Today" on the report desk would quietly report yesterday and
+// every export built from it would carry the wrong period.
+function iso(d: Date) {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 type Preset = "today" | "week" | "month" | "year" | "all" | "custom";
 
@@ -122,6 +129,18 @@ export default function ReportsPage() {
     { key: "month", label: "This month" }, { key: "year", label: "This year" },
     { key: "all", label: "All time" }, { key: "custom", label: "Custom" }
   ];
+
+  // The two delay lists on the page are one register with a column that says which half
+  // a row came from, because the printed file has to answer the same question the screen
+  // does: is this file late and closed, or late and still sitting in customs.
+  const lateRows = cargo ? [
+    ...cargo.lateOpen.map(f => ({ file: f.file_number, consignee: f.consignee_name,
+      eta: String(f.eta).slice(0, 10), stage: f.stage, kind: "Past ETA, still open",
+      days: f.days_past_eta })),
+    ...cargo.lateDelivered.map(f => ({ file: f.file_number, consignee: f.consignee_name,
+      eta: String(f.eta).slice(0, 10), stage: "Delivered", kind: "Delivered late",
+      days: f.days_late }))
+  ] : [];
 
   return (
     <div className="mx-auto max-w-[900px] px-16 py-32">
@@ -230,7 +249,21 @@ export default function ReportsPage() {
 
             {data.topCustomers.length > 0 && (
               <div className="mt-24">
-                <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Top customers by invoiced value</p>
+                <div className="flex flex-wrap items-start justify-between gap-12">
+                  <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Top customers by invoiced value</p>
+                  <ExportButtons report="summary"
+                    title="Top customers by invoiced value"
+                    subtitle="Invoiced value per customer for the period on the report desk"
+                    meta={[{ label: "Period", value: `${data.from} to ${data.to}` }]}
+                    columns={[
+                      { key: "customer", label: "Customer", type: "text" },
+                      { key: "invoiced", label: "Invoiced (TZS)", type: "money" },
+                      { key: "invoices", label: "Invoices", type: "number" }
+                    ]}
+                    rows={data.topCustomers.map(c => ({
+                      customer: c.customer_name, invoiced: c.invoiced, invoices: c.invoices
+                    }))} />
+                </div>
                 <table className="mt-8 w-full text-sm">
                   <tbody>
                     {data.topCustomers.map(c => (
@@ -265,7 +298,22 @@ export default function ReportsPage() {
                 )}
                 {(cargo.lateDelivered.length > 0 || cargo.lateOpen.length > 0) && (
                   <div className="mt-16">
-                    <p className="text-xs font-bold uppercase" style={{ color: "var(--danger)" }}>Delays</p>
+                    <div className="flex flex-wrap items-start justify-between gap-12">
+                      <p className="text-xs font-bold uppercase" style={{ color: "var(--danger)" }}>Delays</p>
+                      <ExportButtons report="cargo-delays"
+                        title="Cargo delays"
+                        subtitle="Files past their ETA, and files delivered after it"
+                        meta={[{ label: "Period", value: `${data.from} to ${data.to}` }]}
+                        columns={[
+                          { key: "file", label: "File no.", type: "text" },
+                          { key: "consignee", label: "Consignee", type: "text" },
+                          { key: "eta", label: "ETA", type: "date" },
+                          { key: "stage", label: "Stage", type: "text" },
+                          { key: "kind", label: "Delay kind", type: "text" },
+                          { key: "days", label: "Days", type: "number" }
+                        ]}
+                        rows={lateRows} />
+                    </div>
                     <table className="mt-8 w-full text-sm">
                       <thead>
                         <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>

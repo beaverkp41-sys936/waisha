@@ -3,6 +3,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { apiFetch } from "../../api-client";
+import { ExportButtons } from "@/components/ExportButtons";
 
 function errorText(json: any, fallback: string): string {
   const d = json?.error?.details;
@@ -244,7 +245,7 @@ function CargoContent() {
         style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>{notice}</div>}
 
       {/* Filters */}
-      <section className="mt-24 grid grid-cols-3 gap-12">
+      <section className="mt-24 grid grid-cols-1 sm:grid-cols-3 gap-12">
         <label className="block">
           <span className={`${labelCls} pane-note`}>Stage</span>
           <select value={filterStage} onChange={e => setFilterStage(e.target.value)} className={inputCls} style={inputStyle}>
@@ -397,7 +398,43 @@ function CargoContent() {
         </form>
       )}
 
-      <div className="mt-24 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
+      <div className="mt-24 flex flex-wrap items-center justify-between gap-12">
+        <p className="text-xs font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+          {shipments.length} file{shipments.length === 1 ? "" : "s"} listed
+          {filterStage || filterType || search ? " for these filters" : ""}
+        </p>
+        <ExportButtons report="cargo"
+          title="Cargo files"
+          subtitle={filterStage || filterType || search
+            ? "Files matching the filters on the desk" : "Every clearing and forwarding file on the desk"}
+          meta={[
+            { label: "Stage", value: filterStage ? (STAGE_LABELS[filterStage] ?? filterStage) : "All" },
+            { label: "Type", value: filterType ? (TYPE_LABELS[filterType] ?? filterType) : "All" },
+            { label: "Search", value: search.trim() || "—" }
+          ]}
+          columns={[
+            { key: "file", label: "File no.", type: "text" },
+            { key: "consignee", label: "Consignee", type: "text" },
+            { key: "type", label: "Type", type: "text" },
+            { key: "container", label: "Container", type: "text" },
+            { key: "eta", label: "ETA", type: "date" },
+            { key: "weight", label: "Weight (t)", type: "number" },
+            { key: "stage", label: "Stage", type: "text" },
+            { key: "payment", label: "Payment", type: "text" },
+            { key: "tasks", label: "Open office jobs", type: "number" }
+          ]}
+          rows={shipments.map(s => ({
+            file: s.file_number, consignee: s.consignee_name,
+            type: TYPE_LABELS[s.shipment_type] ?? s.shipment_type,
+            container: `${CONTAINER_LABELS[s.container_type] ?? s.container_type}`
+              + (s.container_count ? ` x${s.container_count}` : ""),
+            eta: s.eta, weight: s.weight_tonnes,
+            stage: STAGE_LABELS[s.stage] ?? s.stage,
+            payment: s.payment_status, tasks: s.open_tasks
+          }))} />
+      </div>
+
+      <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
