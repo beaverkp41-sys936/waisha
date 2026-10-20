@@ -1188,7 +1188,7 @@ export default function FleetPage() {
               </select>
             </label>
           </div>
-          <div className="grid grid-cols-3 gap-12">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-12">
             <label className="block">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Insurance expiry</span>
               <input type="date" value={form.insuranceExpiry} onChange={e => setForm(f => ({ ...f, insuranceExpiry: e.target.value }))} className={inputCls} style={inputStyle} />

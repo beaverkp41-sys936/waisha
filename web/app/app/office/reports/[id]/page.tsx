@@ -333,7 +333,7 @@ export default function TraineeReportPage() {
           <h2 className="text-[11px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--gold-green)" }}>
             Work carried out
           </h2>
-          <div className="mt-10 grid grid-cols-3 gap-16 text-center">
+          <div className="mt-10 grid grid-cols-2 md:grid-cols-3 gap-16 text-center">
             <Stat label="Tasks given" value={String(report.tasks_total)} />
             <Stat label="Tasks completed" value={String(report.tasks_done)} />
             <Stat label="Completed on time"

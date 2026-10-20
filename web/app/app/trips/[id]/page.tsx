@@ -438,7 +438,7 @@ export default function TripDetailPage() {
 
         {editable && (
           <form onSubmit={addLog} className="mt-16 space-y-12 rounded-card border bg-surface p-24" style={cardStyle}>
-            <div className="grid grid-cols-3 gap-12">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-12">
               <label className="block">
                 <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Checkpoint</span>
                 <select value={logCheckpointId}

@@ -63,7 +63,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
             </button>
           </div>
         </div>
-        <nav className="flex gap-x-24 px-16 pb-12 pt-4 text-xs font-semibold">
+        <nav className="ws-nav flex flex-wrap gap-x-24 gap-y-8 px-16 pb-12 pt-4 text-xs font-semibold">
           {NAV.map(n => {
             const active = n.href === "/portal"
               ? pathname === "/portal"

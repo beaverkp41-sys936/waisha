@@ -250,7 +250,7 @@ function MessagesContent() {
           <div className="border-b px-16 py-12" style={{ borderColor: "var(--line)" }}>
             <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Conversations</p>
           </div>
-          <div className="max-h-[70vh] overflow-y-auto">
+          <div className="max-h-[70dvh] overflow-y-auto">
             {threads.map(t => {
               const key = t.scope === "general" ? "general" : t.shipmentId!;
               const active = key === activeKey;
@@ -319,7 +319,7 @@ function MessagesContent() {
           </div>
 
           <div ref={scrollRef} onScroll={onScroll}
-            className="flex-1 space-y-12 overflow-y-auto px-16 py-16" style={{ maxHeight: "58vh", minHeight: "320px" }}>
+            className="flex-1 space-y-12 overflow-y-auto px-16 py-16" style={{ maxHeight: "58dvh", minHeight: "320px" }}>
             {loadingConversation && !conversation && (
               <p className="text-sm" style={{ color: "var(--ink-soft)" }}>Loading conversation…</p>
             )}

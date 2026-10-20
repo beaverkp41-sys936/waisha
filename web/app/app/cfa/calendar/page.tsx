@@ -102,48 +102,50 @@ export default function CalendarPage() {
       <div className="mt-24 grid grid-cols-1 gap-16 lg:grid-cols-[1fr_260px]">
         {/* Month grid */}
         <section className={card} style={cardStyle}>
-          <div className="grid grid-cols-7 gap-4 text-center text-[10px] font-bold uppercase tracking-[0.1em]"
-            style={{ color: "var(--ink-soft)" }}>
-            {WEEKDAYS.map(d => <div key={d} className="py-8">{d}</div>)}
-          </div>
-          <div className="grid grid-cols-7 gap-4">
-            {grid.map((day, i) => {
-              if (day === null) return <div key={`blank-${i}`} />;
-              const dateStr = `${key}-${String(day).padStart(2, "0")}`;
-              const dayEvents = byDate.get(dateStr) ?? [];
-              const isToday = dateStr === todayKey;
-              return (
-                <div key={dateStr}
-                  className="min-h-[76px] rounded-input border p-4"
-                  style={{
-                    borderColor: isToday ? "var(--gold)" : dayEvents.length ? "var(--line)" : "transparent",
-                    background: isToday ? "color-mix(in srgb, var(--gold) 12%, var(--surface))" : "transparent"
-                  }}>
-                  <p className={"text-[11px] font-bold tabular-nums" + (isToday ? " inline-block rounded-sm px-4" : "")} style={{
-                    color: isToday ? "var(--on-solid)" : "var(--ink-soft)",
-                    background: isToday ? "var(--gold)" : undefined
-                  }}>{day}</p>
-                  <div className="mt-2 space-y-2">
-                    {dayEvents.slice(0, 3).map((e, n) => (
-                      <Link key={`${e.type}-${n}`} href={e.href} title={`${e.label} — ${e.detail}`}
-                        className="block truncate rounded-sm px-4 text-[9px] font-semibold"
-                        style={{
-                          background: `color-mix(in srgb, ${TYPE_COLORS[e.type] ?? "var(--ink-soft)"} 16%, transparent)`,
-                          borderLeft: `2px solid ${TYPE_COLORS[e.type] ?? "var(--ink-soft)"}`,
-                          color: "var(--ink)"
-                        }}>
-                        {e.label}
-                      </Link>
-                    ))}
-                    {dayEvents.length > 3 && (
-                      <p className="px-4 text-[9px]" style={{ color: "var(--ink-soft)" }}>
-                        +{dayEvents.length - 3} more
-                      </p>
-                    )}
+          <div className="cal-scroll">
+            <div className="cal-grid grid grid-cols-7 gap-4 text-center text-[10px] font-bold uppercase tracking-[0.1em]"
+              style={{ color: "var(--ink-soft)" }}>
+              {WEEKDAYS.map(d => <div key={d} className="py-8">{d}</div>)}
+            </div>
+            <div className="cal-grid grid grid-cols-7 gap-4">
+              {grid.map((day, i) => {
+                if (day === null) return <div key={`blank-${i}`} />;
+                const dateStr = `${key}-${String(day).padStart(2, "0")}`;
+                const dayEvents = byDate.get(dateStr) ?? [];
+                const isToday = dateStr === todayKey;
+                return (
+                  <div key={dateStr}
+                    className="min-h-[76px] rounded-input border p-4"
+                    style={{
+                      borderColor: isToday ? "var(--gold)" : dayEvents.length ? "var(--line)" : "transparent",
+                      background: isToday ? "color-mix(in srgb, var(--gold) 12%, var(--surface))" : "transparent"
+                    }}>
+                    <p className={"text-[11px] font-bold tabular-nums" + (isToday ? " inline-block rounded-sm px-4" : "")} style={{
+                      color: isToday ? "var(--on-solid)" : "var(--ink-soft)",
+                      background: isToday ? "var(--gold)" : undefined
+                    }}>{day}</p>
+                    <div className="mt-2 space-y-2">
+                      {dayEvents.slice(0, 3).map((e, n) => (
+                        <Link key={`${e.type}-${n}`} href={e.href} title={`${e.label} — ${e.detail}`}
+                          className="cal-chip block truncate rounded-sm px-4 text-[9px] font-semibold"
+                          style={{
+                            background: `color-mix(in srgb, ${TYPE_COLORS[e.type] ?? "var(--ink-soft)"} 16%, transparent)`,
+                            borderLeft: `2px solid ${TYPE_COLORS[e.type] ?? "var(--ink-soft)"}`,
+                            color: "var(--ink)"
+                          }}>
+                          {e.label}
+                        </Link>
+                      ))}
+                      {dayEvents.length > 3 && (
+                        <p className="px-4 text-[9px]" style={{ color: "var(--ink-soft)" }}>
+                          +{dayEvents.length - 3} more
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
           <div className="mt-16 flex flex-wrap gap-x-16 gap-y-4 border-t pt-12 text-[10px]" style={{ borderColor: "var(--line)" }}>
             {Object.entries(TYPE_LABELS).map(([t, l]) => (

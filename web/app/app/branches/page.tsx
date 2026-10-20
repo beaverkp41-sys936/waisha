@@ -161,7 +161,7 @@ export default function BranchesPage() {
                 placeholder="e.g. Dar es Salaam Head Office" className={inputCls} style={inputStyle} />
             </label>
           </div>
-          <div className="grid grid-cols-3 gap-12">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-12">
             <label className="block">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Region (Mkoa)</span>
               <select value={form.regionId} onChange={e => pickRegion(e.target.value)} className={inputCls} style={inputStyle}>

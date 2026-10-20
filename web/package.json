@@ -6,7 +6,8 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "probe:mobile": "node scripts/mobile-probe.mjs --pages /login,/app/dashboard,/app/drivers,/app/office/payroll,/portal --shots --out .mobile-probe"
   },
   "dependencies": {
     "@types/leaflet": "^1.9.22",

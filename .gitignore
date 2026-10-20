@@ -11,3 +11,5 @@ desktop.ini
 Thumbs.db
 .qoder/
 .zcode/
+# Layout probe output: screenshots and per-run JSON, regenerated on demand.
+.mobile-probe/

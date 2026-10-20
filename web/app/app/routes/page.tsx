@@ -894,7 +894,7 @@ export default function RoutesPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-12">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-12">
             <label className="block">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Rate per km</span>
               <input type="number" min={0} step="0.01" value={form.ratePerKm}
@@ -1006,7 +1006,7 @@ export default function RoutesPage() {
         <div role="dialog" aria-modal="true" aria-label={detail.name}
           className="fixed inset-0 z-50 flex items-center justify-center p-16"
           style={{ background: "rgba(8,14,20,.55)" }} onClick={() => setDetail(null)}>
-          <div className="max-h-[86vh] w-full max-w-[720px] overflow-auto rounded-modal border bg-surface p-24"
+          <div className="max-h-[86dvh] w-full max-w-[720px] overflow-auto rounded-modal border bg-surface p-24"
             style={{ borderColor: "var(--line)" }} onClick={e => e.stopPropagation()}>
             <div className="flex items-start justify-between">
               <div>

@@ -89,7 +89,7 @@ export default function CompliancePage() {
         style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>{error}</div>}
 
       {ready && (
-        <section className="mt-24 grid grid-cols-3 gap-16">
+        <section className="mt-24 grid grid-cols-2 md:grid-cols-3 gap-16">
           <div className={card} style={cardStyle}>
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Expired</p>
             <p className="mt-8 text-2xl font-bold tabular-nums" style={{ color: expired > 0 ? "var(--danger)" : "var(--ink)" }}>{expired}</p>

@@ -136,7 +136,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <ul className="mt-20 space-y-10">
+        <ul className="next-steps mt-20 space-y-10">
           {nextActions.map(a => (
             <li key={a.label}>
               <Link href={a.href}

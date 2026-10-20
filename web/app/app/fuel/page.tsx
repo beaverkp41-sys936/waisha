@@ -91,7 +91,7 @@ export default function FuelPage() {
         style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>{notice}</div>}
 
       {totals && (
-        <section className="mt-24 grid grid-cols-3 gap-16">
+        <section className="mt-24 grid grid-cols-2 md:grid-cols-3 gap-16">
           <div className={card} style={cardStyle}>
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>Total litres</p>
             <p className="mt-8 text-xl font-bold tabular-nums" style={{ color: "var(--ink)" }}>{totals.litres.toLocaleString()}</p>

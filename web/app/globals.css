@@ -1220,9 +1220,32 @@ select.auth-field option { color: var(--ink); }
   .app-main { margin-left: 0; flex: 1 1 auto; min-height: 0; height: auto; }
   .topbar { padding: 0 16px 0 calc(16px + env(safe-area-inset-left)); }
   .crumb .crumb-area { display: none; }
+  /* The crumb is the one header child that can be long ("Proforma & quotes",
+     "Company directory") and it was `flex:none`, which is a promise never to
+     shrink — so its own ellipsis could never engage and it pushed the right
+     cluster out of the bar instead of trimming itself. */
+  .crumb { flex: 0 1 auto; min-width: 0; }
   .flagpole { width: 62px; }
   .flagpole-flag { width: 48px; height: 32px; }
   .app-main h1 { font-size: 22px; }
+  /* Every register in the portal is a real <table> with 6-14 columns, and only
+     eleven pages wrapped theirs in a scroller. Rather than teach forty pages the
+     same div, the table becomes its own scroller here: the rows keep their
+     column alignment because the table parts are still laid out inside one
+     anonymous table box, and a table narrower than the pane is unaffected.
+     Payroll and finance also insist their register is at least 980px wide — once
+     the table scrolls, that minimum belongs to the content, not the box. Left on
+     the box it widens the page instead of scrolling the rows. */
+  .app-main table {
+    display: block;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* The bar owns the bottom of the viewport on a touch device, so the home
+     indicator has to land on padding, not on the last row of a list. */
+  .app-content { padding-bottom: calc(48px + env(safe-area-inset-bottom)); }
   .profile-cover {
     min-height: 172px;
     flex-direction: column;
@@ -1233,6 +1256,167 @@ select.auth-field option { color: var(--ink); }
   .profile-avatar { left: 16px; width: 84px; height: 84px; bottom: -42px; }
   .profile-body { padding: 0 16px 20px; }
   .pv-grid { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  /* A month grid is seven columns at every width below the shell's own break, and a chip
+     inside it is a date's only route into a cargo file, an invoice or a leave request. At
+     768px each cell is 85px wide and the chip ellipsised at 74px in a 9px caption; at 390px
+     the cell is 48px. A `title` tooltip never appears on a touch device, so the cut hides
+     the one word that says WHAT is due — "ETA", "Renewal", "INV-1042" — while looking like
+     a complete short label. Wrapping costs the card height it is not otherwise using; the
+     caption size is a print size, not a handset one. */
+  .cal-chip { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; font-size: 10px; line-height: 1.25; }
+}
+
+/* Phone width. The 860 block re-architects the shell; this one buys back the
+   vertical space that re-architecture costs and closes the gaps a 390px pane
+   cannot pay for. What it does not do is sizing for thumbs — that is the block
+   after it, which keys on the pointer instead of the width. */
+@media (max-width: 560px) {
+  /* Brand and workspace chips share one row: stacked, the pane spent ~170px of
+     an 844px viewport on itself before any page content appeared. */
+  .sidebar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 12px;
+    padding-top: 8px;
+  }
+  .brand-lockup { grid-column: 1; grid-row: 1; padding: 0 0 8px; }
+  .brand-lockup img { width: 118px; }
+  .brand-tagline { display: none; }
+  .workspace-switch { grid-column: 2; grid-row: 1; margin: 0 12px 8px 0; flex: 0 1 auto; }
+  /* `flex: 1 1 0` is what makes the plate look tidy on a wide pane: three equal
+     thirds. On a phone it is what cut "TRANSPORTER" to "TRANS…" — an equal share
+     of the row is 62px and the word needs 93. Basis auto lets each chip hold its
+     own text, and the plate sizes to the sum of them. */
+  .workspace-switch a { padding: 8px 9px; min-height: 38px; font-size: 10px; flex: 0 1 auto; }
+  .nav-scroll { grid-column: 1 / -1; grid-row: 2; padding: 0 12px 10px; }
+  .nav-item { min-height: 40px; padding: 8px 11px; font-size: 13px; }
+  .topbar {
+    height: auto;
+    min-height: var(--topbar-h);
+    flex-wrap: wrap;
+    align-content: center;
+    gap: 2px 12px;
+    padding: 6px 12px 6px calc(12px + env(safe-area-inset-left));
+  }
+  /* The marquee keeps its full run by taking the second row rather than being
+     squeezed to its 26px pin — on a phone it is the only way an announcement is
+     ever read. */
+  .announce-ticker { order: 3; flex: 1 1 100%; max-width: none; margin: 0; }
+  .topbar-right { margin-left: auto; gap: 10px; }
+  /* Decorative (aria-hidden) and the first thing to give when the bar is short
+     of room. */
+  .flagpole { display: none; }
+  .alert-pill { padding: 9px 12px; min-height: 34px; }
+  /* Payroll's form labels carry min-w-[220px]…[320px]; inside a 358px card that
+     leaves the field itself a stub. A label has no reason to outwide its card. */
+  .app-main label { min-width: 0; }
+  .kv { grid-template-columns: 104px minmax(0, 1fr); }
+  /* Each next-steps row carries its label and its hint on one line, and the hint
+     alone is wider than the card at 390px — truncate was cutting "Complete your
+     co…", which is the one sentence that tells an operator what is still owed.
+     Two wrapped lines cost the card height it is not otherwise using. */
+  .next-steps .truncate { white-space: normal; overflow: visible; text-overflow: clip; }
+  /* A month grid is seven columns, and at 390px each cell is 48px: the event chips
+     were cut to 128px of a 190px label and stood 14px tall, so the one control that
+     says "this ETA exists" was both unreadable and unhittable. The grid keeps its
+     seven aligned columns and scrolls sideways instead — the same deal the registers
+     get — so a cell is never narrower than the chip inside it. Dropping the chips was
+     the other option and the wrong one: Upcoming lists only the rest of this month,
+     so every past date would be stranded with no path to it. */
+  .cal-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .cal-grid { min-width: 696px; }
+  /* The theme redefines 4/8/12/16/24/32/48/64 in px but left 10 and 20 on Tailwind's
+     rem scale, so `mt-16` is 16px, `mt-20` is 80px and `mt-24` is 24px — all three
+     appear in the same card. Fifty-eight sites wrote `mt-20` meaning "a little more
+     than mt-16" and got a hole; on a phone that is the first thing that reads as
+     broken. Desktop keeps the airiness it was signed off with: this only closes the
+     gap where the viewport cannot afford it. Matched to Tailwind's own specificity
+     for `space-y-*`, which counts the two `:not([hidden])` arguments. */
+  .app-main .mt-20 { margin-top: 24px; }
+  .app-main .mb-20 { margin-bottom: 24px; }
+  .app-main .m-20 { margin: 24px; }
+  .app-main .gap-20 { gap: 20px; }
+  .app-main .space-y-20 > :not([hidden]) ~ :not([hidden]) { margin-top: 20px; }
+  .app-main h1 { font-size: 20px; }
+  .app-main h1 + p { font-size: 12.5px; }
+  /* Both of the portal's dialogs are `fixed inset-0` over a sheet that measured
+     itself in vh; inside a shell that owns the viewport, a vh sheet loses its
+     action buttons under the on-screen keyboard. */
+  .app-main .fixed.inset-0 > * { max-height: 88dvh; overflow-y: auto; }
+  /* The shell footer is `position: sticky; bottom: 0`, so it floats over the tail
+     of the scroll until the scroll reaches it. Its contact block wraps to three
+     lines on a phone and measures 84px — the 48px reserved at 860px was sized to
+     the 45px two-line bar, and at this width the last line of every long page
+     disappeared under it. Measured at 320 and 390; both give 84. */
+  .app-content { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+}
+
+/* Tap targets. This one keys on the input device, not the width: a thumb needs the
+   same room on a 390px handset and on a 768px tablet, and a 560px-wide desktop
+   window is still a mouse. `py-8` in this codebase is 8px, not 2rem — the theme maps
+   most of its numeric spacing keys to px (see `mt-20` above for the ones it missed) —
+   so a `px-16 py-8 text-xs` toolbar button measures ~30px and the × that removes a
+   proforma line measures 14px in both axes. Plain text links are left out on purpose:
+   raising every `<a>` to 38px would blow the rows of a dense register apart, and links
+   that act as buttons already carry .waisha-btn. Boxes are left alone too — a checkbox
+   with a 38px box is a broken checkbox. */
+@media (pointer: coarse) {
+  .app-main :is(button, select, .waisha-btn, .on-photo-btn, .tab):not([type="checkbox"]):not([type="radio"]) {
+    min-height: 38px;
+    min-width: 30px;
+  }
+  .app-main :is(.waisha-btn, .on-photo-btn) {
+    display: inline-flex;
+    align-items: center;
+  }
+  /* A field has to be thumb-height too — the same `py-8` that made a 30px button made
+     a 30px input, and the keyboard lands on whatever the finger found. Range sliders,
+     colour pickers and image buttons are left alone because their box IS the control
+     and growing it changes what it draws. */
+  .app-main :is(input, textarea):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="image"]) {
+    min-height: 38px;
+  }
+  .tab { padding: 10px 13px; }
+  /* The shell re-architects itself at 860 for anybody, pointer or not, so the
+     workspace chips and the roster links are thumb-sized here too — at 768 the chips
+     measured 31px and they are the control that moves a tablet operator between
+     Transporter, CFA and Office. */
+  .workspace-switch a { min-height: 38px; }
+  .nav-item { min-height: 40px; }
+  /* The four account tabs measured 28px and the links under the password field 15px —
+     the first things a phone user has to hit, on the one page nobody can skip. */
+  .auth-tab { min-height: 40px; }
+  .auth-link { min-height: 38px; }
+  /* The shipper and seeker shells carry their whole navigation as one row of text
+     tabs, 28px tall and — at 390px — one tab wide enough to sit off the screen. */
+  .ws-nav a { display: inline-flex; align-items: center; min-height: 38px; }
+  /* A calendar chip is a date's whole route into a cargo file, an invoice or a leave
+     request, and it is a plain link, so the button floor above never reached it; it
+     measured 14px. Vertical padding is what grows it — `display: flex` would break the
+     `truncate` the chip also carries, because ellipsis does not apply to an anonymous
+     flex item. */
+  .cal-chip { min-height: 38px; padding-top: 8px; padding-bottom: 8px; }
+  /* A pane-note that carries a link is a page's way back — "← All cargo files", "Office
+     desk", "← Office area" — and it stands alone on its own line, so it is a control rather
+     than sentence text, and it measured 16px tall. Vertical padding is what grows it, for the
+     same reason the chip above uses it: `display: flex` would take the ellipsis away from any
+     label that also truncates, and a min-height on an inline box does nothing at all. The
+     second selector is the same link written with Tailwind instead of .pane-note, minus the
+     two button classes the rule above this block already sizes. */
+  .app-main a.pane-note,
+  .app-main a.inline-block:not(.waisha-btn):not(.on-photo-btn) { padding-top: 11px; padding-bottom: 11px; }
+  /* And the same inside a register: a trip's short code is the only route from its row to the
+     sheet, and it sat 18px tall in a row three times that high. Padding an inline box grows
+     what a thumb can hit without moving the row, because the line box is what sets the row's
+     height — which is why this does not undo the density the registers were signed off at. */
+  .app-main :is(td, th) a.underline { padding-top: 10px; padding-bottom: 10px; }
+  /* Leaflet builds its own 30px zoom squares and pins them to the corner of a map the
+     operator is already dragging around. Line-height moves with the height or the
+     glyph sits at the top of its own box. The selector has to answer Leaflet's own
+     `.leaflet-touch .leaflet-bar a`, which is two classes and a tag and therefore ties
+     with anything shorter than it — and on a touch device `.leaflet-touch` is always on. */
+  .app-main .leaflet-touch .leaflet-bar a { width: 36px; height: 36px; line-height: 36px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
