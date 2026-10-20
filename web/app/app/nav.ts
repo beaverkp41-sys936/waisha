@@ -49,6 +49,8 @@ export const CFA_NAV: NavItem[] = [
   { href: "/app/cfa/messages", label: "Messages", icon: MessageSquare },
   { href: "/app/cfa/calendar", label: "ETA calendar", icon: CalendarClock },
   { href: "/app/cfa/compliance", label: "Compliance", icon: ShieldCheck },
+  { href: "/app/cfa/staff", label: "Staff", icon: UsersRound },
+  { href: "/app/cfa/attendance", label: "Attendance", icon: CalendarCheck },
   { href: "/app/directory", label: "Company directory", icon: Globe },
   { href: "/app/recommendations", label: "Recommendations", icon: Lightbulb }
 ];

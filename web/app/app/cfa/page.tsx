@@ -81,6 +81,18 @@ const MODULES = [
     href: "/app/cfa/compliance",
     description: "Client blacklist screening, plus a licence tracker for TRA, BRELA and bond permits with renewal alerts.",
     plan: "Enterprise"
+  },
+  {
+    name: "Staff Register",
+    href: "/app/cfa/staff",
+    description: "The clearing house's own people on the same staff book: roster with profile pictures, the jobs each clerk runs — each one able to name the cargo file it serves — and contracts with their renewal countdowns.",
+    plan: "Business"
+  },
+  {
+    name: "Attendance & Leave",
+    href: "/app/cfa/attendance",
+    description: "Clock in and out on the company's own working day, confirm a finished day with a photo or the device location, and ask for leave that only the approver named against that person — or the director above them — can decide.",
+    plan: "Business"
   }
 ];
 

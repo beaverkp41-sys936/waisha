@@ -173,6 +173,9 @@ async function main() {
   await staff("boss", "Baraka Boss", "General manager");
   await staff("other", "Daudi Dispatcher", "Dispatcher");
   const E_PLAIN = await staff(null, "Mteja Sahih", "Fresher");
+  // Kept apart from E_PLAIN on purpose: the register checks below still read E_PLAIN as the staff
+  // record with nothing in the book, and this one is the ask an office seat raises on somebody's behalf.
+  const E_BEHALF = await staff(null, "Nassir Bench", "Bench hand");
 
   const roster = () => call("/employees", tk.hr);
   const empRow = async (id: string) => (await roster()).json?.find((e: any) => e.id === id);
@@ -378,7 +381,7 @@ async function main() {
       method: "POST", body: JSON.stringify({ decision: "approve" })
     });
     check("…and the person who asked cannot grant their own leave",
-      self.status === 403 && /came from you/.test(msg(self.json)), self.text);
+      self.status === 403 && /your own leave/.test(msg(self.json)), self.text);
     const untouched = await db(A1);
     check("…and not one of those refusals moved the row",
       untouched?.status === "pending" && untouched?.decided_by === null
@@ -420,6 +423,34 @@ async function main() {
     check("…while the office answers it", officeDecide.status === 200
       && (await db(OFFICE1))?.status === "approved", officeDecide.text);
 
+    // The desk that raises an ask *for* staff is barred from answering it, and it holds the
+    // deciding key by definition — recording somebody else's leave requires leave.decide. So the
+    // register has to say which of the four reasons took the Grant button away; "this seat has no
+    // deciding key" told an office director that they were not the office.
+    const AUTH1 = await raise("an office seat books a fresher's week off", "dir",
+      { employeeId: E_BEHALF, ...SPAN(20), leaveKind: "annual" });
+    const authTry = await call(`/leave/${AUTH1}/decision`, tk.dir, {
+      method: "POST", body: JSON.stringify({ decision: "approve" })
+    });
+    check("the seat that typed the ask is refused by name, not by a missing key",
+      authTry.status === 403 && /another seat/.test(msg(authTry.json)), authTry.text);
+    const asAuthor = await call("/leave?status=pending", tk.dir);
+    const authorRow = (asAuthor.json ?? []).find((r: any) => r.id === AUTH1);
+    check("…and the register says the refusal is authorship, not a key the seat lacks",
+      authorRow?.decide_block === "author" && authorRow?.can_decide === false,
+      authorRow && { block: authorRow.decide_block, can: authorRow.can_decide });
+    const asColleague = await call("/leave?status=pending", tk.hr);
+    const hrRow = (asColleague.json ?? []).find((r: any) => r.id === AUTH1);
+    check("…while a second office seat is offered the button on the same row",
+      hrRow?.decide_block === null && hrRow?.can_decide === true,
+      hrRow && { block: hrRow.decide_block, can: hrRow.can_decide });
+    const fourEyes = await call(`/leave/${AUTH1}/decision`, tk.hr, {
+      method: "POST", body: JSON.stringify({ decision: "approve", note: "Second seat, same office." })
+    });
+    check("…and that second seat can carry the office's half of the four eyes",
+      fourEyes.status === 200 && (await db(AUTH1))?.status === "approved"
+      && String((await db(AUTH1))?.decided_by) === uid.hr, fourEyes.text);
+
     // Back to a named approver, so the next ask is a person's rather than the office's.
     await call(`/employees/${emp.clerk}`, tk.hr, {
       method: "PUT", body: JSON.stringify({ leaveApproverUserId: uid.appr })
@@ -441,7 +472,7 @@ async function main() {
       method: "POST", body: JSON.stringify({ decision: "approve" })
     });
     check("the person an ask was raised for cannot answer it, even with the office as the author",
-      bossOwn.status === 403 && /came from you/.test(msg(bossOwn.json)), bossOwn.text);
+      bossOwn.status === 403 && /your own leave/.test(msg(bossOwn.json)), bossOwn.text);
 
     const noRoute = await call(`/leave/${randomUUID()}/decision`, tk.hr, {
       method: "POST", body: JSON.stringify({ decision: "approve" })

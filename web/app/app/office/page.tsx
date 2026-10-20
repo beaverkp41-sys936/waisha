@@ -55,7 +55,10 @@ export default function OfficeAreaPage() {
       {!unlocked && (
         <div role="status" className="pane-note mt-16 px-16 py-8 text-sm"
           style={{ background: "color-mix(in srgb, var(--gold) 14%, transparent)", borderLeft: "4px solid var(--gold)" }}>
-          This workspace arrives with the Enterprise plan and is in build.
+          This workspace arrives with the Enterprise plan and is in build. Payroll, costs, procedural
+          flows and the trainee registers stay here; the staff book and the attendance desk are the
+          same pages under <Link href="/app/cfa/staff" className="underline">CFA</Link>, so a
+          clearing house can run its own people on the Business plan.
         </div>
       )}
       {unlocked && (

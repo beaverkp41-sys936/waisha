@@ -1035,10 +1035,28 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
           const mine = r.employee_user_id === req.user.sub || r.created_by === req.user.sub;
           const held = r.routed_to_user_id === req.user.sub;
           const withAPerson = r.routed_reason === "assigned" || r.routed_reason === "supervisor";
+          const withTheOffice = r.routed_reason === "office" || r.routed_reason === "escalated";
+          const ownLeave = r.employee_user_id === req.user.sub;
+          const authored = r.created_by === req.user.sub;
+          const canDecide = r.status === "pending" && !mine
+            && (held || (mayOffice && withTheOffice));
+          // A seat that is refused a Grant button has one of four reasons behind it, and a
+          // register that says "the office holds this" to the office itself is a dead end
+          // nobody can explain to the clerk waiting on the answer. Recording a colleague's
+          // ask needs leave.decide, so an office seat that raises one is always barred by the
+          // author rule as well — "no deciding key" would be a lie.
+          const decideBlock = r.status !== "pending" || canDecide ? null
+            : ownLeave ? "own"
+            : authored ? "author"
+            : withTheOffice && !mayOffice ? "no_key"
+            : "holder";
           return {
             ...r,
-            can_decide: r.status === "pending" && !mine
-              && (held || (mayOffice && (r.routed_reason === "office" || r.routed_reason === "escalated"))),
+            // "yours" on a register row means the leave is this person's, not that this person
+            // typed the form. The office types it for staff all day, so the two cannot share one flag.
+            own_leave: ownLeave,
+            can_decide: canDecide,
+            decide_block: decideBlock,
             can_escalate: r.status === "pending" && !r.escalated_at && withAPerson
               && (mine || held || mayOffice),
             can_cancel: r.status === "pending" ? (mine || mayOffice)
@@ -1289,9 +1307,13 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
           throw new ApiError("CONFLICT", "That request has already been decided.", 409);
         }
         // 108 refuses this on the row as well; said here it is a sentence rather than a 500.
-        if (row.employee_user_id === req.user.sub || row.created_by === req.user.sub) {
+        if (row.employee_user_id === req.user.sub) {
           throw new ApiError("FORBIDDEN",
-            "This request came from you. It is decided by the person above you, not by you.", 403);
+            "This is your own leave. It is decided by the person above you, not by you.", 403);
+        }
+        if (row.created_by === req.user.sub) {
+          throw new ApiError("FORBIDDEN",
+            "You raised this request. The answer has to come from another seat that holds the deciding key.", 403);
         }
         const mine = row.routed_to_user_id === req.user.sub;
         const withTheOffice = row.routed_reason === "office" || row.routed_reason === "escalated";
