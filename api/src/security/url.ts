@@ -27,3 +27,20 @@ export const httpUrl = (max = 200) =>
 export const webAddress = (max = 300) =>
   z.string().trim().min(1).max(max).refine(
     (v) => !ANY_SCHEME.test(v.trim()) || HTTP_SCHEME.test(v.trim()), { message: MESSAGE });
+
+/**
+ * An address that is going to be put into an `href` by the platform itself.
+ *
+ * `webAddress` above tolerates a bare host because a listing's website column is printed as
+ * text. A footer link is clicked, so a relative value would resolve against whatever page
+ * the reader is on — and the reason this is an allowlist rather than a blocklist is that a
+ * blocklist has to be right forever while an allowlist only has to be right once: React
+ * escapes the string it puts in `href` but does not stop `javascript:` executing from one.
+ */
+const LINK_SCHEME = /^(https?|mailto|tel):/i;
+const LINK_MESSAGE =
+  "Give a full address the reader can click — https://…, mailto:… or tel:…";
+
+export const linkAddress = (max = 300) =>
+  z.string().trim().min(1).max(max).refine((v) => LINK_SCHEME.test(v.trim()),
+    { message: LINK_MESSAGE });

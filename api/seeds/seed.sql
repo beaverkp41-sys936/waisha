@@ -51,9 +51,10 @@ insert into feature_flags (key, enabled, description) values
  ('totp_transporter', false, 'Optional TOTP for transporters (spec 4.4)')
 on conflict do nothing;
 
--- Editable content: footer (spec 2) and login microcopy, EN + SW
+-- Editable content: footer (spec 2) and login microcopy, EN + SW. The brand line belongs to
+-- the sign-in card (105) — the bar is the part a caller reads out loud.
 insert into content_blocks (key, locale, value) values
- ('footer.brand','en','T ENGO AEGIS'), ('footer.brand','sw','T ENGO AEGIS'),
+ ('login.brand','en','powered by T ENGO AEGIS'), ('login.brand','sw','ilikowezeshwa na T ENGO AEGIS'),
  ('footer.support_email','en','support@tengoaegis.com'), ('footer.support_email','sw','support@tengoaegis.com'),
  ('footer.phone','en',''), ('footer.phone','sw',''),
  ('login.subtitle','en','Sign in to WAISHA'), ('login.subtitle','sw','Ingia kwenye WAISHA'),
