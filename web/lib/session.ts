@@ -40,14 +40,38 @@ export function refreshAccessToken(): Promise<string | null> {
 
 /** Seconds before the token stops verifying. Unreadable tokens are left alone — the 401
  *  path is the one that decides what to do about them. */
-function secondsLeft(jwt: string): number {
+function payloadOf(jwt: string): any | null {
   try {
     const body = jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-    const payload = JSON.parse(atob(body + "=".repeat((4 - (body.length % 4)) % 4)));
-    return typeof payload.exp === "number" ? payload.exp - Math.floor(Date.now() / 1000) : Infinity;
+    return JSON.parse(atob(body + "=".repeat((4 - (body.length % 4)) % 4)));
   } catch {
-    return Infinity;
+    return null;
   }
+}
+
+function secondsLeft(jwt: string): number {
+  const payload = payloadOf(jwt);
+  return payload && typeof payload.exp === "number" ? payload.exp - Math.floor(Date.now() / 1000) : Infinity;
+}
+
+/**
+ * Is this token somebody's borrowed seat (task #177)? The `act` claim says so, and it is
+ * the only signal that survives a page reload — a support view is a normal `/app` tab, so
+ * nothing else on the client knows it is not one.
+ *
+ * A borrowed seat must never touch `/auth/refresh`. It has no refresh token (the session it
+ * belongs to cannot rotate — migrations/106), and `waisha_refresh` is an origin-wide cookie:
+ * presenting it would renew whoever else's portal session the browser happens to hold, and
+ * the tab would come back as that seat with the read-only guard and the banner behind it.
+ */
+export function tokenIsBorrowed(jwt: string | null): boolean {
+  if (!jwt) return false;
+  const payload = payloadOf(jwt);
+  return typeof payload?.act === "string" && payload.act.length > 0;
+}
+
+export function sessionIsBorrowed(): boolean {
+  return tokenIsBorrowed(sessionStorage.getItem(ACCESS));
 }
 
 /**
@@ -70,6 +94,16 @@ export async function authFetch(
   });
 
   let token = sessionStorage.getItem(ACCESS);
+  if (tokenIsBorrowed(token)) {
+    const res = await run(token);
+    // The token is left where it is: the shells ask `sessionIsBorrowed()` to decide where
+    // to go, and clearing it first would answer "not borrowed" and drop an admin onto a
+    // company's sign-in page. A dead support token authorises nothing, so it is safe to
+    // leave, and the next deliberate visit overwrites it.
+    if (res.status === 401) whenSessionEnds();
+    if (res.status >= 500) void reportFetchError(path, res);
+    return res;
+  }
   if (token && secondsLeft(token) <= REFRESH_AHEAD_SECONDS) {
     token = await refreshAccessToken() ?? token;
   }

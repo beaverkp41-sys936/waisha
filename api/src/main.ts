@@ -7,12 +7,14 @@ import { env } from "./env.js";
 import { enforceRateLimit } from "./security/ratelimit.js";
 import { isHealthPath, requireStaffAudience } from "./security/audience.js";
 import { requireOperationalTenant } from "./security/tenant-state.js";
+import { requireSupportReadonly } from "./security/support.js";
 import { registerErrorHandling } from "./plugins/errors.js";
 import { registerReliability, startReliabilityLoops } from "./security/reliability.js";
 import { authRoutes } from "./routes/auth.routes.js";
 import { contentRoutes } from "./routes/content.routes.js";
 import { controlRoutes } from "./routes/control.routes.js";
 import { controlTenantsRoutes } from "./routes/control-tenants.routes.js";
+import { controlSupportRoutes } from "./routes/control-support.routes.js";
 import { controlAnalyticsRoutes } from "./routes/control-analytics.routes.js";
 import { controlRevenueRoutes } from "./routes/control-revenue.routes.js";
 import { controlStaffRoutes } from "./routes/control-staff.routes.js";
@@ -114,6 +116,11 @@ async function main() {
   // issue and nothing else consults the database about it — this closes that window.
   app.addHook("preHandler", requireOperationalTenant);
 
+  // A borrowed seat (task #177) may look at a company but must not change it. The mark is
+  // the `act` claim, so this is the one place it can be enforced: the route files all carry
+  // their own requireAuth and none of them has ever heard of support.
+  app.addHook("preHandler", requireSupportReadonly);
+
   // Registered without the prefix: the deploy platform probes the root of the service, and
   // this module also answers /api/v1/health for the clients that learned that path first.
   await app.register(healthRoutes);
@@ -121,6 +128,7 @@ async function main() {
   await app.register(contentRoutes, { prefix: "/api/v1" });
   await app.register(controlRoutes, { prefix: "/api/v1" });
   await app.register(controlTenantsRoutes, { prefix: "/api/v1" });
+  await app.register(controlSupportRoutes, { prefix: "/api/v1" });
   await app.register(controlAnalyticsRoutes, { prefix: "/api/v1" });
   await app.register(controlRevenueRoutes, { prefix: "/api/v1" });
   await app.register(controlStaffRoutes, { prefix: "/api/v1" });

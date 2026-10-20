@@ -1315,6 +1315,18 @@ select.auth-field option { color: var(--ink); }
      a complete short label. Wrapping costs the card height it is not otherwise using; the
      caption size is a print size, not a handset one. */
   .cal-chip { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; font-size: 10px; line-height: 1.25; }
+  /* The admin desks hold registers as wide as the portal's — the tenants table alone carries
+     seven columns plus the row's actions — and the mobile sweep above reached only `.app-main`,
+     so here the card's own `overflow: hidden` cut the action column off at 390px. Nothing on
+     the right of a row could be reached, including the support view's "View as". Same
+     treatment the portal tables get: the table scrolls, the page does not. */
+  .control-shell table {
+    display: block;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 /* Phone width. The 860 block re-architects the shell; this one buys back the

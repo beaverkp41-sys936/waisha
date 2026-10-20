@@ -11,11 +11,15 @@ process.env.WEB_ORIGIN ??= "http://localhost:3000";
 const { issueAccessToken, verifyAccessToken, readAccessClaims } = await import("../src/security/jwt.js");
 const { identityBucket } = await import("../src/security/ratelimit.js");
 const { httpUrl, webAddress } = await import("../src/security/url.js");
+const { requireSupportReadonly, claimsAreBorrowed } = await import("../src/security/support.js");
 
 const UID = "1f0a2b3c-4d5e-4a1b-9c8d-1e2f3a4b5c6d";
 const TID = "2f0a2b3c-4d5e-4a1b-9c8d-1e2f3a4b5c6d";
 const SID = "3f0a2b3c-4d5e-4a1b-9c8d-1e2f3a4b5c6d";
 const GOOD = { sub: UID, tid: TID, sid: SID, typ: "transporter_director", roles: ["transporter_director"] };
+const ACTOR = "4f0a2b3c-4d5e-4a1b-9c8d-1e2f3a4b5c6d";
+const BORROWED = await issueAccessToken({ ...GOOD, act: ACTOR });
+const OWN = await issueAccessToken(GOOD);
 
 // Every one of the forty-one duplicated requireAuth copies reads req.user.tid as the RLS
 // tenant and req.user.sub as the actor. A signature proves who minted the token; only this
@@ -146,5 +150,68 @@ describe("webAddress — the same rule, tolerant of the bare domain an office ty
     no("");
     no("   ");
     no("x".repeat(301));
+  });
+});
+
+// A borrowed seat carries the worn person's roles, so every requirePermission in the API
+// answers as it would for them — the wall that keeps the promise "it saves nothing" cannot
+// live in a route, because forty-one route files repeat their own requireAuth and one of them
+// forgetting is the bug. This is the second global preHandler, so these are its own rules.
+describe("requireSupportReadonly — the write wall of a borrowed seat", () => {
+  const req = (method: string, url: string, token: string, stash?: any) =>
+    ({
+      method, url,
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      ...(stash ? { authClaims: stash } : {})
+    }) as any;
+
+  /** Whatever the guard throws, or null when it let the request through. */
+  const wall = async (r: any) => {
+    try { await requireSupportReadonly(r); return null; }
+    catch (e: any) { return e; }
+  };
+
+  it("mints a token that says somebody else is driving", async () => {
+    expect(await verifyAccessToken(BORROWED)).toEqual({ ...GOOD, act: ACTOR });
+    expect(claimsAreBorrowed(await verifyAccessToken(OWN))).toBe(false);
+    expect(claimsAreBorrowed(await verifyAccessToken(BORROWED))).toBe(true);
+  });
+
+  for (const m of ["GET", "HEAD", "OPTIONS"])
+    it(`lets ${m} through: the whole point of the view is to read`, async () => {
+      expect(await wall(req(m, "/api/v1/clients", BORROWED))).toBeNull();
+    });
+
+  for (const m of ["POST", "PUT", "PATCH", "DELETE"])
+    it(`refuses ${m} on a company table by name, with a 403 and a sentence`, async () => {
+      const e = await wall(req(m, "/api/v1/clients/1f0a2b3c-4d5e-4a1b-9c8d-1e2f3a4b5c6d", BORROWED));
+      expect(e?.code).toBe("SUPPORT_READONLY");
+      expect(e?.statusCode).toBe(403);
+      expect(String(e?.message)).toMatch(/saves nothing/);
+    });
+
+  it("leaves an ordinary seat's write alone — the wall is the mark, not the method", async () => {
+    expect(await wall(req("POST", "/api/v1/clients", OWN))).toBeNull();
+  });
+
+  // The banner's "switch back" is a POST, and it runs on the desk's own cookie. A guard that
+  // refused /control would trap the admin inside the view they came to leave.
+  it("exempts the control surface, query string and all", async () => {
+    expect(await wall(req("POST", "/api/v1/control/support/sessions/x/close", BORROWED))).toBeNull();
+    expect(await wall(req("POST", "/api/v1/control/tenants/block?x=1", BORROWED))).toBeNull();
+  });
+
+  it("exempts the crash intake, because the crash worth collecting is the one on the call", async () => {
+    expect(await wall(req("POST", "/api/v1/client-errors", BORROWED))).toBeNull();
+  });
+
+  it("reads the claims the audience hook already stashed rather than asking again", async () => {
+    const e = await wall(req("POST", "/api/v1/clients", "", { ...GOOD, act: ACTOR }));
+    expect(e?.code).toBe("SUPPORT_READONLY");
+  });
+
+  it("does not invent a support session out of a token it cannot verify", async () => {
+    expect(await wall(req("POST", "/api/v1/clients", "not.a.jwt"))).toBeNull();
+    expect(await wall(req("POST", "/api/v1/clients", ""))).toBeNull();
   });
 });

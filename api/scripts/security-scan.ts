@@ -1,5 +1,5 @@
 /**
- * Security scanner (CI gate). Four provable invariants, all of them born from a bug that
+ * Security scanner (CI gate). Provable invariants, every one of them born from a bug that
  * was already shipped:
  *
  * 1. **No interpolated SQL, no dynamic execution, and the tenant bind is the tenant's.**
@@ -18,6 +18,11 @@
  * 4. **The navigation and the permissions probe agree.** The control bar only offers a
  *    desk whose duty the probe actually lists; twice now a duty shipped, the seat held
  *    it, the route enforced it — and the link never appeared.
+ * 5. **A hijacked reply still sets its own headers.** `reply.hijack()` throws away the
+ *    pipeline that would have added them.
+ * 6. **Only the support desk mints a borrowed seat.** `sessions.actor_user_id` is the mark
+ *    the read-only wall, the banner and the audit row all hang on, so a second writer would
+ *    be a second crossing of the tenant wall.
  *
  * `security-scan.ts [src-dir]` — the default is the package's own source, and a path may
  * be passed to prove the rules against a different tree. The client-side and navigation
@@ -281,6 +286,30 @@ function checkHijackHeaders(rel: string, src: string) {
 }
 
 // ---------------------------------------------------------------------------
+// 6. the borrowed mark
+// ---------------------------------------------------------------------------
+
+/**
+ * `sessions.actor_user_id` (106) is the only fact the read-only support wall, the banner and
+ * the audit line all hang on: it says a platform seat is driving somebody else's login. A
+ * second writer is a second way to cross the tenant wall without a record, so the mark is
+ * minted in exactly one file — the control desk the duty key opens. Statement-scoped, because
+ * `audit_logs.actor_user_id` is a different, older column with a different meaning and half
+ * the API legitimately reads it.
+ */
+function checkBorrowedMark(rel: string, src: string) {
+  if (/[/\\]control-support\.routes\.ts$/.test(rel)) return;
+  for (const literal of src.matchAll(/`([^`]*)`|'([^']*)'/g)) {
+    const sql = literal[1] ?? literal[2] ?? "";
+    if (!/actor_user_id/i.test(sql)) continue;
+    if (!/(insert\s+into|update)\s+sessions/i.test(sql)) continue;
+    failures.push(`${rel}  writes sessions.actor_user_id from outside the control support ` +
+      `desk: the borrowed mark is minted in one place, and every other place is a way across ` +
+      `the tenant wall that nobody audits`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 const REPO = repoRoot();
 const allHandlers: ReturnType<typeof postHandlers> = [];
@@ -290,6 +319,7 @@ for (const file of walk(ROOT)) {
   const rel = relTo(file, ROOT, "src");
   checkTenantBinds(rel, src);
   checkHijackHeaders(rel, src);
+  checkBorrowedMark(rel, src);
   if (/src[\\/]routes[\\/]/.test(rel)) allHandlers.push(...postHandlers(rel, src));
   src.split("\n").forEach((line, i) => {
     // A template literal passed to .query( with ${ } inside -> injection risk
@@ -321,5 +351,5 @@ if (failures.length) {
   process.exit(1);
 }
 console.log("Security scan passed: no interpolated SQL, no eval, no child_process, every " +
-  "tenant bind proven, every credential route throttled, no markup sinks, and the " +
-  "navigation matches the permissions probe.");
+  "tenant bind proven, every credential route throttled, no markup sinks, the navigation " +
+  "matches the permissions probe, and the borrowed mark has one author.");

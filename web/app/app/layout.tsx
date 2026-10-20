@@ -8,6 +8,7 @@ import { CFA_NAV, OFFICE_NAV, TRANSPORTER_NAV } from "./nav";
 import type { NavItem } from "./nav";
 import { ShellFooter } from "@/components/ShellFooter";
 import { AnnouncementTicker } from "@/components/AnnouncementTicker";
+import { SupportBanner } from "@/components/SupportBanner";
 
 const WORKSPACES = [
   { key: "transporter", label: "Transporter", home: "/app/dashboard" },
@@ -113,6 +114,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="app-main">
+        <SupportBanner />
         <header className="topbar">
           <p className="crumb">
             <span className="crumb-area">{workspace.label} / </span>

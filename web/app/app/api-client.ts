@@ -1,6 +1,6 @@
 "use client";
 
-import { authFetch } from "@/lib/session";
+import { authFetch, sessionIsBorrowed } from "@/lib/session";
 
 /**
  * Shared auth-aware fetch for all transporter-portal pages.
@@ -11,9 +11,14 @@ import { authFetch } from "@/lib/session";
  * The refresh itself is single-flight and shared with the shipper and seeker shells
  * (see lib/session.ts): the cookie rotates on every call, so two portal pages
  * refreshing at the same used to look like token theft and revoke the whole family.
+ *
+ * A borrowed support seat (task #177) is the exception the whole file is built around: it
+ * ends by going back to the desk it came from, not to a company's sign-in page.
  */
 export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  return authFetch(path, init, () => { window.location.href = "/login"; });
+  return authFetch(path, init, () => {
+    window.location.href = sessionIsBorrowed() ? "/control/tenants" : "/login";
+  });
 }
 
 /**

@@ -2,6 +2,7 @@ import type { FastifyRequest } from "fastify";
 import { withTenant } from "../db/pool.js";
 import { ApiError } from "../util/errors.js";
 import { verifyAccessToken } from "./jwt.js";
+import type { AccessClaims } from "./jwt.js";
 
 /**
  * Audience boundary. A shipper portal account lives inside the transporter's
@@ -73,7 +74,9 @@ export function isOpenSurface(url: string): boolean {
   return isHealthPath(url) || OPEN_PREFIXES.some((p) => url.split("?")[0].startsWith(p));
 }
 
-export async function requireStaffAudience(req: FastifyRequest & { user?: any }) {
+export async function requireStaffAudience(
+  req: FastifyRequest & { user?: any; authClaims?: AccessClaims }
+) {
   if (isOpenSurface(req.url)) return;
   const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, "");
   // No/invalid token: leave it to the route's own requireAuth so the response
@@ -81,6 +84,10 @@ export async function requireStaffAudience(req: FastifyRequest & { user?: any })
   if (!bearer) return;
   const claims = await verifyAccessToken(bearer);
   if (!claims) return;
+  // Hand the verified claims to the next global hook rather than making it pay for a second
+  // jose verify of the same bytes. Surfaces this function returns on before reaching here
+  // (the open prefixes) leave it unset, and the reader falls back to verifying.
+  req.authClaims = claims;
   if (!rolesArePortalOnly(claims.roles)) return; // staff fast path, no extra query
 
   // The claim set looks portal-only. Confirm against the database before

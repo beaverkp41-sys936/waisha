@@ -42,6 +42,9 @@ const CHANNELS: [string, string][] = [
   ["airtel", "Airtel Money"], ["halopesa", "Halopesa"], ["bank", "Bank / Lipa Namba (direct)"]
 ];
 const CYCLES: Cycle[] = ["monthly", "quarterly", "annual"];
+/** Mirrors BORROWABLE in api/src/routes/control-support.routes.ts: a platform tenant or a
+ *  seeker book is not a company desk, and the button would only fail after a round trip. */
+const BORROWABLE_TYPES = new Set(["transporter", "shipper"]);
 
 /** The same seven keys the definer accepts, in the words the office uses. */
 const REASONS: [string, string][] = [
@@ -93,6 +96,9 @@ export default function TenantsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [canManage, setCanManage] = useState(false);
   const [canSell, setCanSell] = useState(false);
+  // The borrowed view (task #177): who may wear a company's seat, and which row is mid-call.
+  const [canBorrow, setCanBorrow] = useState(false);
+  const [borrowBusy, setBorrowBusy] = useState<string | null>(null);
 
   const [target, setTarget] = useState<TenantRow | null>(null);
   const [planKey, setPlanKey] = useState("starter");
@@ -146,6 +152,7 @@ export default function TenantsPage() {
         const roles: string[] = j.roles ?? [];
         setCanManage((j.permissions ?? []).includes("control.tenants.manage"));
         setCanSell(roles.includes("super_admin") || roles.includes("billing_admin"));
+        setCanBorrow((j.permissions ?? []).includes("control.impersonate"));
       }
     })();
     load("");
@@ -244,6 +251,33 @@ export default function TenantsPage() {
     } finally { setBusy(false); }
   }
 
+  /**
+   * Look at the platform through one of this company's seats (task #177).
+   *
+   * The desk answers on its own cookie and hands back a token for a real seat inside the
+   * company, marked as borrowed. Writing it into this tab's portal slot and navigating is
+   * the whole of the switch: the company's own shell then paints the banner that names the
+   * view, and the banner holds the button that gives it back. Nothing here is quiet — the
+   * API logs the visit in the company's book and in ours before it replies.
+   */
+  async function borrow(t: TenantRow) {
+    setBorrowBusy(t.tenant_id); setError(null);
+    try {
+      const res = await fetch(`${API}/api/v1/control/support/sessions`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({ tenantId: t.tenant_id })
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j?.accessToken) {
+        // Page-level, not the dialog's mError: this button sits in the table.
+        setError(j?.error?.message ?? `${t.name} could not be opened for viewing.`);
+        return;
+      }
+      sessionStorage.setItem("waisha_access", j.accessToken);
+      window.location.href = "/app/dashboard";
+    } finally { setBorrowBusy(null); }
+  }
+
   // Armed on the first tap, run on the second. These write to another company's access
   // and its directors' phones, so a stray click must cost nothing.
   const twoTap = (key: string, run: () => void) => () => {
@@ -287,6 +321,15 @@ export default function TenantsPage() {
           and block, notify or close a company that has broken the terms. Every act is recorded on the company&apos;s
           register and told to its directors by SMS and email before it leaves this screen.
         </p>
+
+        {canBorrow && (
+          <p className="mb-16 text-xs" style={{ color: "var(--ink-soft)" }}>
+            <span className="font-semibold" style={{ color: "var(--adm-accent)" }}>View as</span> opens a company&apos;s own
+            portal as one of its staff seats for a short window that ends on its own clock. It reads and never writes, and
+            a banner on every page it touches names the company, the seat, who holds the view and how long is left. That
+            banner is also the way back to this desk.
+          </p>
+        )}
 
         <input value={q} onChange={e => { setQ(e.target.value); load(e.target.value); }}
           placeholder="Search by company name"
@@ -407,6 +450,15 @@ export default function TenantsPage() {
                             className="rounded-input border px-12 py-8 text-xs font-semibold"
                             style={{ borderColor: "var(--line)", color: "var(--ink)" }}>
                             Manage
+                          </button>
+                        )}
+                        {canBorrow && BORROWABLE_TYPES.has(t.tenant_type) && t.status !== "suspended" && (
+                          <button type="button" disabled={borrowBusy === t.tenant_id}
+                            onClick={() => borrow(t)}
+                            title="Open this company's own portal as one of its staff seats — read-only, and it signs this tab out of your own portal seat while it runs"
+                            className="rounded-input border px-12 py-8 text-xs font-semibold disabled:opacity-50"
+                            style={{ borderColor: "var(--adm-accent)", color: "var(--adm-accent)" }}>
+                            {borrowBusy === t.tenant_id ? "Opening…" : "View as"}
                           </button>
                         )}
                       </div>
