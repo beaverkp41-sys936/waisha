@@ -19,6 +19,8 @@ interface Shipment {
   consignee_name: string; consignor_name: string; eta: string | null;
   payment_status: string; stage: string; status: string;
   weight_tonnes: string | null; open_tasks: number; created_at: string;
+  /** 'signed' | 'draft' | null — whether this file has 111's master sheet, and whether it is declared. */
+  master_state: string | null;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -668,6 +670,13 @@ function CargoContent() {
                   {s.open_tasks > 0 && (
                     <span className="ml-8 text-[10px] font-bold" style={{ color: "var(--warning)" }}>
                       {s.open_tasks} task{s.open_tasks === 1 ? "" : "s"}
+                    </span>
+                  )}
+                  {s.master_state && (
+                    <span className="ml-8 inline-block px-6 py-2 text-[10px] font-bold uppercase"
+                      style={{ borderLeft: `3px solid ${s.master_state === "signed" ? "var(--success)" : "var(--gold)"}`,
+                        color: "var(--ink)" }}>
+                      {s.master_state === "signed" ? "master signed" : "master draft"}
                     </span>
                   )}
                 </td>

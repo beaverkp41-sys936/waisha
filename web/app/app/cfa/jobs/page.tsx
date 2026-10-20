@@ -261,7 +261,7 @@ function Dashboard({ dash }: { dash: any }) {
           {dash.deadlines.map((d: any, n: number) => (
             <div key={n} className="flex items-center justify-between gap-12 rounded-input border px-16 py-12" style={cardStyle}>
               <div className="min-w-0 text-sm">
-                <Link href={`/app/cfa/jobs/${d.job_id}`} className="font-semibold underline" style={{ color: "var(--brand)" }}>
+                <Link href={`/app/cfa/jobs/${d.job_id}`} className="rec-link font-semibold underline" style={{ color: "var(--brand)" }}>
                   {d.file_number}
                 </Link>
                 <span className="ml-8" style={{ color: "var(--ink)" }}>{d.label}</span>
@@ -286,7 +286,7 @@ function Dashboard({ dash }: { dash: any }) {
           <div className="mt-16 space-y-8">
             {dash.blocked.map((b: any) => (
               <div key={b.job_id + b.stage} className="rounded-input border px-16 py-12" style={cardStyle}>
-                <Link href={`/app/cfa/jobs/${b.job_id}`} className="text-sm font-semibold underline" style={{ color: "var(--brand)" }}>
+                <Link href={`/app/cfa/jobs/${b.job_id}`} className="rec-link text-sm font-semibold underline" style={{ color: "var(--brand)" }}>
                   {b.file_number}
                 </Link>
                 <span className="ml-8 text-sm" style={{ color: "var(--ink)" }}>{b.stage}</span>

@@ -212,7 +212,13 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
                 s.payment_status, s.payment_amount, s.processing_cost, s.stage, s.status,
                 s.weight_tonnes, s.created_at,
                 (select count(*) filter (where k.status = 'pending')::int from cargo_tasks k
-                  where k.shipment_id = s.id) as open_tasks
+                  where k.shipment_id = s.id) as open_tasks,
+                -- The 111 sheet in one word, so a desk can see which files have a declaration and
+                -- which only have papers loose in the vault. The live unique index keeps this a
+                -- scalar: one master per file, never a subquery that returns two rows mid-list.
+                (select case when m.declared_at is null then 'draft' else 'signed' end
+                   from cargo_import_masters m
+                  where m.shipment_id = s.id and m.tenant_id = $1 and m.deleted_at is null) as master_state
          from cargo_shipments s
          where s.tenant_id = $1 and s.deleted_at is null
            and ($2::text is null or s.stage = $2)

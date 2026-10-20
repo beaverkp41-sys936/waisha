@@ -1465,6 +1465,13 @@ select.auth-field option { color: var(--ink); }
      `truncate` the chip also carries, because ellipsis does not apply to an anonymous
      flex item. */
   .cal-chip { min-height: 38px; padding-top: 8px; padding-bottom: 8px; }
+  /* "View" beside a filed paper is that paper's only route out of the register, and at 390px
+     it measured 28x16 — three of them per cargo file. These links sit in a flex row, so
+     padding would grow the row rather than the hit box; `min-height` needs a block-level box,
+     which is why this one uses inline-flex. The label is a single short word, so it cannot
+     truncate and lose the `text-xs` density the register was signed off at. */
+  .app-main :is(.doc-view, .rec-link) { display: inline-flex; align-items: center; min-height: 38px; }
+  .app-main a.doc-view { min-width: 34px; justify-content: center; }
   /* A pane-note that carries a link is a page's way back — "← All cargo files", "Office
      desk", "← Office area" — and it stands alone on its own line, so it is a control rather
      than sentence text, and it measured 16px tall. Vertical padding is what grows it, for the

@@ -66,6 +66,18 @@ function stem(title: string): string {
 }
 
 /**
+ * A file named on this side of the wire is named for the clerk's day. UTC is four hours
+ * behind Dar es Salaam, so a sheet worked on late in an afternoon would otherwise download
+ * stamped with yesterday — and a folder of dated exports is only useful if the dates mean
+ * the day somebody filed them.
+ */
+function officeDay(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Dar_es_Salaam", year: "numeric", month: "2-digit", day: "2-digit"
+  }).format(new Date());
+}
+
+/**
  * Build a file on the server and hand it to the browser's downloader.
  *
  * Resolves with the name it saved under, so the caller can put that name in its own
@@ -82,7 +94,7 @@ export async function downloadExport(table: ExportTable, format: ExportFormat): 
 
   const disposition = res.headers.get("Content-Disposition") ?? "";
   const named = /filename="?([^";]+)"?/i.exec(disposition);
-  const name = named?.[1] ?? `${stem(table.title)}-${new Date().toISOString().slice(0, 10)}.${format}`;
+  const name = named?.[1] ?? `${stem(table.title)}-${officeDay()}.${format}`;
 
   const blob = await res.blob();
   if (!blob.size) throw new Error("The export came back empty.");
@@ -109,7 +121,33 @@ export async function downloadCargoBatch(ids: string[]): Promise<string> {
 
   const disposition = res.headers.get("Content-Disposition") ?? "";
   const named = /filename="?([^";]+)"?/i.exec(disposition);
-  const name = named?.[1] ?? `cargo-files-${new Date().toISOString().slice(0, 10)}.zip`;
+  const name = named?.[1] ?? `cargo-files-${officeDay()}.zip`;
+
+  const blob = await res.blob();
+  if (!blob.size) throw new Error("The archive came back empty.");
+  saveBlob(blob, name);
+  return name;
+}
+
+/**
+ * The master document bundle for one cargo file: the signed cover sheet as a printed
+ * page, the three papers it names as they are stored, and a README that says which
+ * of them were found.
+ *
+ * The server reads the pointers from the master register rather than receiving them,
+ * so a sheet whose invoice was deleted after signing says so in the archive instead
+ * of quietly shipping a folder with a gap in it.
+ */
+export async function downloadMasterBundle(shipmentId: string): Promise<string> {
+  const res = await authFetch(`/cargo/${shipmentId}/master/bundle`, {
+    method: "POST"
+  }, () => { window.location.href = "/login"; });
+
+  if (!res.ok) throw new Error(await failure(res));
+
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const named = /filename="?([^";]+)"?/i.exec(disposition);
+  const name = named?.[1] ?? `master-${shipmentId.slice(0, 8)}-${officeDay()}.zip`;
 
   const blob = await res.blob();
   if (!blob.size) throw new Error("The archive came back empty.");

@@ -50,6 +50,7 @@ import { notificationsRoutes } from "./routes/notifications.routes.js";
 import { reportsRoutes } from "./routes/reports.routes.js";
 import { exportRoutes } from "./routes/export.routes.js";
 import { cargoRoutes } from "./routes/cargo.routes.js";
+import { cargoMasterRoutes } from "./routes/cargo-master.routes.js";
 import { cargoIntakeRoutes } from "./routes/cargo-intake.routes.js";
 import { consolidationRoutes } from "./routes/consolidation.routes.js";
 import { jobsRoutes } from "./routes/jobs.routes.js";
@@ -85,7 +86,14 @@ async function main() {
   });
 
   await app.register(helmet);
-  await app.register(cors, { origin: [env.WEB_ORIGIN], credentials: true });
+  // Content-Disposition has to survive the cross-origin read, or the web desk never sees
+  // the name the server chose for a file and falls back to one built from the download
+  // instant — an archive of a sheet signed last Tuesday named for today.
+  await app.register(cors, {
+    origin: [env.WEB_ORIGIN],
+    credentials: true,
+    exposedHeaders: ["Content-Disposition"]
+  });
   await app.register(cookie);
   await app.register(multipart, {
     limits: { fileSize: 8 * 1024 * 1024, files: 1 }
@@ -165,6 +173,7 @@ async function main() {
   await app.register(reportsRoutes, { prefix: "/api/v1" });
   await app.register(exportRoutes, { prefix: "/api/v1" });
   await app.register(cargoRoutes, { prefix: "/api/v1" });
+  await app.register(cargoMasterRoutes, { prefix: "/api/v1" });
   await app.register(cargoIntakeRoutes, { prefix: "/api/v1" });
   await app.register(consolidationRoutes, { prefix: "/api/v1" });
   await app.register(jobsRoutes, { prefix: "/api/v1" });

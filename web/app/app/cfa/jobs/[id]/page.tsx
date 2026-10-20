@@ -1071,6 +1071,6 @@ function DocLink({ docId }: { docId: string }) {
     return () => { cancelled = true; };
   }, [docId]);
   return url
-    ? <a href={url} target="_blank" rel="noreferrer" className="text-xs underline" style={{ color: "var(--brand)" }}>View</a>
+    ? <a href={url} target="_blank" rel="noreferrer" className="doc-view text-xs underline" style={{ color: "var(--brand)" }}>View</a>
     : <span className="text-xs" style={{ color: "var(--ink-soft)" }}>—</span>;
 }

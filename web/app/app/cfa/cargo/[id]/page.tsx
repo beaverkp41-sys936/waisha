@@ -4,6 +4,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { apiFetch, seatPermissions } from "../../../api-client";
+import { ImportMaster } from "@/components/ImportMaster";
 
 function errorText(json: any, fallback: string): string {
   const d = json?.error?.details;
@@ -405,6 +406,10 @@ export default function CargoDetailPage() {
         )}
       </section>
 
+      {/* Master document — the signed cover sheet over this file's three papers */}
+      <ImportMaster shipmentId={id}
+        onNotice={(m) => { setError(null); setNotice(m); }} />
+
       {/* Tasks */}
       <section className="no-print mt-24">
         <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">
@@ -584,7 +589,7 @@ export default function CargoDetailPage() {
       )}
 
       {/* Documents */}
-      <section className="no-print mt-24">
+      <section id="documents" className="no-print mt-24">
         <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">
           Documents ({file.documents.length})
         </h2>
@@ -634,6 +639,6 @@ function DocLink({ docId }: { docId: string }) {
     return () => { cancelled = true; };
   }, [docId]);
   return url
-    ? <a href={url} target="_blank" rel="noreferrer" className="shrink-0 text-xs underline" style={{ color: "var(--brand)" }}>View</a>
+    ? <a href={url} target="_blank" rel="noreferrer" className="doc-view shrink-0 text-xs underline" style={{ color: "var(--brand)" }}>View</a>
     : <span className="shrink-0 text-xs" style={{ color: "var(--ink-soft)" }}>—</span>;
 }

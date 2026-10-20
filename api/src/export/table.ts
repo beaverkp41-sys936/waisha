@@ -138,9 +138,20 @@ export function asText(cell: Cell, type: ExportColumn["type"]): string {
   return cell;
 }
 
+/**
+ * The day an export belongs to, in the calendar of the office that asked for it. The server
+ * keeps UTC, four hours behind Dar es Salaam, so a register filed after nine in the evening
+ * would otherwise carry yesterday in the very name the clerk files it by.
+ */
+export function officeDay(at: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Dar_es_Salaam", year: "numeric", month: "2-digit", day: "2-digit"
+  }).format(at);
+}
+
 /** A download name a browser will accept and a human will still recognise. */
 export function fileName(table: PreparedTable, ext: string): string {
   const stem = table.title.toLowerCase()
     .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "report";
-  return `${stem}-${table.generatedAt.toISOString().slice(0, 10)}.${ext}`;
+  return `${stem}-${officeDay(table.generatedAt)}.${ext}`;
 }

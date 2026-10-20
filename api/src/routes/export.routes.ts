@@ -8,7 +8,7 @@ import { verifyAccessToken } from "../security/jwt.js";
 import { ApiError } from "../util/errors.js";
 import { checkPermission, checkPermissions } from "../security/permissions.js";
 import { writeAudit } from "../audit/audit.js";
-import { exportTableSchema, fileName, prepareTable, type PreparedTable } from "../export/table.js";
+import { exportTableSchema, fileName, officeDay, prepareTable, type PreparedTable } from "../export/table.js";
 import { buildPdf } from "../export/pdf.js";
 import { buildWorkbook, buildXlsx } from "../export/xlsx.js";
 import { bundleDocumentSizes, bundleReadme, bundleRecord, bundleTables,
@@ -225,8 +225,7 @@ export async function exportRoutes(app: FastifyInstance, _opts: unknown) {
     // already decided have to be written onto the socket by hand.
     const headers: Record<string, string> = {
       "Content-Type": "application/zip",
-      "Content-Disposition": `attachment; filename="cargo-files-${generatedAt
-        .toISOString().slice(0, 10)}.zip"`,
+      "Content-Disposition": `attachment; filename="cargo-files-${officeDay(generatedAt)}.zip"`,
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff"
     };
