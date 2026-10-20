@@ -17,6 +17,7 @@ interface Employee {
   hired_date: string | null; contract_start: string | null; contract_end: string | null;
   contract_days: number | null; monthly_salary: number | null;
   supervisor_id: string | null; supervisor_name: string | null;
+  leave_approver_user_id: string | null; leave_approver_name: string | null;
   user_id: string | null; notes: string | null; has_phone: boolean;
   open_tasks: number; overdue_tasks: number; done_tasks: number; late_tasks: number;
   flowed_tasks: number;
@@ -139,7 +140,7 @@ function gradeOf(e: Employee): string {
 interface EmpForm {
   fullName: string; phone: string; jobTitle: string; department: string; skills: string;
   employmentType: string; status: string; hiredDate: string; contractStart: string;
-  contractEnd: string; supervisorId: string; monthlySalary: string; notes: string;
+  contractEnd: string; supervisorId: string; leaveApproverUserId: string; monthlySalary: string; notes: string;
   dateOfBirth: string; gender: string; academicStatus: string; college: string;
   qualifications: string; emergencyContactName: string; emergencyRelationship: string;
   emergencyPhone: string;
@@ -147,7 +148,7 @@ interface EmpForm {
 const EMPTY_EMP: EmpForm = {
   fullName: "", phone: "", jobTitle: "", department: "", skills: "",
   employmentType: "permanent", status: "active", hiredDate: "", contractStart: "",
-  contractEnd: "", supervisorId: "", monthlySalary: "", notes: "",
+  contractEnd: "", supervisorId: "", leaveApproverUserId: "", monthlySalary: "", notes: "",
   dateOfBirth: "", gender: "", academicStatus: "", college: "", qualifications: "",
   emergencyContactName: "", emergencyRelationship: "", emergencyPhone: ""
 };
@@ -257,6 +258,7 @@ export default function OfficeEmployeesPage() {
       employmentType: e.employment_type, status: e.status,
       hiredDate: e.hired_date ?? "", contractStart: e.contract_start ?? "",
       contractEnd: e.contract_end ?? "", supervisorId: e.supervisor_id ?? "",
+      leaveApproverUserId: e.leave_approver_user_id ?? "",
       monthlySalary: e.monthly_salary != null ? String(e.monthly_salary) : "",
       notes: e.notes ?? "",
       dateOfBirth: e.date_of_birth ?? "", gender: e.gender ?? "",
@@ -298,6 +300,9 @@ export default function OfficeEmployeesPage() {
       if (editingEmp) {
         if (empForm.phone) payload.phone = empForm.phone;
         if (empForm.emergencyPhone) payload.emergencyPhone = empForm.emergencyPhone;
+        // Only an edit carries this: a person is hired into a job first, and the office says
+        // who decides their leave once they are on the roster with a seat of their own.
+        payload.leaveApproverUserId = empForm.leaveApproverUserId || null;
       } else {
         payload.phone = empForm.phone || null;
         payload.emergencyPhone = empForm.emergencyPhone || null;
@@ -854,6 +859,23 @@ export default function OfficeEmployeesPage() {
                   <option key={x.id} value={x.id}>{x.full_name}</option>)}
               </select>
             </label>
+            {editingEmp && (
+              <label className="block">
+                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Leave approver</span>
+                <select value={empForm.leaveApproverUserId}
+                  onChange={e => setEmpForm(f => ({ ...f, leaveApproverUserId: e.target.value }))}
+                  className={inputCls} style={inputStyle}>
+                  <option value="">— the office decides</option>
+                  {employees.filter(x => x.user_id && x.id !== editingEmp && x.status !== "left").map(x =>
+                    <option key={x.user_id!} value={x.user_id!}>{x.full_name}</option>)}
+                </select>
+                <span className="mt-4 block text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                  Their leave requests go to this person, and only this person can answer them. Nobody
+                  named here is sent a request they asked for themselves, and a request with no approver
+                  — or an approver who is away for those days — is decided by the office.
+                </span>
+              </label>
+            )}
             <label className="block md:col-span-4">
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Notes</span>
               <input value={empForm.notes}
@@ -914,6 +936,11 @@ export default function OfficeEmployeesPage() {
                           <span className="font-semibold">{e.full_name}</span>
                           <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>
                             {[e.job_title, e.department].filter(Boolean).join(" · ")}
+                          </span>
+                          <span className="block text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                            {e.leave_approver_name
+                              ? `Leave decided by ${e.leave_approver_name}`
+                              : "Leave decided by the office"}
                           </span>
                           <span className="block text-[11px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
                             {[

@@ -44,12 +44,32 @@ interface PersonTotal {
   half_days: number; absent_days: number; leave_days: number; holiday_days: number;
   clocked_days: number; minutes_late: number; hours_worked: number; punctuality: number | null;
 }
-interface LeaveRow {
+/** The chain a request travelled, read on every leave surface so the desk can say who holds it. */
+interface LeaveRoute {
+  routed_reason: string;
+  // The two queue reads carry only part of the chain: a row that was sent to me names no
+  // holder (I am it), and my own card says an request went upstairs without naming the seat
+  // that pushed it. Optional, so neither surface pretends to have read a column it never did.
+  routed_note?: string | null; routed_to_name?: string | null;
+  escalated_at?: string | null;
+  escalated_by_name?: string | null; escalated_from_name?: string | null;
+}
+interface LeaveRow extends LeaveRoute {
   id: string; employee_id: string; full_name: string; job_title: string | null;
   department: string | null; leave_kind: string; starts_on: string; ends_on: string;
   working_days: number; reason: string | null; status: string; decision_note: string | null;
   created_at: string; decided_by_name: string | null; decided_at: string | null; mine: boolean;
+  can_decide: boolean; can_escalate: boolean; can_cancel?: boolean;
 }
+/** What the person a request was sent to sees: their own queue and nothing else. */
+interface ForMeRow extends LeaveRoute {
+  id: string; employee_id: string; full_name: string; job_title: string | null;
+  department: string | null; leave_kind: string; starts_on: string; ends_on: string;
+  working_days: number; reason: string | null; created_at: string; raised_by_me: boolean;
+  annual_taken: number; annual_also_waiting: number;
+}
+/** The half of a row the grant/refuse panel and the withdrawal actually read. */
+type Decidable = Pick<LeaveRow, "id" | "full_name" | "leave_kind" | "working_days" | "starts_on"> & LeaveRoute;
 interface BalanceRow {
   employee_id: string; full_name: string; job_title: string | null; department: string | null;
   entitlement: number; annualUsed: number; annualPending: number; annualRemaining: number;
@@ -60,11 +80,15 @@ interface Balances {
   totals: { entitlement: number; used: number; pending: number; overdrawn: number };
   rows: BalanceRow[];
 }
+interface MineLeave extends LeaveRoute {
+  id: string; leave_kind: string; starts_on: string; ends_on: string;
+  working_days: number; status: string; reason: string | null; decision_note: string | null;
+}
 interface MineResp {
   linked: boolean; day: CompanyDay;
   employee?: { id: string; full_name: string; job_title?: string | null };
   attendance?: Line[];
-  leave?: { id: string; leave_kind: string; starts_on: string; ends_on: string; working_days: number; status: string; reason: string | null; decision_note: string | null }[];
+  leave?: MineLeave[];
   annual?: { year: number; entitlement: number; used: number; remaining: number };
 }
 interface RegisterResp {
@@ -105,6 +129,15 @@ const LEAVE_STATUS_COLORS: Record<string, string> = {
   pending: "var(--warning)", approved: "var(--success)", rejected: "var(--danger)",
   cancelled: "var(--ink-soft)"
 };
+/** The words for the reason a request went where it went. */
+const ROUTE_WHERE: Record<string, string> = {
+  assigned: "the approver assigned to them", supervisor: "their supervisor",
+  office: "the office", escalated: "the office, after an escalation"
+};
+/** Who holds the request now — a person's name when the read carries one, a kind of desk when not. */
+function holderOf(r: LeaveRoute): string {
+  return r.routed_to_name ?? ROUTE_WHERE[r.routed_reason] ?? "the office";
+}
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"];
@@ -113,6 +146,7 @@ const TABS = [
   { key: "today", label: "Today" },
   { key: "mine", label: "My time" },
   { key: "register", label: "Register" },
+  { key: "queue", label: "Waiting on you" },
   { key: "leave", label: "Leave" },
   { key: "balances", label: "Balances" },
   { key: "settings", label: "Working day" }
@@ -175,7 +209,13 @@ export default function OfficeAttendancePage() {
   const [board, setBoard] = useState<Board | null>(null);
   const [mine, setMine] = useState<MineResp | null>(null);
   const [leave, setLeave] = useState<LeaveRow[]>([]);
-  const [pending, setPending] = useState<LeaveRow[]>([]);
+  // The pending read uses the same route as the browsed one, so it carries the same answers
+  // about what this seat may do to each row.
+  const [pending, setPending] = useState<(LeaveRow & Partial<Pick<LeaveRow, "can_decide" | "can_escalate">>)[]>([]);
+  const [forMe, setForMe] = useState<ForMeRow[]>([]);
+  // A seat with no leave.request duty is refused the queue read; the tab is then not shown
+  // rather than shown and answered with an error nobody can act on.
+  const [queueOpen, setQueueOpen] = useState(false);
   const [leaveStatus, setLeaveStatus] = useState("pending");
   const [balances, setBalances] = useState<Balances | null>(null);
   const [employees, setEmployees] = useState<EmpOption[]>([]);
@@ -193,8 +233,10 @@ export default function OfficeAttendancePage() {
   const [draft, setDraft] = useState<LineDraft | null>(null);
   const [stated, setStated] = useState<StateDraft | null>(null);
   const [leaveForm, setLeaveForm] = useState<LeaveDraft | null>(null);
-  const [deciding, setDeciding] = useState<{ row: LeaveRow; decision: "approve" | "reject" } | null>(null);
+  const [deciding, setDeciding] = useState<{ row: Decidable; decision: "approve" | "reject" } | null>(null);
   const [decisionNote, setDecisionNote] = useState("");
+  const [escalating, setEscalating] = useState<Decidable | null>(null);
+  const [escalateNote, setEscalateNote] = useState("");
   const [settings, setSettings] = useState({ workStart: "", workEnd: "", grace: "", annualDays: "", timezone: "" });
   const [proof, setProof] = useState<ProofView | null>(null);
   const [askingProof, setAskingProof] = useState(false);
@@ -218,10 +260,13 @@ export default function OfficeAttendancePage() {
   const load = useCallback(async () => {
     const q = boardDate ? `?day=${boardDate}` : "";
     const needPending = leaveStatus !== "pending";
-    const [b, m, l, ba, s, e, p] = await Promise.all([
+    const [b, m, l, fm, ba, s, e, p] = await Promise.all([
       apiFetch(`/attendance/today${q}`),
       apiFetch("/attendance/me"),
       apiFetch(`/leave${leaveStatus ? `?status=${leaveStatus}` : ""}`),
+      // The approver's own queue. It is read on every load, not only on the tab, because the
+      // tab's badge is the only thing that tells a colleague their request is not forgotten.
+      apiFetch("/leave/for-me"),
       apiFetch("/leave/balances"),
       apiFetch("/office-settings"),
       apiFetch("/employees"),
@@ -239,6 +284,14 @@ export default function OfficeAttendancePage() {
       setError(errorText(bj, "Could not read today's register."));
     }
     const mj = await readJson(m); if (m.ok) setMine(mj);
+    const fmj = await readJson(fm);
+    if (fm.ok) {
+      setForMe(Array.isArray(fmj) ? fmj : []);
+      setQueueOpen(true);
+    } else {
+      setForMe([]);
+      setQueueOpen(false);
+    }
     const lj = await readJson(l);
     if (l.ok) {
       const rows: LeaveRow[] = Array.isArray(lj) ? lj : [];
@@ -429,7 +482,7 @@ export default function OfficeAttendancePage() {
     });
   }, () => `${nameOf(stated!.employeeId)}: ${DAY_STATUS_LABELS[stated!.dayStatus] ?? stated!.dayStatus} for ${stated!.workDate}.`);
 
-  const askLeave = () => run("Request sent to the office", () => {
+  const askLeave = () => run("The request is filed", () => {
     if (!leaveForm) return Promise.resolve({ status: 0, json: null });
     const body = {
       ...(leaveForm.employeeId ? { employeeId: leaveForm.employeeId } : {}),
@@ -437,15 +490,20 @@ export default function OfficeAttendancePage() {
       endsOn: leaveForm.endsOn, reason: leaveForm.reason || null
     };
     return leaveForm.id ? put(`/leave/${leaveForm.id}`, body) : post("/leave", body);
-  }, (j) => `${LEAVE_KIND_LABELS[leaveForm!.leaveKind] ?? leaveForm!.leaveKind}: ${j?.working_days ?? 0} working day(s) counted, waiting to be decided.`);
+  }, (j) => `${LEAVE_KIND_LABELS[leaveForm!.leaveKind] ?? leaveForm!.leaveKind}: ${j?.working_days ?? 0} working day(s) counted, sent to ${j?.routed_reason ? holderOf(j) : "the office"}.`);
 
-  const decide = (row: LeaveRow, decision: "approve" | "reject") => run(
+  const decide = (row: Decidable, decision: "approve" | "reject") => run(
     decision === "approve" ? "Leave granted" : "Leave refused",
     () => post(`/leave/${row.id}/decision`, { decision, note: decisionNote || null }),
     () => `${row.full_name}'s ${LEAVE_KIND_LABELS[row.leave_kind] ?? row.leave_kind.toLowerCase()} leave ${decision === "approve" ? "granted" : "refused"}.`
   ).then(ok => { if (ok) { setDeciding(null); setDecisionNote(""); } });
 
-  const cancelLeave = (row: LeaveRow) => run("Request withdrawn",
+  const sendUp = (row: Decidable) => run("Sent up to the office",
+    () => post(`/leave/${row.id}/escalate`, { note: escalateNote || null }),
+    () => `${row.full_name}'s ${LEAVE_KIND_LABELS[row.leave_kind] ?? row.leave_kind.toLowerCase()} leave is now the office's to answer.`
+  ).then(ok => { if (ok) { setEscalating(null); setEscalateNote(""); } });
+
+  const cancelLeave = (row: Pick<LeaveRow, "id" | "full_name">) => run("Request withdrawn",
     () => post(`/leave/${row.id}/cancel`, { note: "Withdrawn from the office screen" }),
     () => `${row.full_name}'s request is closed and costs nobody any days.`);
 
@@ -475,6 +533,74 @@ export default function OfficeAttendancePage() {
   const bar = (pct: number, color: string, height = 6) => (
     <div className="w-full overflow-hidden rounded" style={{ background: "color-mix(in srgb, var(--ink) 8%, transparent)", height }}>
       <div className="h-full rounded" style={{ width: `${Math.max(0, Math.min(100, pct))}%`, background: color }} />
+    </div>
+  );
+
+  /**
+   * The answer box and the send-up box are written once and read by both the office register
+   * and the approver's own queue, because the same route accepts a decision from either desk
+   * and one note field cannot live in two places.
+   */
+  const decisionPanel = deciding && (
+    <div className="mt-16 flex flex-wrap items-end gap-12 px-16 py-12"
+      style={{
+        background: `color-mix(in srgb, ${deciding.decision === "approve" ? "var(--success)" : "var(--danger)"} 7%, transparent)`,
+        borderLeft: `4px solid ${deciding.decision === "approve" ? "var(--success)" : "var(--danger)"}`
+      }}>
+      <div className="min-w-[240px] flex-1">
+        <p className="text-sm" style={{ color: "var(--ink)" }}>
+          {deciding.decision === "approve" ? "Granting" : "Refusing"}{" "}
+          <span className="font-semibold">{deciding.row.full_name}</span>&apos;s{" "}
+          {LEAVE_KIND_LABELS[deciding.row.leave_kind] ?? deciding.row.leave_kind.toLowerCase()} leave,{" "}
+          {deciding.row.working_days} working day(s) from {shortDate(deciding.row.starts_on)}.
+        </p>
+        <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+          Held by {holderOf(deciding.row)}.{deciding.row.routed_note ? ` ${deciding.row.routed_note}` : ""}
+        </p>
+      </div>
+      <label className="block">
+        <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Note for the file</span>
+        <input value={decisionNote} onChange={e => setDecisionNote(e.target.value)}
+          className={inputCls} style={{ ...inputStyle, minWidth: 260 }}
+          placeholder={deciding.decision === "approve" ? "Cover arranged with…" : "Why it cannot be granted"} />
+      </label>
+      <button type="button" disabled={busy}
+        onClick={() => decide(deciding.row, deciding.decision)}
+        className="rounded-input px-16 py-8 text-xs font-semibold text-white"
+        style={{ background: deciding.decision === "approve" ? "var(--success)" : "var(--danger)" }}>
+        Confirm {deciding.decision === "approve" ? "grant" : "refusal"}
+      </button>
+      <button type="button" className="text-xs underline" style={{ color: "var(--ink-soft)" }}
+        onClick={() => { setDeciding(null); setDecisionNote(""); }}>Cancel</button>
+    </div>
+  );
+
+  const escalatePanel = escalating && (
+    <div className="mt-16 flex flex-wrap items-end gap-12 px-16 py-12"
+      style={{
+        background: "color-mix(in srgb, var(--warning) 8%, transparent)",
+        borderLeft: "4px solid var(--warning)"
+      }}>
+      <div className="min-w-[240px] flex-1">
+        <p className="text-sm" style={{ color: "var(--ink)" }}>
+          Sending <span className="font-semibold">{escalating.full_name}</span>&apos;s{" "}
+          {LEAVE_KIND_LABELS[escalating.leave_kind] ?? escalating.leave_kind.toLowerCase()} leave up to the office, away from {holderOf(escalating)}.
+        </p>
+        <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+          It stays a waiting request until the office answers, and only the office can answer it then.
+        </p>
+      </div>
+      <label className="block">
+        <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Why it is coming up</span>
+        <input value={escalateNote} onChange={e => setEscalateNote(e.target.value)}
+          className={inputCls} style={{ ...inputStyle, minWidth: 260 }}
+          placeholder="No answer from the approver by…" />
+      </label>
+      <button type="button" disabled={busy} onClick={() => sendUp(escalating)}
+        className="rounded-input px-16 py-8 text-xs font-semibold text-white"
+        style={{ background: "var(--warning)" }}>Send it up</button>
+      <button type="button" className="text-xs underline" style={{ color: "var(--ink-soft)" }}
+        onClick={() => { setEscalating(null); setEscalateNote(""); }}>Cancel</button>
     </div>
   );
 
@@ -528,11 +654,11 @@ export default function OfficeAttendancePage() {
         style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>{notice}</div>}
 
       <div className="mt-24 flex flex-wrap gap-8">
-        {TABS.map(t => (
+        {TABS.filter(t => t.key !== "queue" || queueOpen).map(t => (
           <button key={t.key} type="button"
-            onClick={() => { setView(t.key); reset(); setDraft(null); setStated(null); setLeaveForm(null); setDeciding(null); setProof(null); }}
+            onClick={() => { setView(t.key); reset(); setDraft(null); setStated(null); setLeaveForm(null); setDeciding(null); setEscalating(null); setProof(null); }}
             className={"on-photo-btn rounded-input px-16 py-8 text-xs font-semibold" + (view === t.key ? " is-on" : "")}>
-            {t.label}{t.key === "leave" && pending.length ? ` (${pending.length})` : ""}
+            {t.label}{t.key === "leave" && pending.length ? ` (${pending.length})` : ""}{t.key === "queue" && forMe.length ? ` (${forMe.length})` : ""}
           </button>
         ))}
       </div>
@@ -1059,6 +1185,13 @@ export default function OfficeAttendancePage() {
                           <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
                             {l.working_days} working day(s){l.reason ? ` — ${l.reason}` : ""}
                           </p>
+                          {l.status === "pending" && (
+                            <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                              Waiting with {holderOf(l)}
+                              {l.escalated_at ? ` — sent up on ${shortDate(l.escalated_at.slice(0, 10))}` : " · it is not yours to answer"}
+                              {l.routed_note ? `: ${l.routed_note}` : ""}
+                            </p>
+                          )}
                           {l.decision_note && (
                             <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>Office: {l.decision_note}</p>
                           )}
@@ -1073,14 +1206,19 @@ export default function OfficeAttendancePage() {
                               })}
                               className="text-[11px] underline" style={{ color: "var(--ink-soft)" }}>Amend</button>
                           )}
+                          {l.status === "pending"
+                            && (l.routed_reason === "assigned" || l.routed_reason === "supervisor") && !l.escalated_at && (
+                            <button type="button" disabled={busy}
+                              onClick={() => { reset(); setDeciding(null); setEscalating({
+                                id: l.id, full_name: mine.employee?.full_name ?? "this person",
+                                leave_kind: l.leave_kind, working_days: l.working_days, starts_on: l.starts_on,
+                                routed_reason: l.routed_reason, routed_to_name: l.routed_to_name
+                              }); }}
+                              className="text-[11px] underline" style={{ color: "var(--ink-soft)" }}>Ask the office instead</button>
+                          )}
                           {l.status === "pending" && (
                             <button type="button" disabled={busy}
-                              onClick={() => cancelLeave({
-                                id: l.id, employee_id: "", full_name: "Your", job_title: null, department: null,
-                                leave_kind: l.leave_kind, starts_on: l.starts_on, ends_on: l.ends_on,
-                                working_days: l.working_days, reason: l.reason, status: l.status,
-                                decision_note: null, created_at: "", decided_by_name: null, decided_at: null, mine: true
-                              })}
+                              onClick={() => cancelLeave({ id: l.id, full_name: mine.employee?.full_name ?? "This person" })}
                               className="text-[11px] underline" style={{ color: "var(--ink-soft)" }}>Withdraw</button>
                           )}
                         </div>
@@ -1091,6 +1229,7 @@ export default function OfficeAttendancePage() {
                     )}
                   </ul>
                 </div>
+                {escalatePanel}
               </section>
             </>
           )}
@@ -1141,7 +1280,7 @@ export default function OfficeAttendancePage() {
                 <div className="flex items-end gap-8 md:col-span-4">
                   <button type="button" disabled={busy} onClick={askLeave}
                     className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">
-                    {leaveForm.id ? "Save the change" : "Send to the office"}
+                    {leaveForm.id ? "Save the change" : "Send the request"}
                   </button>
                   <button type="button" className="text-xs underline" style={{ color: "var(--ink-soft)" }}
                     onClick={() => setLeaveForm(null)}>Cancel</button>
@@ -1382,6 +1521,80 @@ export default function OfficeAttendancePage() {
         </>
       )}
 
+      {/* ================= The approver's own queue ================= */}
+      {view === "queue" && (
+        <>
+          <div className="mt-24 rounded-card border bg-surface p-24" style={cardStyle}>
+            <h2 className={h2Cls} style={{ color: "var(--ink)" }}>Waiting on you</h2>
+            <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+              {queueOpen
+                ? "The office sent these here because you are the person named to answer them. Nobody else is expected to, and a colleague cannot take one off your desk from their own screen."
+                : "This seat has no leave duty, so it has no queue of its own. The office register is the place to look."}
+            </p>
+          </div>
+
+          {queueOpen && forMe.length === 0 && ready && (
+            <p className="mt-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+              Nothing is waiting on you. A request arrives here only when the office names you as the one who decides.
+            </p>
+          )}
+
+          <ul className="mt-16 grid grid-cols-1 gap-16 lg:grid-cols-2">
+            {forMe.map(r => (
+              <li key={r.id} className="rounded-card border bg-surface p-24" style={cardStyle}>
+                <div className="flex flex-wrap items-start justify-between gap-12">
+                  <div>
+                    <p className="text-sm font-bold" style={{ color: "var(--ink)" }}>{r.full_name}</p>
+                    <p className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                      {[r.job_title, r.department].filter(Boolean).join(" · ")}
+                    </p>
+                  </div>
+                  {chip(LEAVE_KIND_LABELS[r.leave_kind] ?? r.leave_kind, "var(--brand)")}
+                </div>
+                <p className="mt-12 text-sm tabular-nums" style={{ color: "var(--ink)" }}>
+                  {shortDate(r.starts_on)}–{shortDate(r.ends_on)} · {r.working_days} working day(s)
+                </p>
+                <p className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                  {dayName(r.starts_on)} to {dayName(r.ends_on)}, asked on {shortDate(r.created_at.slice(0, 10))}
+                </p>
+                {r.reason && (
+                  <p className="mt-12 text-sm" style={{ color: "var(--ink)" }}>“{r.reason}”</p>
+                )}
+                {r.leave_kind === "annual" && (
+                  <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                    Annual leave: {r.annual_taken} day(s) taken this year, {r.working_days} asked here,
+                    {" "}{r.annual_also_waiting} more day(s) in other requests still waiting — of{" "}
+                    {day?.annualLeaveDays ?? "—"} a year.
+                  </p>
+                )}
+                {r.raised_by_me ? (
+                  <p className="mt-16 text-[11px]" style={{ color: "var(--warning)" }}>
+                    You asked for this yourself, so it is not yours to answer. Send it up and the office decides.
+                  </p>
+                ) : (
+                  <div className="mt-16 flex flex-wrap items-center gap-8">
+                    <button type="button" disabled={busy}
+                      onClick={() => { reset(); setEscalating(null); setDeciding({ row: r, decision: "approve" }); }}
+                      className="on-photo-btn rounded-input px-12 py-4 text-[11px] font-semibold is-on">Grant</button>
+                    <button type="button" disabled={busy}
+                      onClick={() => { reset(); setEscalating(null); setDeciding({ row: r, decision: "reject" }); }}
+                      className="on-photo-btn rounded-input px-12 py-4 text-[11px] font-semibold">Refuse</button>
+                  </div>
+                )}
+                <button type="button" disabled={busy}
+                  onClick={() => { reset(); setDeciding(null); setEscalating(r); }}
+                  className="mt-12 block text-[11px] underline" style={{ color: "var(--ink-soft)" }}>
+                  Send it up to the office
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          {decisionPanel}
+          {escalatePanel}
+        </>
+      )}
+
       {/* ================= Leave queue ================= */}
       {view === "leave" && (
         <>
@@ -1488,6 +1701,14 @@ export default function OfficeAttendancePage() {
                     </td>
                     <td className={thCls}>
                       {chip(LEAVE_STATUS_LABELS[l.status] ?? l.status, LEAVE_STATUS_COLORS[l.status] ?? "var(--ink-soft)")}
+                      {l.status === "pending" && (
+                        <p className="mt-4 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                          with {holderOf(l)}{l.escalated_at ? ` · up on ${shortDate(l.escalated_at.slice(0, 10))}` : ""}
+                        </p>
+                      )}
+                      {l.status === "pending" && l.routed_note && (
+                        <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>{l.routed_note}</p>
+                      )}
                       {l.decided_by_name && (
                         <p className="mt-4 text-[10px]" style={{ color: "var(--ink-soft)" }}>
                           {l.decided_by_name}{l.decided_at ? ` · ${shortDate(l.decided_at.slice(0, 10))}` : ""}
@@ -1501,12 +1722,27 @@ export default function OfficeAttendancePage() {
                       <div className="flex flex-wrap gap-8">
                         {l.status === "pending" ? (
                           <>
-                            <button type="button" disabled={busy}
-                              onClick={() => { reset(); setDeciding({ row: l, decision: "approve" }); }}
-                              className="on-photo-btn rounded-input px-12 py-4 text-[11px] font-semibold is-on">Grant</button>
-                            <button type="button" disabled={busy}
-                              onClick={() => { reset(); setDeciding({ row: l, decision: "reject" }); }}
-                              className="on-photo-btn rounded-input px-12 py-4 text-[11px] font-semibold">Refuse</button>
+                            {l.can_decide ? (
+                              <>
+                                <button type="button" disabled={busy}
+                                  onClick={() => { reset(); setEscalating(null); setDeciding({ row: l, decision: "approve" }); }}
+                                  className="on-photo-btn rounded-input px-12 py-4 text-[11px] font-semibold is-on">Grant</button>
+                                <button type="button" disabled={busy}
+                                  onClick={() => { reset(); setEscalating(null); setDeciding({ row: l, decision: "reject" }); }}
+                                  className="on-photo-btn rounded-input px-12 py-4 text-[11px] font-semibold">Refuse</button>
+                              </>
+                            ) : (
+                              <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                                {l.routed_reason === "office" || l.routed_reason === "escalated"
+                                  ? "The office holds this one — this seat has no deciding key."
+                                  : `Only ${holderOf(l)} can answer this.`}
+                              </span>
+                            )}
+                            {l.can_escalate && (
+                              <button type="button" disabled={busy}
+                                onClick={() => { reset(); setDeciding(null); setEscalating(l); }}
+                                className="text-[11px] underline" style={{ color: "var(--ink-soft)" }}>Send it up</button>
+                            )}
                             {l.mine && (
                               <button type="button" disabled={busy}
                                 onClick={() => setLeaveForm({
@@ -1517,8 +1753,20 @@ export default function OfficeAttendancePage() {
                             )}
                           </>
                         ) : (
-                          <button type="button" disabled={busy} onClick={() => cancelLeave(l)}
-                            className="text-[11px] underline" style={{ color: "var(--ink-soft)" }}>Withdraw</button>
+                          <>
+                            {l.can_cancel && (
+                              <button type="button" disabled={busy} onClick={() => cancelLeave(l)}
+                                className="text-[11px] underline" style={{ color: "var(--ink-soft)" }}>Withdraw</button>
+                            )}
+                            {!l.can_cancel && l.status === "approved" && (
+                              <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                                Only the office can close a granted day.</span>
+                            )}
+                            {!l.can_cancel && l.status === "rejected" && (
+                              <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                                A refusal stays on record.</span>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -1535,34 +1783,8 @@ export default function OfficeAttendancePage() {
             </table>
           </section>
 
-          {deciding && (
-            <div className="mt-16 flex flex-wrap items-end gap-12 px-16 py-12"
-              style={{
-                background: `color-mix(in srgb, ${deciding.decision === "approve" ? "var(--success)" : "var(--danger)"} 7%, transparent)`,
-                borderLeft: `4px solid ${deciding.decision === "approve" ? "var(--success)" : "var(--danger)"}`
-              }}>
-              <p className="text-sm" style={{ color: "var(--ink)" }}>
-                {deciding.decision === "approve" ? "Granting" : "Refusing"}{" "}
-                <span className="font-semibold">{deciding.row.full_name}</span>&apos;s{" "}
-                {LEAVE_KIND_LABELS[deciding.row.leave_kind] ?? deciding.row.leave_kind.toLowerCase()} leave,{" "}
-                {deciding.row.working_days} working day(s) from {shortDate(deciding.row.starts_on)}.
-              </p>
-              <label className="block">
-                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Note for the file</span>
-                <input value={decisionNote} onChange={e => setDecisionNote(e.target.value)}
-                  className={inputCls} style={{ ...inputStyle, minWidth: 260 }}
-                  placeholder={deciding.decision === "approve" ? "Cover arranged with…" : "Why it cannot be granted"} />
-              </label>
-              <button type="button" disabled={busy}
-                onClick={() => decide(deciding.row, deciding.decision)}
-                className="rounded-input px-16 py-8 text-xs font-semibold text-white"
-                style={{ background: deciding.decision === "approve" ? "var(--success)" : "var(--danger)" }}>
-                Confirm {deciding.decision === "approve" ? "grant" : "refusal"}
-              </button>
-              <button type="button" className="text-xs underline" style={{ color: "var(--ink-soft)" }}
-                onClick={() => { setDeciding(null); setDecisionNote(""); }}>Cancel</button>
-            </div>
-          )}
+          {decisionPanel}
+          {escalatePanel}
         </>
       )}
 

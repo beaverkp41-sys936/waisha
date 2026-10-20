@@ -149,12 +149,93 @@ async function isWorkingDay(c: PoolClient, day: string): Promise<boolean> {
 
 async function findOwnEmployee(c: PoolClient, tenantId: string, userId: string) {
   const { rows } = await c.query(
-    `select id, full_name, status from employees
+    `select id, full_name, status, user_id, supervisor_id, leave_approver_user_id from employees
       where tenant_id = $1 and user_id = $2 and deleted_at is null
       order by created_at limit 1`,
     [tenantId, userId]);
   return rows[0] ?? null;
 }
+
+type LeaveRoute = { to: string | null; reason: string; note: string | null };
+
+/**
+ * Whose desk a leave request lands on.
+ *
+ * 065 answered any request from anybody holding leave.decide, which meant every director and
+ * every HR officer could answer every request and no particular person was expected to. This
+ * picks one: the seat the office assigned, then the seat of the person named above them, then
+ * the office. It is resolved once, at the moment the ask is made, and written onto the row —
+ * re-pointing an approver next month must not quietly move a queue that was raised under the
+ * old assignment.
+ *
+ * The person's own seat is never a candidate even when the office has named it, because 108
+ * refuses that decision outright; letting a request arrive already undecidable would be a bug
+ * dressed as data.
+ */
+async function resolveLeaveRoute(
+  c: PoolClient, tenantId: string,
+  emp: { name: string; user_id: string | null; supervisor_id: string | null; leave_approver_user_id: string | null },
+  startsOn: string, endsOn: string
+): Promise<LeaveRoute> {
+  const chain: { id: string; reason: string }[] = [];
+  if (emp.leave_approver_user_id && emp.leave_approver_user_id !== emp.user_id) {
+    chain.push({ id: emp.leave_approver_user_id, reason: "assigned" });
+  }
+  if (emp.supervisor_id) {
+    const sup = await c.query(
+      `select user_id from employees
+        where id = $1 and tenant_id = $2 and deleted_at is null and status = 'active' and user_id is not null`,
+      [emp.supervisor_id, tenantId]);
+    const above = sup.rows[0]?.user_id as string | undefined;
+    if (above && above !== emp.user_id && !chain.some(x => x.id === above)) {
+      chain.push({ id: above, reason: "supervisor" });
+    }
+  }
+  if (!chain.length) {
+    return { to: null, reason: "office", note: `${emp.name} has no approver assigned, so the office decides.` };
+  }
+  const seats = await c.query(
+    `select id, full_name from users
+      where id = any($1::uuid[]) and tenant_id = $2 and status = 'active' and deleted_at is null`,
+    [chain.map(x => x.id), tenantId]);
+  const live = new Map<string, string>(seats.rows.map((r: any) => [r.id, r.full_name]));
+  const picked = chain.find(x => live.has(x.id));
+  if (!picked) {
+    return { to: null, reason: "office", note: "The seat named as the approver is not answering any more, so the office decides." };
+  }
+  // A request that is sent to somebody who is themselves away for those days does not get
+  // answered twice as fast; it gets answered after they come back.
+  const away = await c.query(
+    `select 1 from leave_requests l
+       join employees e on e.id = l.employee_id and e.tenant_id = l.tenant_id
+      where l.tenant_id = $1 and e.user_id = $2 and e.deleted_at is null
+        and l.status = 'approved' and l.deleted_at is null
+        and l.starts_on <= $4::date and l.ends_on >= $3::date
+      limit 1`,
+    [tenantId, picked.id, startsOn, endsOn]);
+  if (away.rowCount) {
+    return {
+      to: null, reason: "office",
+      note: `${live.get(picked.id)} is on approved leave across those days, so the office decides.`
+    };
+  }
+  return { to: picked.id, reason: picked.reason, note: null };
+}
+
+const LEAVE_ROUTE_LABELS: Record<string, string> = {
+  assigned: "the assigned approver", supervisor: "their supervisor",
+  office: "the office", escalated: "the office, after an escalation"
+};
+
+/** The routing columns every leave read has to carry for the chain to be legible. */
+const LEAVE_ROUTE_SQL = `l.routed_to_user_id, ru.full_name as routed_to_name,
+  l.routed_reason, l.routed_note,
+  l.escalated_at, l.escalated_by, eu.full_name as escalated_by_name,
+  l.escalated_from, fu.full_name as escalated_from_name`;
+
+const LEAVE_ROUTE_JOINS = `left join users ru on ru.id = l.routed_to_user_id and ru.tenant_id = l.tenant_id
+           left join users eu on eu.id = l.escalated_by and eu.tenant_id = l.tenant_id
+           left join users fu on fu.id = l.escalated_from and fu.tenant_id = l.tenant_id`;
 
 /**
  * Whose day or whose request is being written. A sign-in with no staff record
@@ -172,10 +253,15 @@ async function resolveTarget(
         "This sign-in is not linked to a staff record yet. The office has to add the person to the employees register and connect the account.",
         400, [{ field: "employeeId" }]);
     }
-    return { id: own.id as string, name: own.full_name as string, isOwn: true, status: own.status as string };
+    return {
+      id: own.id as string, name: own.full_name as string, isOwn: true, status: own.status as string,
+      user_id: own.user_id ?? null, supervisor_id: own.supervisor_id ?? null,
+      leave_approver_user_id: own.leave_approver_user_id ?? null
+    };
   }
   const { rows } = await c.query(
-    "select id, full_name, status from employees where id = $1 and tenant_id = $2 and deleted_at is null",
+    `select id, full_name, status, user_id, supervisor_id, leave_approver_user_id from employees
+      where id = $1 and tenant_id = $2 and deleted_at is null`,
     [employeeId, tenantId]);
   if (!rows.length) {
     throw new ApiError("VALIDATION_FAILED", "Employee not found.", 400, [{ field: "employeeId" }]);
@@ -184,7 +270,11 @@ async function resolveTarget(
   if (!isOwn && !await checkPermission(c, userId, deskPermission)) {
     throw new ApiError("FORBIDDEN", "Recording another person's time is done by the office.", 403);
   }
-  return { id: employeeId, name: rows[0].full_name as string, isOwn, status: rows[0].status as string };
+  return {
+    id: employeeId, name: rows[0].full_name as string, isOwn, status: rows[0].status as string,
+    user_id: rows[0].user_id ?? null, supervisor_id: rows[0].supervisor_id ?? null,
+    leave_approver_user_id: rows[0].leave_approver_user_id ?? null
+  };
 }
 
 function assertWorking(target: { name: string; status: string }) {
@@ -272,12 +362,14 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
             order by a.work_date desc`,
           [req.user.tid, own.id, from, day.today]);
         const leave = await c.query(
-          `select id, leave_kind, starts_on::text as starts_on, ends_on::text as ends_on,
-                  working_days, status, reason, decision_note
-             from leave_requests
-            where tenant_id = $1 and employee_id = $2 and deleted_at is null
-              and (status = 'pending' or ends_on >= $3::date)
-            order by starts_on desc limit 40`,
+          `select l.id, l.leave_kind, l.starts_on::text as starts_on, l.ends_on::text as ends_on,
+                  l.working_days, l.status, l.reason, l.decision_note,
+                  l.routed_reason, l.routed_note, l.escalated_at, ru.full_name as routed_to_name
+             from leave_requests l
+             ${LEAVE_ROUTE_JOINS}
+            where l.tenant_id = $1 and l.employee_id = $2 and l.deleted_at is null
+              and (l.status = 'pending' or l.ends_on >= $3::date)
+            order by l.starts_on desc limit 40`,
           [req.user.tid, own.id, from]);
         const year = Number(day.today.slice(0, 4));
         const used = await c.query(
@@ -909,24 +1001,84 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
         employeeId: z.string().uuid().optional(),
         from: dateOnly.optional(), to: dateOnly.optional()
       }).parse(req.query);
+      return withTenant(req.user.tid, async (c) => {
+        const { rows } = await c.query(
+          `select l.id, l.employee_id, e.full_name, e.job_title, e.department,
+                  l.leave_kind, l.starts_on::text as starts_on, l.ends_on::text as ends_on,
+                  l.working_days, l.reason, l.status, l.decision_note, l.created_at,
+                  l.decided_by, u.full_name as decided_by_name, l.decided_at,
+                  e.user_id as employee_user_id, l.created_by,
+                  ${LEAVE_ROUTE_SQL},
+                  (l.created_by = $6::uuid or e.user_id = $6::uuid) as mine
+             from leave_requests l
+             join employees e on e.id = l.employee_id and e.tenant_id = l.tenant_id
+             left join users u on u.id = l.decided_by and u.tenant_id = l.tenant_id
+             ${LEAVE_ROUTE_JOINS}
+            where l.tenant_id = $1 and l.deleted_at is null
+              and ($2::text is null or l.status = $2)
+              and ($3::uuid is null or l.employee_id = $3)
+              and ($4::date is null or l.ends_on >= $4)
+              and ($5::date is null or l.starts_on <= $5)
+            order by case when l.status = 'pending' then 0 else 1 end,
+                     l.starts_on desc, l.created_at desc
+            limit 500`,
+          [req.user.tid, q.status ?? null, q.employeeId ?? null, q.from ?? null, q.to ?? null, req.user.sub]);
+        // can_decide is said here rather than left to the register's guess, because the answer
+        // depends on two things the row does not hold: whether this seat carries the deciding
+        // key, and whether the request is still the one it was sent to. can_escalate is the
+        // same style of answer for the other act — the desk that may push a stalled request up
+        // is the requester's own, the holder's, or the office's, and a register cannot tell
+        // those three from a column. can_cancel follows /leave/:id/cancel: closing a granted
+        // day unwinds somebody's decision, and a refused one is a record, not a draft.
+        const mayOffice = await checkPermission(c, req.user.sub, "leave.decide");
+        return rows.map((r: any) => {
+          const mine = r.employee_user_id === req.user.sub || r.created_by === req.user.sub;
+          const held = r.routed_to_user_id === req.user.sub;
+          const withAPerson = r.routed_reason === "assigned" || r.routed_reason === "supervisor";
+          return {
+            ...r,
+            can_decide: r.status === "pending" && !mine
+              && (held || (mayOffice && (r.routed_reason === "office" || r.routed_reason === "escalated"))),
+            can_escalate: r.status === "pending" && !r.escalated_at && withAPerson
+              && (mine || held || mayOffice),
+            can_cancel: r.status === "pending" ? (mine || mayOffice)
+              : r.status === "approved" ? mayOffice : false
+          };
+        });
+      });
+    });
+
+  /**
+   * The queue of the person a request was sent to. It is not the office register: a staff
+   * member the office named as an approver holds no desk permission, and `leave.view` would
+   * hand them every colleague's request instead of the handful that are theirs to answer.
+   * Only rows routed to this seat are ever read.
+   */
+  app.get("/leave/for-me", { preHandler: [requireAuth, requirePermission("leave.request")] },
+    async (req: any) => {
       const { rows } = await withTenant(req.user.tid, (c) => c.query(
         `select l.id, l.employee_id, e.full_name, e.job_title, e.department,
                 l.leave_kind, l.starts_on::text as starts_on, l.ends_on::text as ends_on,
-                l.working_days, l.reason, l.status, l.decision_note, l.created_at,
-                l.decided_by, u.full_name as decided_by_name, l.decided_at,
-                (l.created_by = $6::uuid or e.user_id = $6::uuid) as mine
+                l.working_days, l.reason, l.created_at, l.routed_reason, l.routed_note,
+                (l.created_by = $2::uuid) as raised_by_me,
+                (select coalesce(sum(p.working_days), 0)::int from leave_requests p
+                  where p.tenant_id = l.tenant_id and p.employee_id = l.employee_id
+                    and p.deleted_at is null and p.status = 'approved'
+                    and p.leave_kind = 'annual'
+                    and extract(year from p.starts_on) = extract(year from l.starts_on)) as annual_taken,
+                (select coalesce(sum(p.working_days), 0)::int from leave_requests p
+                  where p.tenant_id = l.tenant_id and p.employee_id = l.employee_id
+                    and p.deleted_at is null and p.status = 'pending'
+                    and p.leave_kind = 'annual'
+                    and extract(year from p.starts_on) = extract(year from l.starts_on)
+                    and p.id <> l.id) as annual_also_waiting
            from leave_requests l
-           join employees e on e.id = l.employee_id
-           left join users u on u.id = l.decided_by
-          where l.tenant_id = $1 and l.deleted_at is null
-            and ($2::text is null or l.status = $2)
-            and ($3::uuid is null or l.employee_id = $3)
-            and ($4::date is null or l.ends_on >= $4)
-            and ($5::date is null or l.starts_on <= $5)
-          order by case when l.status = 'pending' then 0 else 1 end,
-                   l.starts_on desc, l.created_at desc
-          limit 500`,
-        [req.user.tid, q.status ?? null, q.employeeId ?? null, q.from ?? null, q.to ?? null, req.user.sub]));
+           join employees e on e.id = l.employee_id and e.tenant_id = l.tenant_id
+          where l.tenant_id = $1 and l.deleted_at is null and l.status = 'pending'
+            and l.routed_to_user_id = $2
+          order by l.created_at
+          limit 200`,
+        [req.user.tid, req.user.sub]));
       return rows;
     });
 
@@ -992,24 +1144,37 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
         const result = await withTenant(req.user.tid, async (c) => {
           const target = await resolveTarget(c, req.user.tid, req.user.sub, body.employeeId, "leave.decide");
           assertWorking(target);
+          const route = await resolveLeaveRoute(
+            c, req.user.tid,
+            {
+              name: target.name, user_id: (target as any).user_id ?? null,
+              supervisor_id: (target as any).supervisor_id ?? null,
+              leave_approver_user_id: (target as any).leave_approver_user_id ?? null
+            },
+            body.startsOn, body.endsOn);
           const id = uuidv7();
           await c.query(
             `insert into leave_requests
-               (id, tenant_id, employee_id, leave_kind, starts_on, ends_on, reason, created_by, updated_by)
-             values ($1, $2, $3, $4, $5::date, $6::date, $7, $8, $8)`,
+               (id, tenant_id, employee_id, leave_kind, starts_on, ends_on, reason, created_by, updated_by,
+                routed_to_user_id, routed_reason, routed_note)
+             values ($1, $2, $3, $4, $5::date, $6::date, $7, $8, $8, $9, $10, $11)`,
             [id, req.user.tid, target.id, body.leaveKind, body.startsOn, body.endsOn,
-             body.reason ?? null, req.user.sub]);
+             body.reason ?? null, req.user.sub,
+             route.to, route.reason, route.note]);
           const saved = await c.query(
             `select l.id, l.employee_id, e.full_name, l.leave_kind, l.starts_on::text as starts_on,
-                    l.ends_on::text as ends_on, l.working_days, l.status, l.reason
-               from leave_requests l join employees e on e.id = l.employee_id
+                    l.ends_on::text as ends_on, l.working_days, l.status, l.reason,
+                    l.routed_to_user_id, l.routed_reason, l.routed_note, ru.full_name as routed_to_name
+               from leave_requests l
+               join employees e on e.id = l.employee_id and e.tenant_id = l.tenant_id
+               left join users ru on ru.id = l.routed_to_user_id and ru.tenant_id = l.tenant_id
               where l.id = $1 and l.tenant_id = $2`,
             [id, req.user.tid]);
           await writeAudit(c, {
             tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
             requestId: req.requestId, entity: "leave_requests", entityId: id,
             action: target.isOwn ? "leave.requested" : "leave.requested_for_staff",
-            after: { employeeId: target.id, employee: saved.rows[0].full_name, leaveKind: body.leaveKind, startsOn: saved.rows[0].starts_on, endsOn: saved.rows[0].ends_on, workingDays: saved.rows[0].working_days }
+            after: { employeeId: target.id, employee: saved.rows[0].full_name, leaveKind: body.leaveKind, startsOn: saved.rows[0].starts_on, endsOn: saved.rows[0].ends_on, workingDays: saved.rows[0].working_days, routedTo: saved.rows[0].routed_to_name ?? null, routedReason: saved.rows[0].routed_reason }
           });
           return saved.rows[0];
         });
@@ -1030,8 +1195,10 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
       return withTenant(req.user.tid, async (c) => {
         const prev = await c.query(
           `select l.employee_id, l.status, l.starts_on::text as starts_on, l.ends_on::text as ends_on,
-                  l.leave_kind, l.reason, e.user_id
-             from leave_requests l join employees e on e.id = l.employee_id
+                  l.leave_kind, l.reason, l.escalated_at, e.user_id, e.full_name,
+                  e.supervisor_id, e.leave_approver_user_id
+             from leave_requests l
+             join employees e on e.id = l.employee_id and e.tenant_id = l.tenant_id
             where l.id = $1 and l.tenant_id = $2 and l.deleted_at is null`,
           [id, req.user.tid]);
         if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Leave request not found", 404);
@@ -1057,10 +1224,31 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
             where id = $1 and tenant_id = $3`,
           [id, req.user.sub, req.user.tid, startsOn, endsOn, leaveKind, reason]);
 
+        if (row.status === "pending" && !row.escalated_at) {
+          // Moving the dates can move the answer: a request now sent to a person who is away
+          // for the new days goes to the office, and one the office was holding goes back to
+          // the approver named since. A request already escalated keeps the route it was
+          // escalated onto — pushing it upstairs was somebody's decision, not a side effect.
+          const route = await resolveLeaveRoute(c, req.user.tid, {
+            name: row.full_name, user_id: row.user_id ?? null,
+            supervisor_id: row.supervisor_id ?? null,
+            leave_approver_user_id: row.leave_approver_user_id ?? null
+          }, startsOn, endsOn);
+          await c.query(
+            `update leave_requests
+                set routed_to_user_id = $4, routed_reason = $5, routed_note = $6,
+                    updated_by = $2, updated_at = now()
+              where id = $1 and tenant_id = $3`,
+            [id, req.user.sub, req.user.tid, route.to, route.reason, route.note]);
+        }
+
         const saved = await c.query(
-          `select id, employee_id, leave_kind, starts_on::text as starts_on, ends_on::text as ends_on,
-                  working_days, reason, status
-             from leave_requests where id = $1 and tenant_id = $2`,
+          `select l.id, l.employee_id, l.leave_kind, l.starts_on::text as starts_on,
+                  l.ends_on::text as ends_on, l.working_days, l.reason, l.status,
+                  ${LEAVE_ROUTE_SQL}
+             from leave_requests l
+             ${LEAVE_ROUTE_JOINS}
+            where l.id = $1 and l.tenant_id = $2`,
           [id, req.user.tid]);
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
@@ -1073,34 +1261,119 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
       });
     });
 
-  app.post("/leave/:id/decision", { preHandler: [requireAuth, requirePermission("leave.decide")] },
+  /**
+   * The answer. It is not gated on leave.decide any more, because the person the request was
+   * sent to is usually a colleague with no desk permission at all — and gating on the key was
+   * the whole of #183's complaint. What is left: this seat holds the request, or the request
+   * is with the office and this seat holds the deciding key. Nobody else, including a director
+   * who simply got there first.
+   */
+  app.post("/leave/:id/decision", { preHandler: [requireAuth] },
     async (req: any) => {
       const { id } = req.params as { id: string };
       const body = decisionSchema.parse(req.body);
       const status = body.decision === "approve" ? "approved" : "rejected";
       return withTenant(req.user.tid, async (c) => {
         const prev = await c.query(
-          `select l.status, l.employee_id, l.working_days, e.full_name
-             from leave_requests l join employees e on e.id = l.employee_id
+          `select l.status, l.employee_id, l.working_days, l.created_by,
+                  l.routed_to_user_id, l.routed_reason, l.routed_note,
+                  e.full_name, e.user_id as employee_user_id, ru.full_name as routed_to_name
+             from leave_requests l
+             join employees e on e.id = l.employee_id and e.tenant_id = l.tenant_id
+             left join users ru on ru.id = l.routed_to_user_id and ru.tenant_id = l.tenant_id
             where l.id = $1 and l.tenant_id = $2 and l.deleted_at is null`,
           [id, req.user.tid]);
         if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Leave request not found", 404);
-        if (prev.rows[0].status !== "pending") {
+        const row = prev.rows[0];
+        if (row.status !== "pending") {
           throw new ApiError("CONFLICT", "That request has already been decided.", 409);
+        }
+        // 108 refuses this on the row as well; said here it is a sentence rather than a 500.
+        if (row.employee_user_id === req.user.sub || row.created_by === req.user.sub) {
+          throw new ApiError("FORBIDDEN",
+            "This request came from you. It is decided by the person above you, not by you.", 403);
+        }
+        const mine = row.routed_to_user_id === req.user.sub;
+        const withTheOffice = row.routed_reason === "office" || row.routed_reason === "escalated";
+        const mayOffice = withTheOffice && await checkPermission(c, req.user.sub, "leave.decide");
+        if (!mine && !mayOffice) {
+          throw new ApiError("FORBIDDEN", withTheOffice
+            ? "This one is the office's to decide."
+            : `This request is ${row.routed_to_name ?? "somebody else"}'s to decide. It is not taken off their desk here — ask them, or escalate it to the office.`,
+            403);
         }
         await c.query(
           `update leave_requests set status = $4, decided_by = $2, decided_at = now(),
                      decision_note = $5, updated_by = $2, updated_at = now()
-            where id = $1 and tenant_id = $3 and deleted_at is null`,
+            where id = $1 and tenant_id = $3 and deleted_at is null and status = 'pending'`,
           [id, req.user.sub, req.user.tid, status, body.note ?? null]);
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
           requestId: req.requestId, entity: "leave_requests", entityId: id,
           action: body.decision === "approve" ? "leave.approved" : "leave.rejected",
-          before: { status: "pending", employee: prev.rows[0].full_name, days: prev.rows[0].working_days },
-          after: { status, note: body.note ?? null }
+          before: { status: "pending", employee: row.full_name, days: row.working_days, routedTo: row.routed_to_name ?? null, routedReason: row.routed_reason },
+          after: { status, note: body.note ?? null, decidedBy: req.user.sub }
         });
         return { ok: true, status };
+      });
+    });
+
+  /**
+   * Pushing a request upstairs. Three people can do it and each has a different reason: the
+   * one who asked (nobody has answered), the one it was sent to (they cannot answer), and the
+   * office (it has been sitting). It is the only way a request leaves a desk that will never
+   * be cleared — an approver who has left the company, or simply stopped signing in — so the
+   * chain cannot stall, and it is one act per request rather than a queue going round.
+   */
+  app.post("/leave/:id/escalate", { preHandler: [requireAuth, requirePermission("leave.request")] },
+    async (req: any) => {
+      const { id } = req.params as { id: string };
+      const body = z.object({ note: z.string().trim().max(500).nullable().optional() }).parse(req.body ?? {});
+      return withTenant(req.user.tid, async (c) => {
+        const prev = await c.query(
+          `select l.status, l.employee_id, l.escalated_at, l.routed_to_user_id, l.routed_reason,
+                  e.full_name, e.user_id as employee_user_id, ru.full_name as routed_to_name
+             from leave_requests l
+             join employees e on e.id = l.employee_id and e.tenant_id = l.tenant_id
+             left join users ru on ru.id = l.routed_to_user_id and ru.tenant_id = l.tenant_id
+            where l.id = $1 and l.tenant_id = $2 and l.deleted_at is null`,
+          [id, req.user.tid]);
+        if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Leave request not found", 404);
+        const row = prev.rows[0];
+        if (row.status !== "pending") {
+          throw new ApiError("CONFLICT", "That request has already been answered; there is nothing to move.", 409);
+        }
+        if (row.escalated_at) {
+          throw new ApiError("CONFLICT", "It is already with the office. The office is not asked twice.", 409);
+        }
+        const isOwner = row.employee_user_id === req.user.sub || row.created_by === req.user.sub;
+        const isHolder = row.routed_to_user_id === req.user.sub;
+        const mayOffice = await checkPermission(c, req.user.sub, "leave.decide");
+        if (!isOwner && !isHolder && !mayOffice) {
+          throw new ApiError("FORBIDDEN",
+            "Only the person who asked, the one it was sent to, or the office can move it upstairs.", 403);
+        }
+        // The reason travels with the request: an office that is handed a pile and told
+        // "escalated" learns nothing, but one that reads why can answer it.
+        const note = body.note?.trim()
+          ?? (isHolder
+            ? `Sent up from ${row.routed_to_name ?? "the approver"} by the approver themselves.`
+            : `Sent up from ${row.routed_to_name ?? "the approver"} to the office.`);
+        await c.query(
+          `update leave_requests
+              set routed_to_user_id = null, routed_reason = 'escalated', routed_note = $4,
+                  escalated_at = now(), escalated_by = $2, escalated_from = $5,
+                  updated_by = $2, updated_at = now()
+            where id = $1 and tenant_id = $3 and status = 'pending' and deleted_at is null`,
+          [id, req.user.sub, req.user.tid, note, row.routed_to_user_id]);
+        await writeAudit(c, {
+          tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
+          requestId: req.requestId, entity: "leave_requests", entityId: id,
+          action: "leave.escalated",
+          before: { routedTo: row.routed_to_name ?? null, routedReason: row.routed_reason },
+          after: { routedReason: "escalated", note, from: row.routed_to_user_id ?? null }
+        });
+        return { ok: true, status: "pending", routedReason: "escalated", note };
       });
     });
 

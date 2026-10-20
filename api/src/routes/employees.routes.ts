@@ -45,7 +45,10 @@ const employeeSchema = z.object({
 });
 
 const employeeUpdateSchema = employeeSchema.partial().extend({
-  absorbed: z.boolean().optional()
+  absorbed: z.boolean().optional(),
+  // Only the edit accepts it: a person is hired into a job, then the office says who
+  // decides their leave. The intake form has no seat list to pick one from yet.
+  leaveApproverUserId: z.string().uuid().nullable().optional()
 });
 
 const taskSchema = z.object({
@@ -106,6 +109,7 @@ const PROFILE_SELECT_SQL = `e.id, e.full_name, e.job_title, e.department, e.skil
   (e.contract_end - current_date)::int as contract_days,
   e.monthly_salary::float8 as monthly_salary,
   e.supervisor_id, s.full_name as supervisor_name,
+  e.leave_approver_user_id, ap.full_name as leave_approver_name,
   e.user_id, e.notes,
   (e.phone_search is not null) as has_phone`;
 
@@ -173,6 +177,7 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
                   order by d.created_at desc limit 1) as latest_document_id
          from employees e
          left join employees s on s.id = e.supervisor_id
+         left join users ap on ap.id = e.leave_approver_user_id and ap.tenant_id = e.tenant_id
          where e.tenant_id = $1 and e.deleted_at is null
          order by e.full_name`,
         [req.user.tid]));
@@ -218,6 +223,7 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
                     and t.status = 'done' and t.on_time = true) as on_time_tasks
          from employees e
          left join employees s on s.id = e.supervisor_id
+         left join users ap on ap.id = e.leave_approver_user_id and ap.tenant_id = e.tenant_id
          where e.id = $1 and e.tenant_id = $2 and e.deleted_at is null`,
         [id, req.user.tid]));
       if (!rows.length) throw new ApiError("NOT_FOUND", "Employee not found", 404);
@@ -277,10 +283,33 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
 
       await withTenant(req.user.tid, async (c) => {
         const prev = await c.query(
-          `select full_name, employment_type, status from employees
+          `select full_name, employment_type, status, user_id, leave_approver_user_id from employees
            where id = $1 and tenant_id = $2 and deleted_at is null`,
           [id, req.user.tid]);
         if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Employee not found", 404);
+
+        if ("leaveApproverUserId" in body && body.leaveApproverUserId) {
+          // Checked here so the office is told what is wrong with the person they picked, and
+          // again by 108's trigger so a statement that skipped this route cannot land.
+          if (prev.rows[0].user_id === body.leaveApproverUserId) {
+            throw new ApiError("VALIDATION_FAILED",
+              "That is the person's own seat — nobody decides their own leave.", 400,
+              [{ field: "leaveApproverUserId" }]);
+          }
+          const seat = await c.query(
+            `select status from users where id = $1 and tenant_id = $2 and deleted_at is null`,
+            [body.leaveApproverUserId, req.user.tid]);
+          if (!seat.rowCount) {
+            throw new ApiError("VALIDATION_FAILED",
+              "That seat belongs to another company, so it cannot decide this one's leave.", 400,
+              [{ field: "leaveApproverUserId" }]);
+          }
+          if (seat.rows[0].status !== "active") {
+            throw new ApiError("CONFLICT",
+              "That seat is not active. An approver has to be able to sign in and answer.", 409,
+              [{ field: "leaveApproverUserId" }]);
+          }
+        }
 
         if (body.supervisorId) {
           if (body.supervisorId === id) {
@@ -326,14 +355,25 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
         if ("contractStart" in body) set("contract_start", body.contractStart ?? null);
         if ("contractEnd" in body) set("contract_end", body.contractEnd ?? null);
         if ("supervisorId" in body) set("supervisor_id", body.supervisorId ?? null);
+        if ("leaveApproverUserId" in body) set("leave_approver_user_id", body.leaveApproverUserId ?? null);
         if ("monthlySalary" in body) set("monthly_salary", body.monthlySalary ?? null);
         if ("notes" in body) set("notes", body.notes ?? null);
         if ("absorbed" in body) set("intern_absorbed", body.absorbed);
 
         if (sets.length) {
-          await c.query(
-            `update employees set ${["updated_by = $2", "updated_at = now()", ...sets].join(", ")}
-             where id = $1 and tenant_id = $3 and deleted_at is null`, params);
+          try {
+            await c.query(
+              `update employees set ${["updated_by = $2", "updated_at = now()", ...sets].join(", ")}
+               where id = $1 and tenant_id = $3 and deleted_at is null`, params);
+          } catch (e) {
+            // 108's trigger is the floor under this column; its sentence is already the
+            // sentence the office needs, so it is passed on rather than turned into a 500.
+            const msg = String((e as any)?.message ?? "");
+            if (msg.includes("approver")) {
+              throw new ApiError("VALIDATION_FAILED", msg, 400, [{ field: "leaveApproverUserId" }]);
+            }
+            throw e;
+          }
         }
         await writeAudit(c, {
           tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
@@ -342,6 +382,19 @@ export async function employeesRoutes(app: FastifyInstance, _opts: unknown) {
           before: { fullName: prev.rows[0].full_name, employmentType: prev.rows[0].employment_type, status: prev.rows[0].status },
           after: { fullName: body.fullName ?? null, employmentType: body.employmentType ?? null, status: body.status ?? null }
         });
+        if ("leaveApproverUserId" in body
+            && (body.leaveApproverUserId ?? null) !== (prev.rows[0].leave_approver_user_id ?? null)) {
+          // Its own line: "who was made the person who decides X's leave" is a question the
+          // forensic register gets asked, and it is buried inside a name-and-salary edit
+          // otherwise.
+          await writeAudit(c, {
+            tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
+            requestId: req.requestId, entity: "employees", entityId: id,
+            action: body.leaveApproverUserId ? "employee.leave_approver_set" : "employee.leave_approver_cleared",
+            before: { leaveApproverUserId: prev.rows[0].leave_approver_user_id ?? null },
+            after: { leaveApproverUserId: body.leaveApproverUserId ?? null }
+          });
+        }
       });
       return reply.send({ ok: true });
     });

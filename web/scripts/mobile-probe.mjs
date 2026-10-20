@@ -32,6 +32,8 @@
  *   ... --open                            click the page's create control before measuring,
  *                                         because a form that only exists after a tap is the
  *                                         page a phone user actually has to fill in
+ *   ... --click 'waiting on you'          click the first control whose words begin with
+ *                                         this, for the same reason one tab deep
  *   ... --settle 20000                    ms a page may keep changing before it is measured
  *                                         anyway (default 12000)
  *   ... --quiet 4000                      the least time a page may be called settled
@@ -73,6 +75,10 @@ const COOKIE = process.env.WAISHA_PROBE_COOKIE ?? "";
 // A create form is a page a phone user has to use, and it only exists after a tap,
 // so the load-time sweep cannot see it. --open clicks the create control first.
 const OPEN = args.includes("--open");
+// A tab is the same problem as a create form one: the panel a phone user has to live in
+// only exists after a tap. --click names the control by the words on it, so a sweep can
+// measure the queue tab or the register rather than only whatever a page opens on.
+const CLICK = String(flag("click", "")).split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
 // "What is wrong" is answered by the measures; "why" needs the live boxes. Pass an
 // expression and its JSON is printed for every page alongside the verdict.
 const EVAL = flag("eval", "");
@@ -345,6 +351,22 @@ const OPEN_FORM = `(() => {
   return 'clicked ' + text(hit).slice(0, 24);
 })()`;
 
+/** Same refusal rule as OPEN_FORM: a sweep may open a panel, never undo a record.
+ *  One word per pass, so a control that only exists one tap deep — a row's Edit button
+ *  behind a tab — is found after the tab it lives under has rendered. Again a template
+ *  literal: no backticks in here. */
+const clickForm = (want) => `(() => {
+  const want = ${JSON.stringify(want)};
+  const danger = /delete|remove|revoke|suspend|block|wipe|reset/i;
+  const text = (el) => (el.textContent || '').trim().toLowerCase();
+  const btns = [...document.querySelectorAll('.app-main button, .app-main a.waisha-btn')]
+    .filter(el => !el.closest('[hidden]') && el.getBoundingClientRect().height > 0);
+  const hit = btns.find(el => text(el).startsWith(want) && !danger.test(text(el)));
+  if (!hit) return 'no ' + want;
+  hit.click();
+  return want + ' -> ' + text(hit).slice(0, 24);
+})()`;
+
 /** A page is not "here" when load fires: a client component fetches after hydration
  *  and a dev server compiles the route on its first hit. Wait until the DOM stops
  *  growing AND nothing is still being asked for, rather than guessing a sleep — too
@@ -458,6 +480,7 @@ async function main() {
     const page = await settle(cdp, inflight);
     const settled = page.ms;
     let opened = "";
+    let clicked = "";
     let settledForm = 0;
     let waitingForm = "";
     if (OPEN) {
@@ -474,11 +497,27 @@ async function main() {
         await sleep(700);
       }
     }
+    for (const want of CLICK) {
+      const hit = await cdp.send("Runtime.evaluate",
+        { expression: clickForm(want), returnByValue: true, awaitPromise: true });
+      const got = String(hit.exceptionDetails
+        ? "click threw " + String(hit.exceptionDetails.exception?.description ?? "").split("\n")[0].slice(0, 60)
+        : hit.result.value);
+      clicked += (clicked ? " | " : "") + got;
+      if (!got.startsWith("no ")) {
+        const panel = await settle(cdp, inflight);
+        settledForm = panel.ms;
+        waitingForm = panel.waiting;
+      } else {
+        await sleep(700);
+      }
+    }
     const { result } = await cdp.send("Runtime.evaluate",
       { expression: MEASURE, returnByValue: true, awaitPromise: true });
     const m = result.value ?? { error: "measure returned nothing" };
     m.path = path;
     m.opened = opened;
+    m.clicked = clicked;
     m.settled = settled;
     m.settledForm = settledForm;
     m.waiting = waitingForm || page.waiting;
@@ -507,7 +546,7 @@ async function main() {
       `clipped=${String(m.clipped.length).padStart(2)} elid=${String(m.elidedCount).padStart(2)} ` +
       `tiny=${String(m.tinyCount).padStart(2)} ` +
       `settle[${note(settled)}${settledForm ? "+" + note(settledForm) : ""}] ` +
-      `${m.sidebar ? `sidebar[${m.sidebar.display} ${m.sidebar.w}px]` : ""}${opened ? ` form[${opened}]` : ""}`
+      `${m.sidebar ? `sidebar[${m.sidebar.display} ${m.sidebar.w}px]` : ""}${opened ? ` form[${opened}]` : ""}${clicked ? ` tab[${clicked}]` : ""}`
     );
     for (const o of m.overflow.slice(0, 4)) console.log(`    past ${String(o.past).padStart(4)}px  ${o.pos.padEnd(8)} ${o.at}  ${o.text ? JSON.stringify(o.text) : ""}`);
     for (const o of m.clipped.slice(0, 3)) console.log(`    cut  ${String(o.lost).padStart(4)}px  ${o.at}`);
