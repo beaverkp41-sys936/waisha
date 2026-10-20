@@ -1,4 +1,4 @@
-import { Workbook, type Cell as XlsxCell } from "exceljs";
+import { Workbook, type Cell as XlsxCell, type Worksheet } from "exceljs";
 import { money, type Cell, type PreparedTable } from "./table.js";
 
 /**
@@ -40,20 +40,7 @@ function styleHeader(cell: XlsxCell): void {
   cell.border = { bottom: { style: "thin", color: { argb: "FF0F1E17" } } };
 }
 
-export async function buildXlsx(table: PreparedTable): Promise<Buffer> {
-  const wb = new Workbook();
-  wb.creator = "Waisha";
-  wb.title = table.title;
-  wb.created = table.generatedAt;
-
-  const ws = wb.addWorksheet(sheetName(table), {
-    views: [{ state: "frozen", ySplit: 0 }],
-    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0,
-      margins: { left: 0.4, right: 0.4, top: 0.6, bottom: 0.6, header: 0.3, footer: 0.3 } },
-    headerFooter: { oddFooter: `&L&9${table.title} · ${table.generatedAt.toISOString()
-      .slice(0, 16).replace("T", " ")} · ${table.actor}&9&R&9Page &P of &N&9` }
-  });
-
+function fillSheet(ws: import("exceljs").Worksheet, table: PreparedTable): void {
   // Widths are derived before the sheet is written, but `header` is deliberately not
   // set here: exceljs answers a declared header by inserting its own row at the top of
   // the sheet, and the register would then start with two label lines — one of them
@@ -131,7 +118,42 @@ export async function buildXlsx(table: PreparedTable): Promise<Buffer> {
       if (type === "money" || type === "number") cell.alignment = { horizontal: "right" };
     });
   }
+}
+
+/**
+ * One workbook, several registers — the shape a cargo bundle needs, because a file's
+ * story is a shipment line plus its tasks, stages, costs, documents and messages, and an
+ * accountant reads that as tabs of one file rather than six downloads.
+ *
+ * Each sheet carries its own title block, frozen header and totals, exactly as the
+ * single-register writer lays them out.
+ */
+export async function buildWorkbook(tables: PreparedTable[]): Promise<Buffer> {
+  if (!tables.length) throw new Error("buildWorkbook needs at least one table.");
+  const wb = new Workbook();
+  wb.creator = "Waisha";
+  wb.title = tables[0].title;
+  wb.created = tables[0].generatedAt;
+
+  const taken = new Set<string>();
+  for (const table of tables) {
+    let name = sheetName(table);
+    for (let n = 2; taken.has(name); n++) name = `${sheetName(table).slice(0, 26)} (${n})`;
+    taken.add(name);
+    const ws = wb.addWorksheet(name, {
+      pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+        margins: { left: 0.4, right: 0.4, top: 0.6, bottom: 0.6, header: 0.3, footer: 0.3 } },
+      headerFooter: { oddFooter: `&L&9${table.title} · ${table.generatedAt.toISOString()
+        .slice(0, 16).replace("T", " ")} · ${table.actor}&9&R&9Page &P of &N&9` }
+    });
+    fillSheet(ws, table);
+  }
 
   const out = await wb.xlsx.writeBuffer();
   return Buffer.from(out);
+}
+
+/** The single-register case the export route answers with today. */
+export async function buildXlsx(table: PreparedTable): Promise<Buffer> {
+  return buildWorkbook([table]);
 }

@@ -86,6 +86,38 @@ export async function downloadExport(table: ExportTable, format: ExportFormat): 
 
   const blob = await res.blob();
   if (!blob.size) throw new Error("The export came back empty.");
+  saveBlob(blob, name);
+  return name;
+}
+
+/**
+ * The batch archive for the cargo desk: one folder per selected file, each with its
+ * registers as data and as a workbook, plus the documents stored against it.
+ *
+ * The server reads these rows rather than receiving them, so the archive carries the
+ * registers a file has that no desk lists — the handovers, the cost lines, the parcels.
+ * It is the slow export in the product, so the caller keeps its own progress line.
+ */
+export async function downloadCargoBatch(ids: string[]): Promise<string> {
+  const res = await authFetch("/exports/cargo-batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids })
+  }, () => { window.location.href = "/login"; });
+
+  if (!res.ok) throw new Error(await failure(res));
+
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const named = /filename="?([^";]+)"?/i.exec(disposition);
+  const name = named?.[1] ?? `cargo-files-${new Date().toISOString().slice(0, 10)}.zip`;
+
+  const blob = await res.blob();
+  if (!blob.size) throw new Error("The archive came back empty.");
+  saveBlob(blob, name);
+  return name;
+}
+
+function saveBlob(blob: Blob, name: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -96,7 +128,6 @@ export async function downloadExport(table: ExportTable, format: ExportFormat): 
   // Revoking on the next tick can cut the transfer short: the browser reads the
   // object URL when it starts writing the file, not when the click lands.
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  return name;
 }
 
 /**

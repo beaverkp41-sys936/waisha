@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { apiFetch } from "../../api-client";
 import { ExportButtons } from "@/components/ExportButtons";
+import { CargoBatchButton } from "@/components/CargoBatchButton";
 
 function errorText(json: any, fallback: string): string {
   const d = json?.error?.details;
@@ -81,6 +82,9 @@ function CargoContent() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  // Ticked for the batch archive. A tick the operator cannot see is a tick they cannot
+  // check, so the set is pruned to the rows the desk is listing whenever the list loads.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
 
   const load = useCallback(async (editTarget?: string | null) => {
     const qs = new URLSearchParams();
@@ -88,7 +92,12 @@ function CargoContent() {
     if (filterType) qs.set("shipmentType", filterType);
     if (search.trim()) qs.set("search", search.trim());
     const res = await apiFetch(`/cargo${qs.toString() ? `?${qs}` : ""}`);
-    if (res.ok) setShipments(await res.json());
+    if (res.ok) {
+      const rows: Shipment[] = await res.json();
+      setShipments(rows);
+      const listed = new Set(rows.map(r => r.id));
+      setPicked(p => new Set([...p].filter(id => listed.has(id))));
+    }
     const p = await apiFetch("/profile");
     if (p.ok) { const j = await p.json(); setCompanyCode(j.company_code ?? null); }
     // Edit mode: pull the file into the form.
@@ -403,41 +412,53 @@ function CargoContent() {
           {shipments.length} file{shipments.length === 1 ? "" : "s"} listed
           {filterStage || filterType || search ? " for these filters" : ""}
         </p>
-        <ExportButtons report="cargo"
-          title="Cargo files"
-          subtitle={filterStage || filterType || search
-            ? "Files matching the filters on the desk" : "Every clearing and forwarding file on the desk"}
-          meta={[
-            { label: "Stage", value: filterStage ? (STAGE_LABELS[filterStage] ?? filterStage) : "All" },
-            { label: "Type", value: filterType ? (TYPE_LABELS[filterType] ?? filterType) : "All" },
-            { label: "Search", value: search.trim() || "—" }
-          ]}
-          columns={[
-            { key: "file", label: "File no.", type: "text" },
-            { key: "consignee", label: "Consignee", type: "text" },
-            { key: "type", label: "Type", type: "text" },
-            { key: "container", label: "Container", type: "text" },
-            { key: "eta", label: "ETA", type: "date" },
-            { key: "weight", label: "Weight (t)", type: "number" },
-            { key: "stage", label: "Stage", type: "text" },
-            { key: "payment", label: "Payment", type: "text" },
-            { key: "tasks", label: "Open office jobs", type: "number" }
-          ]}
-          rows={shipments.map(s => ({
-            file: s.file_number, consignee: s.consignee_name,
-            type: TYPE_LABELS[s.shipment_type] ?? s.shipment_type,
-            container: `${CONTAINER_LABELS[s.container_type] ?? s.container_type}`
-              + (s.container_count ? ` x${s.container_count}` : ""),
-            eta: s.eta, weight: s.weight_tonnes,
-            stage: STAGE_LABELS[s.stage] ?? s.stage,
-            payment: s.payment_status, tasks: s.open_tasks
-          }))} />
+        <div className="flex flex-wrap items-start gap-24">
+          <ExportButtons report="cargo"
+            title="Cargo files"
+            subtitle={filterStage || filterType || search
+              ? "Files matching the filters on the desk" : "Every clearing and forwarding file on the desk"}
+            meta={[
+              { label: "Stage", value: filterStage ? (STAGE_LABELS[filterStage] ?? filterStage) : "All" },
+              { label: "Type", value: filterType ? (TYPE_LABELS[filterType] ?? filterType) : "All" },
+              { label: "Search", value: search.trim() || "—" }
+            ]}
+            columns={[
+              { key: "file", label: "File no.", type: "text" },
+              { key: "consignee", label: "Consignee", type: "text" },
+              { key: "type", label: "Type", type: "text" },
+              { key: "container", label: "Container", type: "text" },
+              { key: "eta", label: "ETA", type: "date" },
+              { key: "weight", label: "Weight (t)", type: "number" },
+              { key: "stage", label: "Stage", type: "text" },
+              { key: "payment", label: "Payment", type: "text" },
+              { key: "tasks", label: "Open office jobs", type: "number" }
+            ]}
+            rows={shipments.map(s => ({
+              file: s.file_number, consignee: s.consignee_name,
+              type: TYPE_LABELS[s.shipment_type] ?? s.shipment_type,
+              container: `${CONTAINER_LABELS[s.container_type] ?? s.container_type}`
+                + (s.container_count ? ` x${s.container_count}` : ""),
+              eta: s.eta, weight: s.weight_tonnes,
+              stage: STAGE_LABELS[s.stage] ?? s.stage,
+              payment: s.payment_status, tasks: s.open_tasks
+            }))} />
+          <CargoBatchButton ids={[...picked]} />
+        </div>
       </div>
 
       <div className="mt-16 overflow-hidden rounded-card border bg-surface" style={cardStyle}>
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+              <th className="p-12">
+                <label className="flex h-32 w-32 items-center justify-center"
+                  title="Tick every file listed here">
+                  <input type="checkbox" aria-label="Select every listed file"
+                    className="h-20 w-20" style={{ accentColor: "var(--brand)" }}
+                    checked={shipments.length > 0 && picked.size === shipments.length}
+                    onChange={e => setPicked(e.target.checked ? new Set(shipments.map(s => s.id)) : new Set())} />
+                </label>
+              </th>
               <th className="p-12">File number</th><th className="p-12">Type</th>
               <th className="p-12">Consignee</th><th className="p-12">Container</th>
               <th className="p-12 text-right">ETA</th><th className="p-12">Stage</th>
@@ -447,6 +468,18 @@ function CargoContent() {
           <tbody>
             {shipments.map((s, i) => (
               <tr key={s.id} style={{ background: i % 2 ? "var(--milk-deep)" : "transparent" }}>
+                <td className="p-12">
+                  <label className="flex h-32 w-32 items-center justify-center">
+                    <input type="checkbox" aria-label={`Archive ${s.file_number}`}
+                      className="h-20 w-20" style={{ accentColor: "var(--brand)" }}
+                      checked={picked.has(s.id)}
+                      onChange={e => setPicked(p => {
+                        const next = new Set(p);
+                        if (e.target.checked) next.add(s.id); else next.delete(s.id);
+                        return next;
+                      })} />
+                  </label>
+                </td>
                 <td className="p-12 font-semibold" style={{ color: "var(--ink)" }}>
                   <Link href={`/app/cfa/cargo/${s.id}`} className="underline">{s.file_number}</Link>
                   {s.open_tasks > 0 && (
@@ -487,12 +520,12 @@ function CargoContent() {
               </tr>
             ))}
             {loaded && shipments.length === 0 && (
-              <tr><td colSpan={8} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+              <tr><td colSpan={9} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
                 No cargo files{filterStage || filterType || search ? " match the filters" : " yet — open your first file above"}.
               </td></tr>
             )}
             {!loaded && (
-              <tr><td colSpan={8} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>Loading…</td></tr>
+              <tr><td colSpan={9} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>Loading…</td></tr>
             )}
           </tbody>
         </table>
