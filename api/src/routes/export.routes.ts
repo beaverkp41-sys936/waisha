@@ -6,7 +6,7 @@ import { z } from "zod";
 import { withTenant } from "../db/pool.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { ApiError } from "../util/errors.js";
-import { checkPermission } from "../security/permissions.js";
+import { checkPermission, checkPermissions } from "../security/permissions.js";
 import { writeAudit } from "../audit/audit.js";
 import { exportTableSchema, fileName, prepareTable, type PreparedTable } from "../export/table.js";
 import { buildPdf } from "../export/pdf.js";
@@ -63,7 +63,11 @@ const REPORTS: Record<string, string> = {
   jobs: "jobs.view",
   documents: "documents.export",
   tax: "tax.view",
-  "shipper-accounts": "shipper_accounts.view"
+  "shipper-accounts": "shipper_accounts.view",
+  // 109's register. It has no `.export` duty of its own — the four keys the migration seeds are
+  // view/create/edit/close — so the read duty is the gate, which is what this map does for the
+  // office registers too.
+  "work-orders": "work_orders.view"
 };
 
 /** A 20 000-row PDF is 700 pages of drawText on the API box: Excel is the file for that. */
@@ -77,12 +81,15 @@ export async function exportRoutes(app: FastifyInstance, _opts: unknown) {
 
   /** The registers the signed-in seat is allowed to print — the web hides the rest. */
   app.get("/exports/reports", { preHandler: [requireAuth] }, async (req: any) => {
+    // One lookup for every register, because this answers before a desk may even show its
+    // Excel button. Asked key by key it is one round trip per report — over thirty of them,
+    // each to a pooler on another continent, which is why the buttons used to arrive a quarter
+    // of a minute after the rows underneath them were already on the screen.
     const allowed = await withTenant(req.user.tid, async (c) => {
-      const out: string[] = [];
-      for (const [report, key] of Object.entries(REPORTS)) {
-        if (await checkPermission(c, req.user.sub, key)) out.push(report);
-      }
-      return out;
+      const held = await checkPermissions(c, req.user.sub, [...new Set(Object.values(REPORTS))]);
+      return Object.entries(REPORTS)
+        .filter(([, key]) => held.has(key))
+        .map(([report]) => report);
     });
     return { reports: allowed };
   });
