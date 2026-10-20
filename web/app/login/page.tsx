@@ -26,6 +26,54 @@ function useGreeting() {
   return greeting;
 }
 
+/**
+ * The sign-in card's own sentences, read from GET /content/copy so the command center desk
+ * can rewrite them without a deploy (100; #244).
+ *
+ * Every word defaults to what this page shipped with and a failed fetch keeps it: the door
+ * opens whether or not the copy service answered, because a card that cannot say "sign in"
+ * is worse than a card with yesterday's phrasing. Only the company door is editable — the
+ * seeker panel confirms a verified search account, which is a different sentence about a
+ * different thing, and the registry has no key for it.
+ *
+ * `loginBrand` arrived here from the footer in 105. This card is the only page the platform
+ * has that is about the platform itself, so it is the one clean place for a publisher's line.
+ */
+const COPY_DEFAULT = {
+  loginSubtitle: "Sign in to WAISHA",
+  signupSuccessTitle: "Account successfully created",
+  signupSuccessBody: "Sign in with your TIN and email to reach your workspace.",
+  loginBrand: "powered by T ENGO AEGIS"
+};
+
+function usePlatformCopy() {
+  const [copy, setCopy] = useState(COPY_DEFAULT);
+  useEffect(() => {
+    let cancelled = false;
+    const sw = /^sw/i.test(navigator.language || "");
+    fetch(`${API}/api/v1/content/copy${sw ? "?lang=sw" : ""}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => {
+        if (!j || cancelled) return;
+        const line = (k: keyof typeof COPY_DEFAULT) =>
+          (typeof j[k] === "string" && j[k].trim() ? String(j[k]) : COPY_DEFAULT[k]);
+        setCopy({
+          loginSubtitle: line("loginSubtitle"),
+          signupSuccessTitle: line("signupSuccessTitle"),
+          signupSuccessBody: line("signupSuccessBody"),
+          // The imprint is the one line here that a desk can genuinely remove: an empty
+          // block is "do not show this", which is how the registry treats a blank value
+          // everywhere else. Only a payload without the key at all falls back.
+          loginBrand: typeof j.loginBrand === "string"
+            ? j.loginBrand.trim() : COPY_DEFAULT.loginBrand
+        });
+      })
+      .catch(() => { });
+    return () => { cancelled = true; };
+  }, []);
+  return copy;
+}
+
 function Segmented({ items, index, onChange }: { items: string[]; index: number; onChange: (i: number) => void }) {
   return (
     <div role="tablist" className="auth-tab relative flex border-b">
@@ -177,6 +225,7 @@ function ErrorChip({ msg }: { msg: string | null }) {
 
 export default function LoginPage() {
   const greeting = useGreeting();
+  const copy = usePlatformCopy();
   const [panel, setPanel] = useState<Panel>("login");
   const [loginTab, setLoginTab] = useState(0);
   const [signupTab, setSignupTab] = useState(0);
@@ -363,7 +412,7 @@ export default function LoginPage() {
               width={904} height={309} className="auth-mark" />
           </div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em]" style={{ color: "rgba(255,255,255,0.82)" }}>
-            Sign in to WAISHA
+            {copy.loginSubtitle}
           </p>
           <h1 className="mb-4 text-[28px] font-extrabold tracking-tight" style={{ color: "#ffffff" }}>
             {greeting}.
@@ -498,12 +547,12 @@ export default function LoginPage() {
               <div key="success" className="panel-enter py-16 text-center">
                 <div className="mx-auto mb-16 h-[2px] w-48" style={{ background: "#7fd6ab" }} aria-hidden />
                 <h2 className="text-lg font-semibold" style={{ color: "#8fdcbc" }}>
-                  {loginTab === 2 ? "Search account verified" : "Account successfully created"}
+                  {loginTab === 2 ? "Search account verified" : copy.signupSuccessTitle}
                 </h2>
                 <p className="mt-8 text-sm" style={{ color: "rgba(255,255,255,0.82)" }}>
                   {loginTab === 2
                     ? "Sign in to search the directory. Your first free search is ready now."
-                    : "Sign in with your TIN and email to reach your workspace."}
+                    : copy.signupSuccessBody}
                 </p>
                 <button type="button" className="auth-link mt-16 text-sm underline"
                   onClick={() => setPanel("login")}>Sign in now</button>
@@ -524,6 +573,14 @@ export default function LoginPage() {
               <button type="button" className="auth-link font-semibold underline"
                 onClick={() => { setError(null); setPanel("login"); }}>Sign in</button>
             </div>
+          )}
+
+          {/* The mark goes last, under the door — small, and only here. */}
+          {copy.loginBrand && (
+            <p className="mt-16 text-center text-[10px] font-semibold uppercase tracking-[0.16em]"
+              style={{ color: "rgba(255,255,255,0.6)" }}>
+              {copy.loginBrand}
+            </p>
           )}
         </div>
       </div>

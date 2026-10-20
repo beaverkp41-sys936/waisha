@@ -61,6 +61,13 @@ const FULL = args.includes("--full");
 const SHOTS = args.includes("--shots");
 const PORT = Number(flag("port", 9333));
 const TOKEN = process.env.WAISHA_PROBE_TOKEN ?? "";
+// A /control desk is opened by the server-issued cookie, not by the bearer in sessionStorage,
+// and the standing rule is a real sign-in rather than a forged credential. So whoever has just
+// signed in hands that reply's whole `Set-Cookie` value through here and it is planted in the
+// browser's own jar for the probe origin — attributes and all, because the control cookie is
+// scoped to `Path=/api/v1/control` and a probe that widened the path would not be measuring the
+// page a real seat loads. The value never reaches a terminal or a file.
+const COOKIE = process.env.WAISHA_PROBE_COOKIE ?? "";
 // A create form is a page a phone user has to use, and it only exists after a tap,
 // so the load-time sweep cannot see it. --open clicks the create control first.
 const OPEN = args.includes("--open");
@@ -376,6 +383,21 @@ async function main() {
   if (TOKEN) {
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
       source: `try { sessionStorage.setItem('waisha_access', ${JSON.stringify(TOKEN)}); } catch (e) {}`
+    });
+  }
+  if (COOKIE) {
+    const [pair, ...attrs] = COOKIE.split(";").map((s) => s.trim());
+    const eq = pair.indexOf("=");
+    const attr = (n) => attrs.find((a) => a.toLowerCase().startsWith(`${n}=`))
+      ?.slice(n.length + 1).trim();
+    const sameSite = attr("SameSite");
+    await cdp.send("Network.setCookie", {
+      name: pair.slice(0, eq).trim(),
+      value: pair.slice(eq + 1).trim(),
+      url: BASE,
+      path: attr("Path") || "/",
+      httpOnly: attrs.some((a) => a.toLowerCase() === "httponly"),
+      ...(sameSite ? { sameSite: sameSite.charAt(0).toUpperCase() + sameSite.slice(1).toLowerCase() } : {})
     });
   }
 

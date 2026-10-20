@@ -3,8 +3,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Activity, Banknote, Boxes, Bug, Building2, Globe, Lightbulb, LogOut, Megaphone, ScrollText,
-  Settings2, Tag, TrendingUp, UserCog, Users, type LucideIcon
+  Activity, Banknote, Boxes, Bug, Building2, Globe, Headphones, Languages, Lightbulb, LogOut,
+  Megaphone, ScrollText, Settings2, Tag, TrendingUp, UserCog, Users, type LucideIcon
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
@@ -38,6 +38,16 @@ const SCREENS: Screen[] = [
   { href: "/control/staff", label: "Staff", icon: UserCog, keys: ["control.staff.view", "control.staff.manage"] },
   { href: "/control/departments", label: "Departments", icon: Boxes,
     keys: ["control.departments.view", "control.departments.manage"] },
+  // The customer service register: every call that was written down, and the desk that now
+  // owns it. Its own two duties, because reading a register of complaints is not the same
+  // authority as settling one.
+  { href: "/control/tickets", label: "Service", icon: Headphones,
+    keys: ["control.tickets.view", "control.tickets.manage"] },
+  // The command center. `control.view` is the floor every platform seat already holds and the
+  // route reads it for the read, so this is the one desk a new analyst sees on day one — the
+  // words are nobody's secret; publishing them is.
+  { href: "/control/content", label: "Copy", icon: Languages,
+    keys: ["control.view", "control.content.manage"] },
   { href: "/control/forensics", label: "Forensics", icon: ScrollText, keys: ["control.audit.view"] },
   { href: "/control/system", label: "System", icon: Settings2, keys: ["control.system.view"] },
   { href: "/control/reliability", label: "Reliability", icon: Activity, keys: ["control.system.view"] },
@@ -78,7 +88,10 @@ export function ControlNav() {
         {visible.map((s) => {
           const active = pathname === s.href;
           const Icon = s.icon;
-          const row = "flex items-center gap-8 whitespace-nowrap border-l-2 py-4 pl-8 text-xs font-semibold";
+          // py-10, not py-4: at phone width these are thumb targets, and a 24px-tall line of
+          // the sub-nav is the one thing on the shell a seat taps constantly. 36px is the
+          // floor the phone probe stops flagging, and it reads the same on a desk.
+          const row = "flex min-h-[36px] items-center gap-8 whitespace-nowrap border-l-2 py-4 pl-8 text-xs font-semibold";
           return (
             <li key={s.href}>
               {active ? (
@@ -99,7 +112,7 @@ export function ControlNav() {
         })}
         <li>
           <button type="button"
-            className="flex items-center gap-8 whitespace-nowrap border-0 bg-transparent py-4 text-xs font-semibold"
+            className="flex min-h-[36px] items-center gap-8 whitespace-nowrap border-0 bg-transparent py-4 text-xs font-semibold"
             style={{ color: "var(--adm-accent)" }}
             onClick={async () => {
               await fetch(`${API}/api/v1/control/auth/logout`, { method: "POST", credentials: "include" });

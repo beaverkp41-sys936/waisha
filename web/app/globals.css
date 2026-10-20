@@ -256,6 +256,57 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 }
 .footer-words { text-align: center; }
 
+/* Everything the bar can now carry comes from the command center desk, so the bar has to
+   say it out loud: a field an operator edits and cannot see is worse than not offering it.
+   Second line, one size down, still white on the blurred photo — the footer's own
+   text-shadow is what keeps it legible, so these rules only add spacing and a hover, never
+   a colour that fights the background. */
+.footer-after {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 12px;
+}
+.footer-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 14px;
+}
+.footer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #fff;
+  font-weight: 600;
+}
+.footer-link:hover { color: var(--gold-on-photo, #f2d99a); }
+.footer-social { font-weight: 500; }
+.footer-note { color: rgba(255, 255, 255, 0.9); font-size: 11px; }
+.footer-address { white-space: pre-line; text-align: center; line-height: 1.45; }
+.footer-rights {
+  margin: 8px auto 0;
+  max-width: 900px;
+  padding: 0 20px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  text-align: center;
+}
+
+/* The command center previews the bar it is about to publish. The sticky rule has to be
+   switched off inside that preview — a footer pinned to the bottom of the desk would sit over
+   the desk's own publish button — and the plate goes nearly opaque because there is no photo
+   behind it to blur: an alpha of 0.58 over the panel's dark ground still reads as a hole. */
+.footer-preview { --footer-bg: rgba(4, 18, 28, 0.94); }
+.footer-preview .app-footer {
+  position: static;
+  bottom: auto;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border-top: 0;
+}
+
 /* The forecast sits on the same blurred photo as the rest of the bar, so it
    inherits the footer's white + shadow and only adds a hairline to make the
    location pill look pressable. Each reading is an icon welded to its number —
@@ -1391,6 +1442,11 @@ select.auth-field option { color: var(--ink); }
   /* The shipper and seeker shells carry their whole navigation as one row of text
      tabs, 28px tall and — at 390px — one tab wide enough to sit off the screen. */
   .ws-nav a { display: inline-flex; align-items: center; min-height: 38px; }
+  /* The footer's own links are a caller's route to a human — the support address, the
+     WhatsApp line, a footer link — and the bar sits outside `.app-main`, so the button floor
+     at the top of this block never reached them. 36px rather than 38 because three of these
+     share one line and the bar is sticky: a taller floor would eat the page behind it. */
+  .app-footer .footer-link { min-height: 36px; }
   /* A calendar chip is a date's whole route into a cargo file, an invoice or a leave
      request, and it is a plain link, so the button floor above never reached it; it
      measured 14px. Vertical padding is what grows it — `display: flex` would break the
