@@ -3,7 +3,8 @@ import { z } from "zod";
 import { pool, withTenant } from "../db/pool.js";
 import { ApiError } from "../util/errors.js";
 import { uuidv7 } from "../util/uuid.js";
-import { encryptField, searchHash } from "../util/crypto.js";
+import { encryptField, searchHash, decryptField } from "../util/crypto.js";
+import { maskPhone } from "../security/otp.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { writeAudit } from "../audit/audit.js";
 import { requirePermission } from "../security/permissions.js";
@@ -145,6 +146,7 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
       `select b.id, b.kind, b.name, b.region_id, b.district_id,
               b.district_freetext, b.ward, b.street, b.postal_address,
               b.gps_lat, b.gps_lng, b.contact_person, b.email, b.operating_hours,
+              b.phone_encrypted,
               r.name_en as region_name, d.name_en as district_name,
               (b.phone_search is not null) as has_phone
        from branches b
@@ -153,7 +155,14 @@ export async function profileRoutes(app: FastifyInstance, _opts: unknown) {
        where b.tenant_id = $1 and b.deleted_at is null
        order by case b.kind when 'hq' then 0 when 'sub_hq' then 1 else 2 end, b.name`,
       [req.user.tid]));
-    return rows;
+    // The profile card shows how to reach the company, so the HQ line answers with the
+    // number itself — masked. A branch's phone is PII stored encrypted like a driver's,
+    // and the house rule is that no endpoint carries raw PII off the server.
+    return rows.map(({ phone_encrypted, ...b }: any) => ({
+      ...b,
+      phone_masked: b.has_phone && phone_encrypted
+        ? maskPhone(decryptField(Buffer.from(phone_encrypted))) : null
+    }));
   });
 
   app.post("/branches", { preHandler: [requireAuth, requirePermission("profile.create")] }, async (req: any, reply) => {

@@ -90,7 +90,10 @@ export function FooterBar({ content, weather = true }:
   const { supportEmail, phone, whatsapp, address, hours, copyright, links, social } = content;
   const chat = waLink(whatsapp);
   const words = [
-    supportEmail && <a key="e" className="footer-link underline"
+    // The address is a mailto:, but it is read as a line of text first: the office asked
+    // for it without the underline, which made it look like a link in the middle of a
+    // sentence rather than the way to reach a person.
+    supportEmail && <a key="e" className="footer-link"
       href={`mailto:${supportEmail}`}>{supportEmail}</a>,
     phone && <span key="p">mob. {phone}</span>,
     chat && <a key="w" className="footer-link underline" href={chat}>WhatsApp {whatsapp}</a>

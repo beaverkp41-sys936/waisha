@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Building2, CalendarClock, Check, CircleDashed, ExternalLink, FileText, Globe,
-  IdCard, MapPin, Phone, Plane, Route, ShieldCheck, Ship, Truck, Users, Wallet
+  IdCard, Mail, MapPin, Phone, Plane, Route, ShieldCheck, Ship, Truck, Users, Wallet
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { apiFetch } from "../api-client";
@@ -243,36 +243,14 @@ export default function ProfilePage() {
     <div className="mx-auto max-w-[980px] px-16 py-32">
       <header className="profile-head">
         <div className="profile-cover">
-          <div className="min-w-0">
+          <div className="profile-title min-w-0">
             <h1 className="profile-name">{form.company_name || "Your company profile"}</h1>
             <p className="app-sub">
               {isNew ? "Not published yet — this is the card shippers and the platform read about you."
                      : "This is what shippers and the platform see about your company."}
             </p>
-            <div className="profile-meta">
-              {status === "active" && (
-                <span className="badge badge-verified"><ShieldCheck aria-hidden />Verified</span>
-              )}
-              {status === "trial" && (
-                <span className="badge badge-trial"><ShieldCheck aria-hidden />Trial</span>
-              )}
-              <span className="badge badge-plain">
-                <IdCard aria-hidden />
-                {form.transport_licence_no
-                  ? `Licence ${form.transport_licence_no}${licenceExpiry ? ` · ${licenceLapsed ? "lapsed" : "until"} ${licenceExpiry}` : ""}`
-                  : "No transport licence on file"}
-              </span>
-              <span className="badge badge-plain">
-                <MapPin aria-hidden />{city ? `${city}, Tanzania` : "Tanzania"}
-              </span>
-              {memberSince && (
-                <span className="badge badge-plain">
-                  <CalendarClock aria-hidden />Member since {memberSince}
-                </span>
-              )}
-            </div>
           </div>
-          <div className="profile-actions no-print">
+          <div className="profile-actions">
             {!editing && (
               <button type="button" onClick={beginEdit}
                 className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">
@@ -282,6 +260,53 @@ export default function ProfilePage() {
             <button type="button" onClick={() => setPreview(p => !p)} className="on-photo-btn">
               {preview ? "Back to profile" : "Preview as shipper"}
             </button>
+          </div>
+          <div className="profile-meta">
+            {status === "active" && (
+              <span className="badge badge-verified"><ShieldCheck aria-hidden />Verified</span>
+            )}
+            {status === "trial" && (
+              <span className="badge badge-trial"><ShieldCheck aria-hidden />Trial</span>
+            )}
+            <span className="badge badge-plain">
+              <IdCard aria-hidden />
+              {form.transport_licence_no
+                ? `Licence ${form.transport_licence_no}${licenceExpiry ? ` · ${licenceLapsed ? "lapsed" : "until"} ${licenceExpiry}` : ""}`
+                : "No transport licence on file"}
+            </span>
+            <span className="badge badge-plain">
+              <MapPin aria-hidden />{city ? `${city}, Tanzania` : "Tanzania"}
+            </span>
+            {memberSince && (
+              <span className="badge badge-plain">
+                <CalendarClock aria-hidden />Member since {memberSince}
+              </span>
+            )}
+          </div>
+          <div className="profile-contacts">
+            {hq?.contact_person && (
+              <p><Users aria-hidden />{hq.contact_person}</p>
+            )}
+            {hq?.email && (
+              <p><Mail aria-hidden />
+                <a href={`mailto:${hq.email}`}>{hq.email}</a>
+              </p>
+            )}
+            {hq && (hq.phone_masked || hq.has_phone) && (
+              <p><Phone aria-hidden />{hq.phone_masked || "Phone on file"}</p>
+            )}
+            {address && <p><MapPin aria-hidden />{address}</p>}
+            {form.website && (
+              <p><Globe aria-hidden />
+                <a href={/^https?:\/\//i.test(form.website) ? form.website : `https://${form.website}`}
+                  target="_blank" rel="noreferrer">{form.website}</a>
+              </p>
+            )}
+            {!hq && !form.website && (
+              <p className="profile-contacts--none">
+                Nothing to reach you on yet — the card shippers read has no email, phone or address.
+              </p>
+            )}
           </div>
         </div>
 
