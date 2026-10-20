@@ -940,7 +940,10 @@ export default function RoutesPage() {
         </form>
       )}
 
-      <div className="mt-32 overflow-x-auto rounded-card border" style={{ borderColor: "var(--line)" }}>
+      {/* The register is the one card on this page that had no glass under it: the pane is a
+          photo-backed navy wash, and every cell colour here is a light-mode ink, so the rows
+          read dark-on-dark. Every other register in the portal is bg-surface + a border. */}
+      <div className="mt-32 overflow-x-auto rounded-card border bg-surface" style={{ borderColor: "var(--line)" }}>
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left" style={{ background: "var(--milk-deep)", color: "var(--ink-soft)" }}>
@@ -970,10 +973,10 @@ export default function RoutesPage() {
                   </p>
                   {r.corridor && <p className="text-[11px]" style={{ color: "var(--gold)" }}>{r.corridor}</p>}
                 </td>
-                <td className="px-12 py-10" style={{ color: "var(--ink-soft)" }}>
+                <td className="px-12 py-10 whitespace-nowrap" style={{ color: "var(--ink-soft)" }}>
                   {r.stop_count > 0 ? `${r.stop_count} stops · ${r.checkpoint_count} checks` : `${r.checkpoint_count} checks`}
                 </td>
-                <td className="px-12 py-10" style={{ color: "var(--ink)" }}>
+                <td className="px-12 py-10 whitespace-nowrap" style={{ color: "var(--ink)" }}>
                   {r.distance_km != null ? `${r.distance_km} km` : "—"}
                   <span className="ml-8 rounded-input px-6 py-1 text-[10px] font-semibold"
                     style={{ background: "color-mix(in srgb, var(--brand) 12%, transparent)", color: "var(--brand)" }}>
