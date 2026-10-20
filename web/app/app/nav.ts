@@ -2,7 +2,7 @@ import {
   BookOpenText, Boxes, Building2, Calculator, CalendarCheck, CalendarClock, ChartColumn,
   ClipboardCheck, ContactRound, FileCheck2, FilePlus2, FileSignature, Fuel, Globe, IdCard, KeyRound, LayoutDashboard,
   Lightbulb, MapPinned, Megaphone, MessageSquare, Navigation, Package, Receipt, ReceiptText, Route,
-  Settings, ShieldCheck, TriangleAlert, Truck, Users, UsersRound, Wallet, Workflow
+  Settings, ShieldCheck, TriangleAlert, Truck, Users, UsersRound, Wallet, Workflow, Wrench
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -18,6 +18,7 @@ export const TRANSPORTER_NAV: NavItem[] = [
   { href: "/app/profile", label: "Profile", icon: Building2 },
   { href: "/app/branches", label: "Branches", icon: MapPinned },
   { href: "/app/fleet", label: "Fleet", icon: Truck },
+  { href: "/app/fleet/workshop", label: "Workshop", icon: Wrench },
   { href: "/app/routes", label: "Routes", icon: Route },
   { href: "/app/drivers", label: "Drivers", icon: ContactRound },
   { href: "/app/trips", label: "Trips", icon: Navigation },

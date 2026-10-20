@@ -3,9 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Truck, MapPin, ClipboardList, FileText, X, KeyRound, Route as RouteIcon,
-  Fuel, AlertTriangle, UserPlus, Gauge
+  Fuel, AlertTriangle, UserPlus, Gauge, Wrench
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
+import { WorkshopDesk } from "@/components/WorkshopDesk";
 import { apiFetch, seatPermissions } from "../api-client";
 import type { MapPoint } from "../routes/route-map";
 
@@ -71,7 +72,7 @@ interface Dossier {
 }
 interface Perms {
   edit: boolean; create: boolean; retire: boolean;
-  trackSee: boolean; trackPost: boolean; seeDocs: boolean;
+  trackSee: boolean; trackPost: boolean; seeDocs: boolean; work: boolean;
 }
 
 const TYPES: Record<string, string> = {
@@ -157,7 +158,7 @@ function PlateDossier({ vesselId, label, perms, drivers, onChanged, onClose }: {
   onChanged: () => void; onClose: () => void;
 }) {
   const [d, setD] = useState<Dossier | null>(null);
-  const [tab, setTab] = useState<"held" | "where" | "logbook" | "papers" | "work">("held");
+  const [tab, setTab] = useState<"held" | "where" | "logbook" | "shop" | "papers" | "work">("held");
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -267,6 +268,7 @@ function PlateDossier({ vesselId, label, perms, drivers, onChanged, onClose }: {
     { key: "held" as const, label: "Who holds it", icon: UserPlus, show: true },
     { key: "where" as const, label: "Where it is", icon: MapPin, show: !!d?.position || !!perms.trackSee },
     { key: "logbook" as const, label: "Logbook", icon: ClipboardList, show: true },
+    { key: "shop" as const, label: "Workshop", icon: Wrench, show: perms.work },
     { key: "papers" as const, label: "Papers", icon: KeyRound, show: true },
     { key: "work" as const, label: "Trips, fuel, incidents", icon: RouteIcon, show: true }
   ];
@@ -751,6 +753,14 @@ function PlateDossier({ vesselId, label, perms, drivers, onChanged, onClose }: {
         </div>
       )}
 
+      {/* Not gated on `d`: the register is its own read, and a plate whose dossier failed to
+          load still has work orders the desk can open. */}
+      {tab === "shop" && (
+        <div className="mt-20">
+          <WorkshopDesk vesselId={vesselId} plateLabel={label} onChanged={load} />
+        </div>
+      )}
+
       {d && tab === "work" && (
         <div className="mt-20 space-y-20">
           <div>
@@ -842,7 +852,7 @@ export default function FleetPage() {
   const [staleAfter, setStaleAfter] = useState(21600);
   const [perms, setPerms] = useState<Perms>({
     edit: false, create: false, retire: false,
-    trackSee: false, trackPost: false, seeDocs: false
+    trackSee: false, trackPost: false, seeDocs: false, work: false
   });
   const [fleetLimit, setFleetLimit] = useState<number | null>(null);
   const [fleetUsed, setFleetUsed] = useState(0);
@@ -892,7 +902,10 @@ export default function FleetPage() {
     seatPermissions().then(keys => setPerms({
       edit: keys.has("fleet.edit"), create: keys.has("fleet.create"),
       retire: keys.has("fleet.delete"), trackSee: keys.has("tracking.view"),
-      trackPost: keys.has("tracking.create"), seeDocs: keys.has("documents.view")
+      trackPost: keys.has("tracking.create"), seeDocs: keys.has("documents.view"),
+      // The workshop tab is a duty of its own: a desk that may open a plate's file has no
+      // business seeing what the vehicle costs to keep unless it holds the register's key.
+      work: keys.has("work_orders.view")
     }));
   }, [load]);
 

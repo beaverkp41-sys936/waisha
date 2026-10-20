@@ -24,7 +24,9 @@ async function requireAuth(req: any) {
   req.user = claims;
 }
 
-const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip", "shipment", "message", "licence", "employee", "office_cost", "quotation", "cargo_intake"] as const;
+const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip", "shipment", "message", "licence", "employee", "office_cost", "quotation", "cargo_intake",
+  // 109: the garage's own bill, photographed on the desk that closed the visit.
+  "work_order"] as const;
 const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road_licence", "delivery_note", "invoice", "bill_of_lading", "packing_list", "contract", "other", "attachment", "receipt",
   // Clearing-pipeline kinds stored by the job document register (042).
   "arrival_notice", "delivery_order", "declaration", "assessment", "release_note", "permit", "pod", "handover",
@@ -43,7 +45,8 @@ const MAX_MESSAGE_FILES = 5;
 const ENTITY_TABLES: Record<string, string> = {
   user: "users", vessel: "vessels", driver: "drivers", trip: "trips",
   shipment: "cargo_shipments", licence: "regulatory_licences", employee: "employees",
-  office_cost: "office_costs", quotation: "quotations", cargo_intake: "cargo_intake_drafts"
+  office_cost: "office_costs", quotation: "quotations", cargo_intake: "cargo_intake_drafts",
+  work_order: "work_orders"
 };
 
 /** Exported because a day's photo proof is written by the attendance route, and a storage
@@ -195,6 +198,11 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
                 when 'cargo_intake' then (select coalesce(ci.label,
                   'Page ' || ci.position || ' — ' || coalesce(ci.printed_reference, 'unnumbered paper'))
                   from cargo_intake_drafts ci where ci.id = d.entity_id)
+                -- The card's own reference is the label a clerk searches the vault for, so the
+                -- bill filed against a job is found by the job's number. Its tenant is bound here
+                -- as well as through the row it is filed on.
+                when 'work_order' then (select wo.ref || ' — ' || wo.title from work_orders wo
+                  where wo.id = d.entity_id and wo.tenant_id = d.tenant_id)
               end as entity_label
        from documents d
        where d.tenant_id = $1 and d.deleted_at is null
