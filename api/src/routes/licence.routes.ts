@@ -21,8 +21,13 @@ export async function licenceRoutes(app: FastifyInstance, _opts: unknown) {
   app.get("/licence", { preHandler: [requireAuth] }, async (req: any) => {
     const r = await pool.query("select platform_auth.get_licence($1) as l", [req.user.tid]);
     const l = r.rows[0]?.l ?? {};
-    const operational = await pool.query(
-      "select platform_auth.tenant_is_operational() as ok");
+    // tenant_is_operational() reads current_setting('app.tenant_id') and has no argument to
+    // be lied to with, so it has to be asked inside the caller's own tenant context. On the
+    // bare pool the setting is empty, the row lookup matches nothing, and 113's `exists`
+    // answered false for a company in good standing — which is a different wrong answer to
+    // the one 008's `not exists` gave on the same pool (always true), not a fix.
+    const operational = await withTenant(req.user.tid, (c) =>
+      c.query("select platform_auth.tenant_is_operational() as ok"));
     return { ...l, operational: operational.rows[0].ok };
   });
 
