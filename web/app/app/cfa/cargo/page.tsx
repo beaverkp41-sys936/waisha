@@ -1,11 +1,10 @@
 "use client";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { apiFetch } from "../../api-client";
+import { useRouter, useSearchParams } from "next/navigation";
+import { apiFetch, seatPermissions } from "../../api-client";
 import { ExportButtons } from "@/components/ExportButtons";
 import { CargoBatchButton } from "@/components/CargoBatchButton";
-
 function errorText(json: any, fallback: string): string {
   const d = json?.error?.details;
   const extra = Array.isArray(d) && d.length
@@ -67,9 +66,79 @@ const EMPTY: FormState = {
   processingCost: "", paymentAmount: "", paymentStatus: "unpaid", notes: ""
 };
 
+/** What a scanned page carries, as the intake desk stored it. */
+type ScanField = { value: string | number | string[]; raw: string; line: number; variants: number };
+type ScanExtraction = {
+  fields: Record<string, ScanField>;
+  containers?: { number: string; line: number; valid: boolean }[];
+  missing?: string[];
+  notes?: string[];
+  linesRead?: number;
+};
+type ScannedDraft = {
+  id: string; position: number; file_name: string; label: string | null;
+  printed_reference: string | null;
+  shipment_type: string; extract_status: string; extract_notes: string | null;
+  committed_shipment_id: string | null; committed_file_number: string | null;
+  extraction: ScanExtraction | null;
+};
+
+// The form's own text fields, keyed exactly as the reader names them — which is why a scanned
+// page can drop straight in. Money is absent on purpose: `processing_cost`, `payment_amount`
+// and `payment_status` are this office's decision, never a fact printed on someone else's paper.
+const SCAN_TEXT_KEYS: (keyof FormState)[] = [
+  "hsCode", "declarationMode", "cargoDescription", "consigneeName", "consignorName",
+  "shippingLine", "billNumber", "orderDate", "documentReceiptDate", "eta", "dischargeDate",
+  "carryInDate", "termsDelivery", "tansadNumber", "rcnNumber", "referenceNumber",
+  "officeDeclaration", "borderPoint", "nominatedIcd", "cabinetPosition"
+];
+
+function applyScan(base: FormState, ex: ScanExtraction | null, shipmentTypeHint: string): FormState {
+  const f: FormState = { ...base };
+  const value = (k: string) => ex?.fields?.[k]?.value;
+  for (const k of SCAN_TEXT_KEYS) {
+    const v = value(k);
+    if (typeof v === "string" || typeof v === "number") f[k] = String(v);
+  }
+  // The two pick-lists are only taken when the page prints one this desk actually files: an
+  // unknown movement type falls back to the number the clerk gave the page, then to import.
+  const printedType = value("shipmentType");
+  const typed = typeof printedType === "string" && printedType in TYPE_LABELS ? printedType : shipmentTypeHint;
+  f.shipmentType = typed in TYPE_LABELS ? typed : "import";
+  const printedSize = value("containerType");
+  if (typeof printedSize === "string" && printedSize in CONTAINER_LABELS) f.containerType = printedSize;
+  if (!CONTAINER_LABELS[f.containerType]) f.containerType = "20ft";
+  if (!INCOTERMS.includes(f.termsDelivery)) f.termsDelivery = "CIF";
+  const containers = value("containerNumbers");
+  if (Array.isArray(containers) && containers.length) {
+    f.containerNumbers = containers.map(String).join("\n");
+    f.containerCount = String(containers.length);
+  }
+  const weight = value("weightTonnes");
+  if (typeof weight === "number" || typeof weight === "string") f.weightTonnes = String(weight);
+  const cbm = value("cbm");
+  if (typeof cbm === "number" || typeof cbm === "string") f.cbm = String(cbm);
+  // Money stays empty on purpose: processing cost, amount paid and payment status are this
+  // office's own decision, never a fact printed on someone else's paper.
+  return f;
+}
+
+// Only the fields a file of this shape is expected to carry are named by the shelf, so this
+// is the whole list a banner can be asked to translate.
+const MISSING_LABELS: Record<string, string> = {
+  shipmentType: "Shipment type", consigneeName: "Consignee", consignorName: "Consignor",
+  billNumber: "Bill number", cargoDescription: "Cargo description", hsCode: "HS / BHTN code",
+  containerNumbers: "Container numbers", weightTonnes: "Weight (tonnes)", eta: "ETA",
+  termsDelivery: "Terms of delivery", tansadNumber: "TANSAD / declaration number"
+};
+
 function CargoContent() {
+  const router = useRouter();
   const params = useSearchParams();
   const editId = params.get("edit");
+  // A page off the intake shelf, opened by `?draft=`. The id is carried in the URL rather than
+  // the extraction, so what fills the form is exactly what the shelf holds and the clerk saw.
+  const draftId = params.get("draft");
 
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [companyCode, setCompanyCode] = useState<string | null>(null);
@@ -82,6 +151,10 @@ function CargoContent() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [draft, setDraft] = useState<ScannedDraft | null>(null);
+  // The "Open a scanned page" path is only shown to a seat that can read the shelf, and the
+  // "Open as a cargo file" link only to one that can open files. An unknown seat gets neither.
+  const [canExtract, setCanExtract] = useState(false);
   // Ticked for the batch archive. A tick the operator cannot see is a tick they cannot
   // check, so the set is pruned to the rows the desk is listing whenever the list loads.
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -133,6 +206,51 @@ function CargoContent() {
 
   useEffect(() => { load(editId); }, [load, editId]);
 
+  useEffect(() => {
+    seatPermissions().then(keys => setCanExtract(keys.has("shipments.extract")));
+  }, []);
+
+  // One pull per page id. The form is built from EMPTY rather than from whatever was typed
+  // before, because opening a page means "this paper is the basis of the file" — a half-typed
+  // form left under a scan is a form nobody can say the provenance of.
+  const scannedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!draftId) { scannedFor.current = null; setDraft(null); return; }
+    if (scannedFor.current === draftId) return;
+    scannedFor.current = draftId;
+    (async () => {
+      setError(null); setNotice(null);
+      const res = await apiFetch(`/cargo/intake/${draftId}`);
+      const j = await res.json().catch(() => ({}));
+      // Checked by identity, not by a mount flag: this effect runs twice under StrictMode,
+      // and a flag cleared by the first run's cleanup would drop the only reply that came.
+      if (scannedFor.current !== draftId) return;
+      if (!res.ok) {
+        setDraft(null);
+        setError(errorText(j, "Could not open that page from the intake shelf."));
+        return;
+      }
+      const d: ScannedDraft = {
+        id: j.id, position: Number(j.position) || 0, file_name: j.file_name ?? "page.pdf",
+        label: j.label ?? null, printed_reference: j.printed_reference ?? null,
+        shipment_type: j.shipment_type ?? "import", extract_status: j.extract_status ?? "pending",
+        extract_notes: j.extract_notes ?? null,
+        committed_shipment_id: j.committed_shipment_id ?? null,
+        committed_file_number: j.committed_file_number ?? null,
+        extraction: j.extraction ?? null
+      };
+      setDraft(d);
+      if (d.committed_shipment_id) {
+        setShowForm(false);
+        setError(`Page ${d.position} already became cargo file ${d.committed_file_number ?? d.committed_shipment_id}. `
+          + "Open it from the list below to edit it.");
+        return;
+      }
+      setForm(applyScan(EMPTY, d.extraction, d.shipment_type));
+      setShowForm(true);
+    })();
+  }, [draftId]);
+
   const isLoose = form.containerType === "loose_cargo" || form.containerType === "car";
   const containerLines = form.containerNumbers.split("\n").map(s => s.trim()).filter(Boolean);
   const containerCount = Number(form.containerCount) || 0;
@@ -145,6 +263,12 @@ function CargoContent() {
   function set<K extends keyof FormState>(k: K, v: FormState[K]) {
     setForm(f => ({ ...f, [k]: v }));
   }
+
+  // The banner restates what the shelf holds for this page, so every number in it comes from
+  // the same fetch that filled the form — never from a second read of the paper.
+  const scanReadCount = Object.keys(draft?.extraction?.fields ?? {}).length;
+  const scanMissing = (draft?.extraction?.missing ?? []).map(k => MISSING_LABELS[k] ?? k);
+  const scanSuspects = (draft?.extraction?.containers ?? []).filter(c => !c.valid).map(c => c.number);
 
   async function save(mode: "close" | "new") {
     setError(null); setNotice(null); setBusy(true);
@@ -188,11 +312,28 @@ function CargoContent() {
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setError(errorText(j, "Failed to save the cargo file.")); return; }
+      // A file opened from a scanned page gets the page attached to it, so the shelf stops
+      // listing it as still to file. A failed attach is reported as what it is — the file is
+      // open either way, the paper simply stays on the shelf — never as a failed save.
+      let filedNote = "";
+      if (!editing && draft) {
+        const c = await apiFetch(`/cargo/intake/${draft.id}/commit`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ shipmentId: j.id })
+        });
+        const cj = await c.json().catch(() => ({}));
+        filedNote = c.ok
+          ? ` Page ${draft.position} is attached to it.`
+          : ` Page ${draft.position} could not be attached — ${errorText(cj, "the shelf still lists it as unfiled.")}`;
+        setDraft(null);
+        scannedFor.current = null;
+        router.replace("/app/cfa/cargo");
+      }
       if (mode === "new" && !editing) {
-        setNotice("Cargo file opened — the form is ready for the next one.");
+        setNotice("Cargo file opened — the form is ready for the next one." + filedNote);
         setForm(f => ({ ...EMPTY, shipmentType: f.shipmentType, containerType: f.containerType }));
       } else {
-        setNotice(editing ? "Cargo file updated." : `Cargo file ${j.fileNumber ?? ""} opened.`.trim());
+        setNotice((editing ? "Cargo file updated." : `Cargo file ${j.fileNumber ?? ""} opened.`.trim()) + filedNote);
         setForm(EMPTY); setShowForm(false);
       }
       load(null);
@@ -239,7 +380,11 @@ function CargoContent() {
             Clearing and forwarding files — {companyCode ? `your file numbers run as ${prefix}${companyCode}-001-${new Date().getFullYear()}` : "set your company code on the Profile page to open files"}.
           </p>
         </div>
-        <div className="flex gap-8">
+        <div className="flex flex-wrap gap-8">
+          {canExtract && (
+            <Link href="/app/cfa/cargo/intake"
+              className="on-photo-btn px-16 py-8 text-xs font-semibold">Scan PDFs</Link>
+          )}
           <Link href="/app/cfa/cargo/analytics"
             className="on-photo-btn px-16 py-8 text-xs font-semibold">Analytics</Link>
           <button type="button" onClick={() => { setForm(EMPTY); setShowForm(s => !s); }}
@@ -275,6 +420,44 @@ function CargoContent() {
             placeholder="File no, consignee, TANSAD, bill…" className={inputCls} style={inputStyle} />
         </label>
       </section>
+
+      {draft && (
+        <section aria-label="Scanned page this form was built from"
+          className="mt-24 rounded-card border bg-surface p-20" style={{ borderColor: "var(--gold)" }}>
+          <div className="flex flex-wrap items-start justify-between gap-12">
+            <p className="text-xs font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink)" }}>
+              {`Page ${draft.position} — ${draft.label || draft.file_name}`}
+            </p>
+            <Link href="/app/cfa/cargo/intake" className="text-xs font-semibold"
+              style={{ color: "var(--brand)" }}>Intake shelf</Link>
+          </div>
+          <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+            {draft.extract_status === "extracted"
+              ? `This form was built from the paper: ${scanReadCount} field(s) were taken from it, and each one can still be corrected below.`
+              : draft.extract_status === "manual"
+                ? "The page printed nothing this desk can read, so it was filed as one to type. The form below is as it was left — check every line against the paper."
+                : "This page could not be opened, so nothing was taken from it. The form below is as it was left."}
+          </p>
+          {draft.extract_notes && (
+            <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>{draft.extract_notes}</p>
+          )}
+          {scanMissing.length > 0 && (
+            <p className="mt-12 text-xs" style={{ color: "var(--warning)" }}>
+              {`Still to type from the paper: ${scanMissing.join(", ")}.`}
+            </p>
+          )}
+          {scanSuspects.length > 0 && (
+            <p className="mt-8 text-xs" style={{ color: "var(--danger)" }}>
+              {`Container number(s) that fail their own check digit: ${scanSuspects.join(", ")}. Read them against the paper before saving.`}
+            </p>
+          )}
+          <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
+            Processing cost, payment amount and payment status stay blank on a scanned page: charges are this
+            office&apos;s own decision, never a fact printed on someone else&apos;s paper. Saving opens the cargo file
+            and attaches this page to it.
+          </p>
+        </section>
+      )}
 
       {showForm && (
         <form onSubmit={e => { e.preventDefault(); save("close"); }}

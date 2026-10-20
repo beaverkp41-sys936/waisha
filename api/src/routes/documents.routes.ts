@@ -24,7 +24,7 @@ async function requireAuth(req: any) {
   req.user = claims;
 }
 
-const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip", "shipment", "message", "licence", "employee", "office_cost", "quotation"] as const;
+const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip", "shipment", "message", "licence", "employee", "office_cost", "quotation", "cargo_intake"] as const;
 const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road_licence", "delivery_note", "invoice", "bill_of_lading", "packing_list", "contract", "other", "attachment", "receipt",
   // Clearing-pipeline kinds stored by the job document register (042).
   "arrival_notice", "delivery_order", "declaration", "assessment", "release_note", "permit", "pod", "handover",
@@ -39,7 +39,7 @@ const MAX_MESSAGE_FILES = 5;
 const ENTITY_TABLES: Record<string, string> = {
   user: "users", vessel: "vessels", driver: "drivers", trip: "trips",
   shipment: "cargo_shipments", licence: "regulatory_licences", employee: "employees",
-  office_cost: "office_costs", quotation: "quotations"
+  office_cost: "office_costs", quotation: "quotations", cargo_intake: "cargo_intake_drafts"
 };
 
 function sanitizeFileName(name: string): string {
@@ -186,6 +186,9 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
                 when 'employee' then (select full_name from employees emp where emp.id = d.entity_id)
                 when 'office_cost' then (select oc.description from office_costs oc where oc.id = d.entity_id)
                 when 'quotation' then (select q.quotation_number from quotations q where q.id = d.entity_id)
+                when 'cargo_intake' then (select coalesce(ci.label,
+                  'Page ' || ci.position || ' — ' || coalesce(ci.printed_reference, 'unnumbered paper'))
+                  from cargo_intake_drafts ci where ci.id = d.entity_id)
               end as entity_label
        from documents d
        where d.tenant_id = $1 and d.deleted_at is null
@@ -274,7 +277,8 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
       const { id } = req.params as { id: string };
       const r = await withTenant(req.user.tid, async (c) => {
         const prev = await c.query(
-          `select storage_path from documents where id = $1 and tenant_id = $2 and deleted_at is null`,
+          `select storage_path, entity_type, entity_id
+           from documents where id = $1 and tenant_id = $2 and deleted_at is null`,
           [id, req.user.tid]);
         if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Document not found", 404);
         const res = await c.query(
@@ -282,6 +286,15 @@ export async function documentsRoutes(app: FastifyInstance, _opts: unknown) {
            where id = $1 and tenant_id = $3 and deleted_at is null`,
           [id, req.user.sub, req.user.tid]);
         if (res.rowCount) {
+          // An intake page and its draft are one thing: a paper removed from the shelf must
+          // free the number it was holding, or the draft outlives the file it was read from.
+          if (prev.rows[0].entity_type === "cargo_intake") {
+            await c.query(
+              `update cargo_intake_drafts set deleted_at = now(), updated_by = $2
+               where id = $1 and tenant_id = $3 and deleted_at is null
+                 and committed_shipment_id is null`,
+              [prev.rows[0].entity_id, req.user.sub, req.user.tid]);
+          }
           await writeAudit(c, {
             tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
             requestId: req.requestId, entity: "documents", entityId: id,

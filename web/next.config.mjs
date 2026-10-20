@@ -18,6 +18,12 @@ const csp = [
   "script-src 'self' 'unsafe-inline'" + (isDev ? " 'unsafe-eval'" : ""),
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://unpkg.com https://*.tile.openstreetmap.org https://*.supabase.co",
+  // *.supabase.co: the cargo intake shelf frames the signed URL of the page being
+  // checked so a clerk reads the fields against the paper itself. Without this the
+  // default-src fallback refuses the frame in production, where this policy is
+  // enforced rather than reported. The framed document sits on storage's own origin
+  // and frame-ancestors still keeps anyone from framing us.
+  "frame-src https://*.supabase.co",
   "font-src 'self' data:",
   "object-src 'none'",
   "base-uri 'self'",

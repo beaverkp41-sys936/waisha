@@ -45,6 +45,7 @@ import { notificationsRoutes } from "./routes/notifications.routes.js";
 import { reportsRoutes } from "./routes/reports.routes.js";
 import { exportRoutes } from "./routes/export.routes.js";
 import { cargoRoutes } from "./routes/cargo.routes.js";
+import { cargoIntakeRoutes } from "./routes/cargo-intake.routes.js";
 import { consolidationRoutes } from "./routes/consolidation.routes.js";
 import { jobsRoutes } from "./routes/jobs.routes.js";
 import { transportRoutes } from "./routes/transport.routes.js";
@@ -150,6 +151,7 @@ async function main() {
   await app.register(reportsRoutes, { prefix: "/api/v1" });
   await app.register(exportRoutes, { prefix: "/api/v1" });
   await app.register(cargoRoutes, { prefix: "/api/v1" });
+  await app.register(cargoIntakeRoutes, { prefix: "/api/v1" });
   await app.register(consolidationRoutes, { prefix: "/api/v1" });
   await app.register(jobsRoutes, { prefix: "/api/v1" });
   await app.register(transportRoutes, { prefix: "/api/v1" });
