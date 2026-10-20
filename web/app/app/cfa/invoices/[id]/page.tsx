@@ -50,6 +50,9 @@ const METHOD_LABELS: Record<string, string> = {
   cheque: "Cheque", other: "Other"
 };
 const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** The API sends a day, not a moment: noon UTC is the one instant that reads as the same
+ *  date on either side of Greenwich. */
+const dayLabel = (d: string | null) => d ? new Date(`${d}T12:00:00Z`).toLocaleDateString() : "—";
 const money = (n: number) => Math.round(n * 100) / 100;
 /** A converted proforma bills tax per line, so the line the customer reads is
  * the charge plus that line's own tax. */
@@ -213,8 +216,8 @@ export default function InvoiceDetailPage() {
             {inv.customer_email && <p className="text-xs" style={{ color: "var(--ink-soft)" }}>{inv.customer_email}</p>}
           </div>
           <div className="text-xs sm:text-right" style={{ color: "var(--ink)" }}>
-            <p><span style={{ color: "var(--ink-soft)" }}>Issue date: </span>{new Date(inv.issue_date).toLocaleDateString()}</p>
-            {inv.due_date && <p className="mt-4"><span style={{ color: "var(--ink-soft)" }}>Due date: </span>{new Date(inv.due_date).toLocaleDateString()}</p>}
+            <p><span style={{ color: "var(--ink-soft)" }}>Issue date: </span>{dayLabel(inv.issue_date)}</p>
+            {inv.due_date && <p className="mt-4"><span style={{ color: "var(--ink-soft)" }}>Due date: </span>{dayLabel(inv.due_date)}</p>}
             {inv.payment_terms && <p className="mt-4"><span style={{ color: "var(--ink-soft)" }}>Payment terms: </span>{inv.payment_terms}</p>}
             <p className="mt-4"><span style={{ color: "var(--ink-soft)" }}>Currency: </span>{inv.currency}</p>
             {billed && (
@@ -476,8 +479,8 @@ export default function InvoiceDetailPage() {
           </div>
           <div className="mt-8 border-t border-b py-8" style={{ borderColor: "var(--ink)" }}>
             <div className="flex justify-between"><span>No:</span><span className="tabular-nums font-bold">{inv.invoice_number}</span></div>
-            <div className="flex justify-between"><span>Date:</span><span>{new Date(inv.issue_date).toLocaleDateString()}</span></div>
-            {inv.due_date && <div className="flex justify-between"><span>Due:</span><span>{new Date(inv.due_date).toLocaleDateString()}</span></div>}
+            <div className="flex justify-between"><span>Date:</span><span>{dayLabel(inv.issue_date)}</span></div>
+            {inv.due_date && <div className="flex justify-between"><span>Due:</span><span>{dayLabel(inv.due_date)}</span></div>}
             <div className="mt-4"><span style={{ color: "var(--ink-soft)" }}>Customer: </span>{inv.customer_name}</div>
             {inv.customer_tin && <div><span style={{ color: "var(--ink-soft)" }}>TIN: </span>{inv.customer_tin}</div>}
           </div>

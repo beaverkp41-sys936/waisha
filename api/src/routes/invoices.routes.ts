@@ -16,6 +16,20 @@ async function requireAuth(req: any) {
   req.user = claims;
 }
 
+/**
+ * A `date` column arrives from pg as a Date built at local midnight, so the UTC
+ * JSON form is the day before whenever the server sits east of Greenwich. The bill
+ * needs the plain day the clerk chose, so send it as text and let the browser
+ * re-read it at noon — the one shape that cannot shift by a day in either direction.
+ */
+function dayText(v: unknown): string | null {
+  if (!v) return null;
+  if (typeof v === "string") return v.slice(0, 10);
+  const d = new Date(v as Date);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const e164 = z.string().regex(/^\+[1-9]\d{7,14}$/);
 
@@ -131,7 +145,8 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
     async (req: any) => {
       const { rows } = await withTenant(req.user.tid, (c) => c.query(
         `select i.id, i.invoice_number, i.customer_name, i.customer_email, i.customer_tin,
-                i.issue_date, i.due_date, i.currency, i.vat_rate, i.subtotal,
+                i.issue_date::text as issue_date, i.due_date::text as due_date,
+                i.currency, i.vat_rate, i.subtotal,
                 i.vat_amount, i.total, i.amount_paid, i.status, i.notes, i.created_at,
                 ${EFFECTIVE_STATUS_SQL} as effective_status
          from freight_invoices i
@@ -259,18 +274,22 @@ export async function invoicesRoutes(app: FastifyInstance, _opts: unknown) {
         const phone = row.customer_phone_encrypted
           ? decryptField(row.customer_phone_encrypted)
           : null;
+        const issueDate = dayText(row.issue_date);
+        const dueDate = dayText(row.due_date);
 
         // Verification-style QR: invoice number, amount and TIN, scannable text.
         const qrPayload = [
           `WAISHA-INVOICE:${row.invoice_number}`,
           `AMT:${row.currency} ${Number(row.total).toFixed(2)}`,
-          row.due_date ? `DUE:${String(row.due_date).slice(0, 10)}` : null,
+          dueDate ? `DUE:${dueDate}` : null,
           letterhead.rows[0]?.tin_display ? `TIN:${letterhead.rows[0].tin_display}` : null
         ].filter(Boolean).join("|");
         const qrDataUrl = await QRCode.toDataURL(qrPayload, { width: 240, margin: 1 });
 
         return {
           ...row,
+          issue_date: issueDate,
+          due_date: dueDate,
           customer_phone: phone,
           customer_phone_encrypted: undefined,
           customer_phone_search: undefined,

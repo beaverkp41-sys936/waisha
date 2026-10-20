@@ -21,6 +21,10 @@ interface Invoice {
 }
 interface Kpis { invoiced: number; received: number; outstanding: number; overdue: number; }
 
+/** The API sends a day, not a moment: noon UTC is the one instant that reads as the same
+ *  date on either side of Greenwich. */
+const dayLabel = (d: string | null) => d ? new Date(`${d}T12:00:00Z`).toLocaleDateString() : "—";
+
 interface ItemRow { description: string; quantity: string; unit: string; unitPrice: string; }
 interface InvoiceForm {
   customerName: string; customerPhone: string; customerEmail: string;
@@ -419,12 +423,12 @@ export default function InvoicesPage() {
                   {inv.customer_tin && <span className="block text-xs" style={{ color: "var(--ink-soft)" }}>TIN {inv.customer_tin}</span>}
                 </td>
                 <td className="p-12 tabular-nums" style={{ color: "var(--ink-soft)" }}>
-                  {inv.issue_date ? new Date(inv.issue_date).toLocaleDateString() : "—"}
+                  {dayLabel(inv.issue_date)}
                 </td>
                 <td className="p-12 tabular-nums" style={{
                   color: inv.effective_status === "overdue" ? "var(--danger)" : "var(--ink-soft)"
                 }}>
-                  {inv.due_date ? new Date(inv.due_date).toLocaleDateString() : "—"}
+                  {dayLabel(inv.due_date)}
                 </td>
                 <td className="p-12 tabular-nums" style={{ color: "var(--ink)" }}>{fmt(Number(inv.total))}</td>
                 <td className="p-12 tabular-nums" style={{ color: "var(--success)" }}>{fmt(Number(inv.amount_paid))}</td>
