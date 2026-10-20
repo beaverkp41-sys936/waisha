@@ -29,6 +29,10 @@ const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road
   // Clearing-pipeline kinds stored by the job document register (042).
   "arrival_notice", "delivery_order", "declaration", "assessment", "release_note", "permit", "pod", "handover",
   // CFA billing (052): the generated proforma/quotation itself.
+  //
+  // 'attendance_proof' is deliberately NOT here even though migration 107 lets the column hold
+  // it: that kind is only ever written by /attendance/confirm, beside the day it proves. A desk
+  // that could file one through this route would be filing an alibi with no day attached to it.
   "proforma"] as const;
 const IMAGE_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const DOC_MIMES = [...IMAGE_MIMES, "application/pdf"];
@@ -42,7 +46,9 @@ const ENTITY_TABLES: Record<string, string> = {
   office_cost: "office_costs", quotation: "quotations", cargo_intake: "cargo_intake_drafts"
 };
 
-function sanitizeFileName(name: string): string {
+/** Exported because a day's photo proof is written by the attendance route, and a storage
+ * path must be built the same way wherever a file is placed in the tenant's prefix. */
+export function sanitizeFileName(name: string): string {
   const base = (name || "file").split(/[\\/]/).pop() ?? "file";
   const clean = base.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
   return clean || "file";

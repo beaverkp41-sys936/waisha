@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { apiFetch } from "../../api-client";
 
@@ -17,7 +17,11 @@ interface CompanyDay {
   workStart: string; workEnd: string; grace: number; annualLeaveDays: number;
   zone: string; today: string; isWeekday: boolean; saved: boolean;
 }
-interface BoardRow {
+interface ProofBits {
+  confirmed_at: string | null; proof_kind: string | null;
+  proof_accuracy_m: number | null; proof_document_id: string | null;
+}
+interface BoardRow extends ProofBits {
   employee_id: string; full_name: string; job_title: string | null; department: string | null;
   employment_type: string | null; has_account: boolean;
   attendance_id: string | null; day_status: string | null;
@@ -27,11 +31,13 @@ interface BoardRow {
   leave_starts_on: string | null; leave_ends_on: string | null;
 }
 interface Board { day: CompanyDay; workDate: string; rows: BoardRow[] }
-interface Line {
+interface Line extends ProofBits {
   id: string; employee_id: string; full_name: string; job_title: string | null;
   department: string | null; employment_type: string | null; work_date: string;
   day_status: string; clock_in: string | null; clock_out: string | null;
   minutes_late: number | null; note: string | null; hours_worked: number | null;
+  // Only ever present on a person's own days: the register lists no coordinates for anybody.
+  proof_lat?: number | null; proof_lng?: number | null;
 }
 interface PersonTotal {
   employee_id: string; full_name: string; days: number; present_days: number; late_days: number;
@@ -67,6 +73,18 @@ interface RegisterResp {
   leave: { id: string; employee_id: string; full_name: string; leave_kind: string; status: string; starts_on: string; ends_on: string; working_days: number }[];
 }
 interface EmpOption { id: string; full_name: string; status: string; job_title?: string | null }
+interface ProofView {
+  id: string; employee: { id: string; fullName: string }; workDate: string;
+  confirmedAt: string; confirmedBy: string | null; proofKind: "location" | "photo";
+  lat: number | null; lng: number | null; accuracyM: number | null; keptTo: string;
+  document: { id: string; fileName: string; mimeType: string; sizeBytes: number; url: string } | null;
+}
+
+/** The same cap the route puts on the file part, so a person learns it from their own screen. */
+const PROOF_MAX_BYTES = 8 * 1024 * 1024;
+const PROOF_KIND_LABELS: Record<string, string> = { location: "Device location", photo: "Photograph" };
+/** Migration 107 rounds a stored position to three decimals; a read-back day carries no note of it. */
+const COARSE_BY = "about 100 m";
 
 const DAY_STATUS_LABELS: Record<string, string> = {
   present: "Present", late: "Late", half_day: "Half day", absent: "Absent",
@@ -178,6 +196,9 @@ export default function OfficeAttendancePage() {
   const [deciding, setDeciding] = useState<{ row: LeaveRow; decision: "approve" | "reject" } | null>(null);
   const [decisionNote, setDecisionNote] = useState("");
   const [settings, setSettings] = useState({ workStart: "", workEnd: "", grace: "", annualDays: "", timezone: "" });
+  const [proof, setProof] = useState<ProofView | null>(null);
+  const [askingProof, setAskingProof] = useState(false);
+  const proofInput = useRef<HTMLInputElement>(null);
 
   const zone = day?.zone;
 
@@ -298,6 +319,88 @@ export default function OfficeAttendancePage() {
       : `Closed at ${zoneTime(j.clock_out, zone)} — ${fmtHours(j.hours_worked)} on the clock.`
   );
 
+  /**
+   * The device's own answer, wrapped so a refusal arrives as words rather than a hung button.
+   * A phone is asked for the accurate reading and given no stale cache to hide behind: this is
+   * one person saying where they were once a day, not a trace.
+   */
+  function askPosition(): Promise<{ lat: number; lng: number; accuracyM: number | null }> {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error("This browser will not give up a position at all. Confirm the day with a photograph."));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({
+          lat: p.coords.latitude, lng: p.coords.longitude,
+          accuracyM: p.coords.accuracy ?? null
+        }),
+        (e) => reject(new Error(
+          e.code === e.PERMISSION_DENIED
+            ? "The browser refused to share a position. Allow it for this site, or confirm the day with a photograph."
+            : e.code === e.POSITION_UNAVAILABLE
+              ? "The device found no position just now — no GPS fix, or a browser that will not ask. A photograph does the same job."
+              : "Waiting for a position took too long. Try again by a window, or confirm with a photograph."
+        )),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
+  }
+
+  async function confirmByLocation() {
+    reset(); setAskingProof(true);
+    let pos: { lat: number; lng: number; accuracyM: number | null };
+    try {
+      pos = await askPosition();
+    } catch (e) {
+      setAskingProof(false);
+      setError(e instanceof Error ? e.message : "The device gave no position.");
+      return;
+    }
+    setAskingProof(false);
+    await run("Day confirmed by location",
+      () => post("/attendance/confirm", { proof: "location", lat: pos.lat, lng: pos.lng, accuracyM: pos.accuracyM }),
+      (j) => `Confirmed for ${j.work_date} at about ${j.proof_lat}, ${j.proof_lng} — kept to ${j.coarse_by}, not to the metre.`);
+  }
+
+  function pickProofPhoto() {
+    reset();
+    proofInput.current?.click();
+  }
+
+  async function confirmByPhoto(ev: React.ChangeEvent<HTMLInputElement>) {
+    const f = ev.target.files?.[0];
+    ev.target.value = "";
+    if (!f) return;
+    reset();
+    if (!["image/jpeg", "image/png", "image/webp"].includes(f.type)) {
+      setError("The photograph has to be a JPEG, PNG or WebP image.");
+      return;
+    }
+    if (f.size > PROOF_MAX_BYTES) {
+      setError(`That photograph is ${(f.size / (1024 * 1024)).toFixed(2)} MB. A confirmation picture is capped at 8 MB — crop it or take a smaller one.`);
+      return;
+    }
+    const fd = new FormData();
+    // The proof names itself before the picture. The route reads the whole body before it
+    // interprets any of it, so either order works — this one is simply the story in the order
+    // a person would tell it: "I was here, and this is the photograph that proves it".
+    fd.append("proof", "photo");
+    fd.append("file", f, f.name);
+    await run("Day confirmed by photograph",
+      () => apiFetch("/attendance/confirm", { method: "POST", body: fd })
+        .then(async r => ({ status: r.status, json: await readJson(r) })),
+      (j) => `Confirmed for ${j.work_date} with the photograph — the office can open it from your line.`);
+  }
+
+  async function openProof(line: { id: string; full_name: string; work_date: string }) {
+    reset();
+    const res = await apiFetch(`/attendance/${line.id}/proof`);
+    const j = await readJson(res);
+    if (!res.ok) { setError(errorText(j, `Could not open ${line.full_name}'s proof.`)); return; }
+    setProof(j as ProofView);
+  }
+
   function openLine(l: { id: string; employee_id: string; full_name: string; work_date: string; day_status: string; clock_in: string | null; clock_out: string | null; note: string | null }) {
     setDraft({
       id: l.id, employee: l.full_name, workDate: l.work_date, dayStatus: l.day_status,
@@ -378,6 +481,7 @@ export default function OfficeAttendancePage() {
   const rows = board?.rows ?? [];
   const counted = (s: string) => rows.filter(r => r.day_status === s).length;
   const onApprovedLeave = rows.filter(r => r.leave_id && !r.attendance_id).length;
+  const confirmedToday = rows.filter(r => r.confirmed_at).length;
   const unrecorded = rows.filter(r => !r.attendance_id && !r.leave_id).length;
   const filled = rows.length ? Math.round(((rows.length - unrecorded) / rows.length) * 100) : 0;
   const windowPct = day ? (() => {
@@ -426,12 +530,56 @@ export default function OfficeAttendancePage() {
       <div className="mt-24 flex flex-wrap gap-8">
         {TABS.map(t => (
           <button key={t.key} type="button"
-            onClick={() => { setView(t.key); reset(); setDraft(null); setStated(null); setLeaveForm(null); setDeciding(null); }}
+            onClick={() => { setView(t.key); reset(); setDraft(null); setStated(null); setLeaveForm(null); setDeciding(null); setProof(null); }}
             className={"on-photo-btn rounded-input px-16 py-8 text-xs font-semibold" + (view === t.key ? " is-on" : "")}>
             {t.label}{t.key === "leave" && pending.length ? ` (${pending.length})` : ""}
           </button>
         ))}
       </div>
+
+      {/* ================= One day's proof ================= */}
+      {proof && (
+        <section className="mt-16 px-16 py-12"
+          style={{ background: "color-mix(in srgb, var(--brand) 6%, transparent)", borderLeft: "4px solid var(--brand)" }}>
+          <div className="flex flex-wrap items-start justify-between gap-12">
+            <div>
+              <p className={h2Cls} style={{ color: "var(--ink)" }}>
+                {proof.employee.fullName} — {PROOF_KIND_LABELS[proof.proofKind] ?? proof.proofKind} for{" "}
+                {longDate(proof.workDate)}
+              </p>
+              <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                Confirmed at {zoneTime(proof.confirmedAt, zone)}{" "}{zoneShort(zone, proof.confirmedAt)
+                  ? `(${zoneShort(zone, proof.confirmedAt)})` : ""}.{" "}
+                {proof.proofKind === "location"
+                  ? <>The device said about {proof.lat}, {proof.lng} — kept to {proof.keptTo}
+                    {proof.accuracyM != null ? `, and it claimed ±${proof.accuracyM} m at the moment it was sent` : ""}.</>
+                  : "This is the picture the person sent with the day."}
+              </p>
+            </div>
+            <button type="button" onClick={() => setProof(null)}
+              className="text-xs underline" style={{ color: "var(--ink-soft)" }}>Close</button>
+          </div>
+          {proof.document?.url && (
+            <div className="mt-16">
+              <img src={proof.document.url}
+                alt={`Confirmation photograph for ${proof.employee.fullName} on ${proof.workDate}`}
+                className="max-h-[420px] w-full rounded-card border object-contain"
+                style={{ borderColor: "var(--line)", background: "var(--milk)" }} />
+              <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                {proof.document.fileName} · {(proof.document.sizeBytes / 1024).toFixed(0)} KB ·
+                stored in this company's own files; the link above dies in five minutes.
+              </p>
+            </div>
+          )}
+          <p className="mt-12 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+            Opening a proof is written in the company's record — who looked, at whose day, and when.
+            The register itself never prints where anybody was.
+          </p>
+        </section>
+      )}
+
+      <input ref={proofInput} type="file" hidden accept="image/jpeg,image/png,image/webp"
+        onChange={confirmByPhoto} />
 
       {/* ================= Today ================= */}
       {view === "today" && board && (
@@ -454,6 +602,7 @@ export default function OfficeAttendancePage() {
                 {chip(`${counted("late")} late`, DAY_STATUS_COLORS.late)}
                 {chip(`${onApprovedLeave} on leave`, DAY_STATUS_COLORS.on_leave)}
                 {chip(`${unrecorded} unrecorded`, unrecorded ? DAY_STATUS_COLORS.absent : "var(--ink-soft)")}
+                {chip(`${confirmedToday} confirmed`, confirmedToday ? DAY_STATUS_COLORS.present : "var(--ink-soft)")}
               </div>
             </div>
             <div className="mt-16">{bar(filled, filled === 100 ? "var(--success)" : "var(--brand)", 8)}</div>
@@ -652,6 +801,12 @@ export default function OfficeAttendancePage() {
                               {LEAVE_KIND_LABELS[r.leave_kind] ?? r.leave_kind} leave {shortDate(r.leave_starts_on)}–{shortDate(r.leave_ends_on)}
                             </p>
                           )}
+                          {r.confirmed_at && (
+                            <p className="mt-4 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                              Confirmed {zoneTime(r.confirmed_at, zone)} — {PROOF_KIND_LABELS[r.proof_kind ?? ""] ?? r.proof_kind}
+                              {r.proof_kind === "location" && r.proof_accuracy_m != null ? `, ±${r.proof_accuracy_m} m` : ""}
+                            </p>
+                          )}
                           {r.note && <p className="mt-4 text-[10px]" style={{ color: "var(--ink-soft)" }}>{r.note}</p>}
                         </td>
                         <td className={`${thCls} tabular-nums`} style={{ color: "var(--ink)" }}>{zoneTime(r.clock_in, zone)}</td>
@@ -689,6 +844,13 @@ export default function OfficeAttendancePage() {
                                 }}
                                 className="text-[11px] underline" style={{ color: "var(--ink-soft)" }}>
                                 Correct
+                              </button>
+                            )}
+                            {r.attendance_id && r.confirmed_at && (
+                              <button type="button" disabled={busy}
+                                onClick={() => openProof({ id: r.attendance_id!, full_name: r.full_name, work_date: board.workDate })}
+                                className="text-[11px] underline" style={{ color: "var(--ink-soft)" }}>
+                                Proof
                               </button>
                             )}
                             {!r.attendance_id && !open && (
@@ -755,6 +917,48 @@ export default function OfficeAttendancePage() {
                           Clock out
                         </button>
                       </div>
+
+                      {today?.confirmed_at ? (
+                        <div className="mt-16 px-12 py-8"
+                          style={{ background: "color-mix(in srgb, var(--success) 8%, transparent)", borderLeft: "4px solid var(--success)" }}>
+                          <p className="text-[11px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--success)" }}>
+                            Confirmed at {zoneTime(today.confirmed_at, zone)} — {PROOF_KIND_LABELS[today.proof_kind ?? ""] ?? today.proof_kind}
+                          </p>
+                          <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                            {today.proof_kind === "location"
+                              ? <>Your device reported about {today.proof_lat}, {today.proof_lng}
+                                {today.proof_accuracy_m != null ? ` (±${today.proof_accuracy_m} m at the moment you sent it)` : ""}.
+                                The register keeps it to {COARSE_BY} — not which chair you sat in.</>
+                              : "The photograph you sent is filed with the day, and only the office desk opens it from your line."}
+                          </p>
+                          <button type="button" disabled={busy}
+                            onClick={() => openProof({ id: today.id, full_name: mine.employee?.full_name ?? "your day", work_date: today.work_date })}
+                            className="mt-8 text-[11px] underline" style={{ color: "var(--ink-soft)" }}>
+                            Open my proof
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="mt-16">
+                          <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Confirm today at work</p>
+                          <div className="flex flex-wrap gap-8">
+                            <button type="button" disabled={busy || askingProof}
+                              onClick={confirmByLocation}
+                              className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">
+                              {askingProof ? "Asking your device…" : "Confirm by location"}
+                            </button>
+                            <button type="button" disabled={busy || askingProof}
+                              onClick={pickProofPhoto}
+                              className="on-photo-btn rounded-input px-16 py-8 text-xs font-semibold">
+                              Confirm with a photo
+                            </button>
+                          </div>
+                          <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                            One of the two, once a day. A location is rounded to about 100 m and a photo is stored in your
+                            company's own files; neither is a live trace, and the day keeps the proof it was given.
+                          </p>
+                        </div>
+                      )}
+
                       <p className="mt-12 text-[10px]" style={{ color: "var(--ink-soft)" }}>
                         Times are stamped by the server clock — a missed stamp is put right by the office, not by you.
                       </p>
@@ -814,7 +1018,19 @@ export default function OfficeAttendancePage() {
                             <p className="font-semibold tabular-nums" style={{ color: "var(--ink)" }}>{shortDate(a.work_date)}</p>
                             <p className="text-[10px]" style={{ color: "var(--ink-soft)" }}>{dayName(a.work_date).slice(0, 3)}</p>
                           </td>
-                          <td className="p-12">{chip(DAY_STATUS_LABELS[a.day_status] ?? a.day_status, DAY_STATUS_COLORS[a.day_status] ?? "var(--ink-soft)")}</td>
+                          <td className="p-12">
+                            {chip(DAY_STATUS_LABELS[a.day_status] ?? a.day_status, DAY_STATUS_COLORS[a.day_status] ?? "var(--ink-soft)")}
+                            {a.confirmed_at && (
+                              <p className="mt-4 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                                {PROOF_KIND_LABELS[a.proof_kind ?? ""] ?? a.proof_kind} at {zoneTime(a.confirmed_at, zone)} ·{" "}
+                                <button type="button" disabled={busy}
+                                  onClick={() => openProof({ id: a.id, full_name: mine.employee?.full_name ?? "your day", work_date: a.work_date })}
+                                  className="underline" style={{ color: "var(--ink-soft)" }}>
+                                  proof
+                                </button>
+                              </p>
+                            )}
+                          </td>
                           <td className="p-12 tabular-nums text-xs" style={{ color: "var(--ink-soft)" }}>
                             {zoneTime(a.clock_in, zone)} – {zoneTime(a.clock_out, zone)}
                           </td>
@@ -1058,7 +1274,15 @@ export default function OfficeAttendancePage() {
                           <p className="font-semibold" style={{ color: "var(--ink)" }}>{l.full_name}</p>
                           {l.note && <p className="text-[10px]" style={{ color: "var(--ink-soft)" }}>{l.note}</p>}
                         </td>
-                        <td className={thCls}>{chip(DAY_STATUS_LABELS[l.day_status] ?? l.day_status, DAY_STATUS_COLORS[l.day_status] ?? "var(--ink-soft)")}</td>
+                        <td className={thCls}>
+                          {chip(DAY_STATUS_LABELS[l.day_status] ?? l.day_status, DAY_STATUS_COLORS[l.day_status] ?? "var(--ink-soft)")}
+                          {l.confirmed_at && (
+                            <p className="mt-4 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                              Confirmed {shortDate(l.work_date)} {zoneTime(l.confirmed_at, zone)} —{" "}
+                              {PROOF_KIND_LABELS[l.proof_kind ?? ""] ?? l.proof_kind}
+                            </p>
+                          )}
+                        </td>
                         <td className={`${thCls} tabular-nums`} style={{ color: "var(--ink)" }}>{zoneTime(l.clock_in, zone)}</td>
                         <td className={`${thCls} tabular-nums`} style={{ color: "var(--ink)" }}>{zoneTime(l.clock_out, zone)}</td>
                         <td className={`${thCls} tabular-nums`} style={{ color: (l.minutes_late ?? 0) > 0 ? "var(--warning)" : "var(--ink-soft)" }}>
@@ -1066,8 +1290,17 @@ export default function OfficeAttendancePage() {
                         </td>
                         <td className={`${thCls} tabular-nums`} style={{ color: "var(--ink)" }}>{fmtHours(l.hours_worked)}</td>
                         <td className={thCls}>
-                          <button type="button" disabled={busy} onClick={() => openLine(l)}
-                            className="text-[11px] underline" style={{ color: "var(--ink-soft)" }}>Correct</button>
+                          <div className="flex flex-wrap gap-8">
+                            <button type="button" disabled={busy} onClick={() => openLine(l)}
+                              className="text-[11px] underline" style={{ color: "var(--ink-soft)" }}>Correct</button>
+                            {l.confirmed_at && (
+                              <button type="button" disabled={busy}
+                                onClick={() => openProof({ id: l.id, full_name: l.full_name, work_date: l.work_date })}
+                                className="text-[11px] underline" style={{ color: "var(--ink-soft)" }}>
+                                Proof
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}

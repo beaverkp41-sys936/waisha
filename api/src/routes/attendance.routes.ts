@@ -4,6 +4,11 @@ import { z } from "zod";
 import { withTenant } from "../db/pool.js";
 import { ApiError } from "../util/errors.js";
 import { uuidv7 } from "../util/uuid.js";
+import { ProofRejected, readProof } from "../util/geo-proof.js";
+import { sniffFileType } from "../util/upload.js";
+import { storageConfigured, putObject, signObject, StorageUnavailableError } from "../storage/supabase.js";
+import { sanitizeFileName } from "./documents.routes.js";
+import { enforceRateLimit } from "../security/ratelimit.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { requirePermission, checkPermission } from "../security/permissions.js";
 import { writeAudit } from "../audit/audit.js";
@@ -72,7 +77,22 @@ const settingsSchema = z.object({
 const LINE_SELECT_SQL = `a.id, a.employee_id, e.full_name, e.job_title, e.department,
   e.employment_type, a.work_date::text as work_date, a.day_status,
   a.clock_in, a.clock_out, a.minutes_late, a.note,
+  a.confirmed_at, a.proof_kind, a.proof_accuracy_m, a.proof_document_id,
   (extract(epoch from (a.clock_out - a.clock_in)) / 3600)::float8 as hours_worked`;
+
+/** The same cap @fastify/multipart is mounted with, so an over-size file is refused here
+ *  with a sentence rather than as a parser error. */
+const PROOF_MAX_BYTES = 8 * 1024 * 1024;
+const PROOF_IMAGE_MIMES = ["image/jpeg", "image/png", "image/webp"];
+
+const PROOF_REJECTIONS: Record<string, string> = {
+  "proof": "Say how the day is confirmed — with the device's location or with a photograph.",
+  "lat": "The device did not report a latitude a confirmation can be made of.",
+  "lng": "The device did not report a longitude a confirmation can be made of.",
+  "accuracyM": "The accuracy figure has to be between 0 and 20 000 metres.",
+  "location-has-no-position": "The device reported no position. Take a photograph instead.",
+  "photo-has-coordinates": "A photograph is the proof on its own — send a picture or a location, not both."
+};
 
 function isClash(e: unknown): boolean {
   return !!e && typeof e === "object" && (e as { code?: string }).code === "23505";
@@ -205,6 +225,7 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
                   e.user_id is not null as has_account,
                   a.id as attendance_id, a.day_status, a.clock_in, a.clock_out,
                   a.minutes_late, a.note,
+                  a.confirmed_at, a.proof_kind, a.proof_accuracy_m, a.proof_document_id,
                   (extract(epoch from (a.clock_out - a.clock_in)) / 3600)::float8 as hours_worked,
                   lr.id as leave_id, lr.leave_kind, lr.status as leave_status,
                   lr.starts_on::text as leave_starts_on, lr.ends_on::text as leave_ends_on
@@ -241,7 +262,9 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
           .toISOString().slice(0, 10);
         const attendance = await c.query(
           `select a.id, a.work_date::text as work_date, a.day_status, a.clock_in, a.clock_out,
-                  a.minutes_late, a.note,
+                  a.minutes_late, a.note, a.confirmed_at, a.proof_kind, a.proof_accuracy_m,
+                  a.proof_document_id,
+                  a.proof_lat, a.proof_lng,
                   (extract(epoch from (a.clock_out - a.clock_in)) / 3600)::float8 as hours_worked
              from employee_attendance a
             where a.tenant_id = $1 and a.employee_id = $2 and a.deleted_at is null
@@ -267,7 +290,13 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
         const annualUsed = Number(used.rows[0]?.days ?? 0);
         return {
           linked: true, day, employee: own,
-          attendance: attendance.rows.map((r: any) => ({ ...r, hours_worked: hours(r.hours_worked) })),
+          // numeric(9,6) comes back as "-6.792000"; a card that says the position was kept to
+          // about 100 m cannot show six decimals to prove it. Same shape as the other two reads.
+          attendance: attendance.rows.map((r: any) => ({
+            ...r, hours_worked: hours(r.hours_worked),
+            proof_lat: r.proof_lat === null ? null : Number(r.proof_lat),
+            proof_lng: r.proof_lng === null ? null : Number(r.proof_lng)
+          })),
           leave: leave.rows,
           annual: {
             year, entitlement: day.annualLeaveDays, used: annualUsed,
@@ -461,6 +490,271 @@ export async function attendanceRoutes(app: FastifyInstance, _opts: unknown) {
         });
         const row = saved.rows[0];
         return { ...row, id, hours_worked: hours(row.hours_worked) };
+      });
+    });
+
+  /**
+   * "I am at work today" — proved by the device's position or by a photograph (task #182).
+   *
+   * Only ever the caller's own day: a confirmation is a statement about where *you* were, so
+   * holding the desk key for other people is no reason to be able to press their button. The
+   * clock stays the server's for the same reason the clock-in's is. Both proofs ride with the
+   * day in one request, because a photograph filed on its own is a file with no story, and a
+   * confirmation that lost its upload would be a person told they were not at work.
+   */
+  app.post("/attendance/confirm", { preHandler: [requireAuth, requirePermission("attendance.clock")] },
+    async (req: any, reply) => {
+      await enforceRateLimit(`attendance-confirm:uid:${req.user.sub}`, 20, 3600);
+
+      let fields: Record<string, unknown> = (req.body ?? {}) as Record<string, unknown>;
+      let upload: { bytes: Buffer; filename: string; mimetype: string; cutShort: boolean } | null = null;
+      if (typeof req.isMultipart === "function" && req.isMultipart()) {
+        const data = await req.file();
+        if (!data) {
+          throw new ApiError("VALIDATION_FAILED", "Attach the photograph to the confirmation.", 400,
+            [{ field: "file" }]);
+        }
+        const bytes = await data.toBuffer();
+        const f = (data.fields ?? {}) as Record<string, { value?: unknown }>;
+        // A multipart confirmation is the photograph's shape, but the fields are read in full
+        // rather than cherry-picked: a form that carried both a picture and a position has to be
+        // refused by name, and one that carried a position and no picture has to be refused for
+        // the file. Silently dropping the numbers would store a story the person never told.
+        // Hence the order: the body is drained before the fields are read, so a client that put
+        // its metadata after the file part is answered from what it actually sent, not from
+        // whichever chunk happened to arrive first.
+        fields = {
+          proof: f.proof?.value, lat: f.lat?.value, lng: f.lng?.value,
+          accuracyM: f.accuracyM?.value
+        };
+        upload = {
+          bytes,
+          filename: data.filename || "photo",
+          mimetype: (data.mimetype || "").toLowerCase(),
+          // The plugin stops reading at its own 8 MB and hands back what got through, so a
+          // nine-megabyte camera roll arrives here as a truncated file of exactly the cap. Its
+          // length then looks lawful and its bytes fail the sniff, and the person is told their
+          // photograph is not an image. The flag is the truth about what was sent.
+          cutShort: Boolean((data as any).file?.truncated)
+        };
+      }
+
+      let proof: ReturnType<typeof readProof>;
+      try {
+        proof = readProof(fields);
+      } catch (e) {
+        if (e instanceof ProofRejected) {
+          throw new ApiError("VALIDATION_FAILED",
+            PROOF_REJECTIONS[e.reason] ?? "The proof is not usable.", 400, [{ field: e.reason }]);
+        }
+        throw e;
+      }
+
+      if (proof.kind === "photo") {
+        if (!upload) {
+          throw new ApiError("VALIDATION_FAILED", "Attach the photograph to the confirmation.", 400,
+            [{ field: "file" }]);
+        }
+        if (!storageConfigured()) {
+          throw new ApiError("STORAGE_UNAVAILABLE",
+            "Photographs cannot be filed yet — the file store is not configured.", 503);
+        }
+        if (upload.bytes.length === 0) {
+          throw new ApiError("VALIDATION_FAILED", "The photograph is empty.", 400, [{ field: "file" }]);
+        }
+        if (upload.cutShort || upload.bytes.length > PROOF_MAX_BYTES) {
+          throw new ApiError("VALIDATION_FAILED", "A confirmation photograph is limited to 8 MB.",
+            400, [{ field: "file" }]);
+        }
+        if (!PROOF_IMAGE_MIMES.includes(upload.mimetype)) {
+          throw new ApiError("VALIDATION_FAILED", "The photograph has to be a JPEG, PNG or WebP image.",
+            400, [{ field: "file" }]);
+        }
+        // The browser's declared type is not evidence — the bytes decide.
+        if (sniffFileType(upload.bytes) !== upload.mimetype) {
+          throw new ApiError("VALIDATION_FAILED",
+            "The file is not the image its name claims.", 400, [{ field: "file" }]);
+        }
+      } else if (upload) {
+        throw new ApiError("VALIDATION_FAILED", "A location confirmation carries no file.", 400,
+          [{ field: "file" }]);
+      }
+
+      const result = await withTenant(req.user.tid, async (c) => {
+        const day = await companyDay(c, req.user.tid);
+        const own = await findOwnEmployee(c, req.user.tid, req.user.sub);
+        if (!own) {
+          throw new ApiError("VALIDATION_FAILED",
+            "This sign-in is not linked to a staff record yet. The office has to add the person to the employees register and connect the account.",
+            400, [{ field: "employeeId" }]);
+        }
+        assertWorking({ name: own.full_name, status: own.status });
+
+        const at = new Date();
+        const workDate = await localDate(c, day.zone, at);
+        const prev = await c.query(
+          `select id, clock_in, day_status, confirmed_at from employee_attendance
+            where tenant_id = $1 and employee_id = $2 and work_date = $3::date and deleted_at is null`,
+          [req.user.tid, own.id, workDate]);
+        if (prev.rowCount && prev.rows[0].confirmed_at) {
+          throw new ApiError("CONFLICT",
+            "This day is already confirmed — its proof is on the register.", 409);
+        }
+        // A stated absence, a leave day or a holiday is the office's finding about the day,
+        // and a clock-in with a picture would contradict it in silence. Say so instead.
+        if (prev.rowCount && !prev.rows[0].clock_in
+          && !["present", "late", "half_day"].includes(prev.rows[0].day_status)) {
+          throw new ApiError("CONFLICT",
+            `The office has already stated this day as ${String(prev.rows[0].day_status).replace("_", " ")}. `
+            + "Ask them to correct it first.", 409);
+        }
+
+        let documentId: string | null = null;
+        if (proof.kind === "photo" && upload) {
+          documentId = uuidv7();
+          const fileName = sanitizeFileName(upload.filename);
+          const storagePath = `${req.user.tid}/employee/${own.id}/${documentId}-${fileName}`;
+          try {
+            await putObject(storagePath, upload.bytes, upload.mimetype);
+          } catch (e) {
+            if (e instanceof StorageUnavailableError) {
+              throw new ApiError("STORAGE_UNAVAILABLE",
+                "Photographs cannot be filed yet — the file store is not configured.", 503);
+            }
+            req.log.error(e, "attendance proof upload failed");
+            throw new ApiError("INTERNAL", "The photograph could not be stored. Try again.", 502);
+          }
+          await c.query(
+            `insert into documents (id, tenant_id, entity_type, entity_id, kind,
+               file_name, mime_type, size_bytes, storage_path, uploaded_by, created_by, updated_by)
+             values ($1,$2,'employee',$3,'attendance_proof',$4,$5,$6,$7,$8,$8,$8)`,
+            [documentId, req.user.tid, own.id, fileName, upload.mimetype,
+             upload.bytes.length, storagePath, req.user.sub]);
+        }
+
+        let id: string;
+        if (prev.rowCount) {
+          id = prev.rows[0].id;
+          // An open clock is left alone; a day that was stated with no stamp gets one, so the
+          // lateness trigger reads the confirmation exactly as it reads a plain clock-in.
+          await c.query(
+            `update employee_attendance
+                set clock_in = coalesce(clock_in, $2),
+                    confirmed_at = $2, confirmed_by = $3,
+                    proof_kind = $4, proof_lat = $5, proof_lng = $6,
+                    proof_accuracy_m = $7, proof_document_id = $8,
+                    updated_by = $3, updated_at = now()
+              where id = $1 and tenant_id = $9`,
+            [id, at.toISOString(), req.user.sub, proof.kind, proof.lat, proof.lng,
+             proof.accuracyM, documentId, req.user.tid]);
+        } else {
+          id = uuidv7();
+          await c.query(
+            `insert into employee_attendance
+               (id, tenant_id, employee_id, work_date, clock_in, day_status, note,
+                confirmed_at, confirmed_by, proof_kind, proof_lat, proof_lng,
+                proof_accuracy_m, proof_document_id, created_by, updated_by)
+             values ($1,$2,$3,$4::date,$5,'present',$6,$5,$7,$8,$9,$10,$11,$12,$7,$7)`,
+            [id, req.user.tid, own.id, workDate, at.toISOString(),
+             "Self clock-in", req.user.sub, proof.kind, proof.lat, proof.lng,
+             proof.accuracyM, documentId]);
+        }
+
+        const saved = await c.query(
+          `select id, work_date::text as work_date, day_status, clock_in, clock_out, minutes_late,
+                  confirmed_at, confirmed_by, proof_kind, proof_lat, proof_lng,
+                  proof_accuracy_m, proof_document_id
+             from employee_attendance where id = $1 and tenant_id = $2`,
+          [id, req.user.tid]);
+        const r = saved.rows[0];
+        await writeAudit(c, {
+          tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
+          requestId: req.requestId, entity: "employee_attendance", entityId: id,
+          action: "attendance.confirmed",
+          after: {
+            employeeId: own.id, fullName: own.full_name, workDate, at: at.toISOString(),
+            proof: r.proof_kind, accuracyM: r.proof_accuracy_m, documentId
+            // The coordinates themselves stay in the row: an audit trail that quoted where
+            // everybody was every day would be a second register nobody asked for.
+          }
+        });
+        return {
+          id, day,
+          work_date: r.work_date, day_status: r.day_status,
+          clock_in: r.clock_in, clock_out: r.clock_out, minutes_late: r.minutes_late,
+          confirmed_at: r.confirmed_at, proof_kind: r.proof_kind,
+          proof_accuracy_m: r.proof_accuracy_m, proof_document_id: r.proof_document_id,
+          // Back to the person who sent it, at the precision it was kept: "recorded as
+          // −6.799, 39.280" is the honest description of what the register now holds.
+          proof_lat: r.proof_lat === null ? null : Number(r.proof_lat),
+          proof_lng: r.proof_lng === null ? null : Number(r.proof_lng),
+          coarse_by: "about 100 m"
+        };
+      });
+      return reply.status(201).send(result);
+    });
+
+  /**
+   * The evidence behind one confirmed day. This is the only call that answers coordinates, and
+   * it is the only place they are read — a register that printed everybody's position would
+   * turn a defence against a missed timesheet into a tracking system. Who looked, and at whose
+   * day, is written in the company's audit book, because "who saw where I was" is a question a
+   * person is entitled to have answered.
+   */
+  app.get("/attendance/:id/proof", { preHandler: [requireAuth, requirePermission("attendance.view")] },
+    async (req: any) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+      return withTenant(req.user.tid, async (c) => {
+        const found = await c.query(
+          `select a.id, a.employee_id, e.full_name, a.work_date::text as work_date,
+                  a.confirmed_at, a.confirmed_by, a.proof_kind, a.proof_lat, a.proof_lng,
+                  a.proof_accuracy_m, a.proof_document_id,
+                  d.file_name, d.mime_type, d.size_bytes, d.storage_path
+             from employee_attendance a
+             join employees e on e.id = a.employee_id
+             left join documents d
+               on d.id = a.proof_document_id and d.tenant_id = a.tenant_id and d.deleted_at is null
+            where a.id = $1 and a.tenant_id = $2 and a.deleted_at is null`,
+          [id, req.user.tid]);
+        if (!found.rowCount) throw new ApiError("NOT_FOUND", "No such day in the register.", 404);
+        const r = found.rows[0];
+        if (!r.confirmed_at || !r.proof_kind) {
+          throw new ApiError("CONFLICT", "That day was recorded without a confirmation.", 409);
+        }
+
+        let document: { id: string; fileName: string; mimeType: string; sizeBytes: number; url: string } | null = null;
+        if (r.proof_kind === "photo") {
+          if (!r.proof_document_id || !r.storage_path) {
+            // The link outlives the file only as a hole, so name the hole rather than 500 on it.
+            throw new ApiError("NOT_FOUND", "The photograph that confirmed that day is no longer filed.", 404);
+          }
+          if (!storageConfigured()) {
+            throw new ApiError("STORAGE_UNAVAILABLE",
+              "Photographs cannot be opened yet — the file store is not configured.", 503);
+          }
+          document = {
+            id: r.proof_document_id, fileName: r.file_name, mimeType: r.mime_type,
+            sizeBytes: Number(r.size_bytes),
+            url: await signObject(r.storage_path, 300)
+          };
+        }
+
+        await writeAudit(c, {
+          tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
+          requestId: req.requestId, entity: "employee_attendance", entityId: id,
+          action: "attendance.proof_viewed",
+          after: { employeeId: r.employee_id, fullName: r.full_name, workDate: r.work_date, proof: r.proof_kind }
+        });
+        return {
+          id: r.id, employee: { id: r.employee_id, fullName: r.full_name },
+          workDate: r.work_date, confirmedAt: r.confirmed_at, confirmedBy: r.confirmed_by,
+          proofKind: r.proof_kind,
+          lat: r.proof_lat === null ? null : Number(r.proof_lat),
+          lng: r.proof_lng === null ? null : Number(r.proof_lng),
+          accuracyM: r.proof_accuracy_m,
+          keptTo: "about 100 m",
+          document
+        };
       });
     });
 

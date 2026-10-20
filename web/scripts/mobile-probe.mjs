@@ -25,6 +25,8 @@
  *
  *   node web/scripts/mobile-probe.mjs --width 390 --height 844 --out .probe --pages /,/login,...
  *   WAISHA_PROBE_TOKEN=<accessToken> node web/scripts/mobile-probe.mjs ...   # authenticated shells
+ *   MSYS2_ARG_CONV_EXCL='*' node web/scripts/mobile-probe.mjs ...   # from Git Bash, or every
+ *                                         --pages value arrives as a rewritten Windows path
  *   ... --shots [--full]                  write one PNG per page into --out
  *   ... --eval '<expression>'             print the JSON of any expression, per page
  *   ... --open                            click the page's create control before measuring,
@@ -119,7 +121,11 @@ const child = spawn(
     "--no-default-browser-check",
     "--disable-extensions",
     `--remote-debugging-port=${PORT}`,
-    `--user-data-dir=${profile}`
+    `--user-data-dir=${profile}`,
+    // An explicit start page, so the tab the sweep attaches to is a plain one. Launched with no
+    // URL, Chrome opens chrome://newtab/ and registers its omnibox popup and one-google-bar
+    // iframe alongside it as targets of their own.
+    "about:blank"
   ],
   { stdio: "ignore" }
 );
@@ -132,13 +138,22 @@ process.on("exit", stop);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function waitForTarget(deadlineMs = 20000) {
+async function waitForTarget(deadlineMs = 30000) {
   const started = Date.now();
+  // /json/list answers more rows than the one tab the sweep drives, and on a slow start some of
+  // them are typed as pages. Attaching to an internal row leaves the socket open but every ask
+  // about the page fails, so take a real tab — preferring the blank start page — and never an
+  // omnibox popup, a devtools window or an extension page.
+  const navigable = (t) =>
+    t.type === "page" && t.webSocketDebuggerUrl &&
+    !/^(devtools|chrome-extension|chrome-untrusted|view-source|voice):/i.test(t.url || "") &&
+    !/omnibox/i.test(t.url || "");
+  const rank = (t) => (/^(about:blank|chrome:\/\/newtab\/?|)$/i.test(t.url || "") ? 0 : 1);
   for (;;) {
     try {
       const res = await fetch(`http://127.0.0.1:${PORT}/json/list`);
       const targets = await res.json();
-      const page = targets.find((t) => t.type === "page" && t.webSocketDebuggerUrl);
+      const page = targets.filter(navigable).sort((a, b) => rank(a) - rank(b))[0];
       if (page) return page;
     } catch { /* chrome not listening yet */ }
     if (Date.now() - started > deadlineMs) throw new Error("Chrome did not expose a debug target");
@@ -424,7 +439,16 @@ async function main() {
 
   const results = [];
   for (const path of PAGES) {
-    const url = `${BASE}${path.startsWith("http") ? path : path}`;
+    // Git Bash rewrites an argument that looks like a POSIX absolute path before the
+    // interpreter sees it, so --pages /app/office/attendance arrives as
+    // C:/Program Files/Git/app/office/attendance and CDP answers the glued url with
+    // "Cannot navigate to invalid URL" — a browser-flavoured message for a shell-side
+    // change. Naming the cause here is what saves the next hour.
+    if (!path.startsWith("/")) {
+      throw new Error(`page path must reach this script unchanged, got ${JSON.stringify(path)} — `
+        + "run it with MSYS2_ARG_CONV_EXCL='*' (Git Bash) or pass a full http(s) url");
+    }
+    const url = `${BASE}${path}`;
     const loaded = cdp.once("Page.loadEventFired", 45000);
     inflight.clear();
     await cdp.send("Page.navigate", { url });
