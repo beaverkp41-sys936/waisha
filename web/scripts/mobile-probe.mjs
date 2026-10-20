@@ -341,9 +341,16 @@ const OPEN_FORM = `(() => {
   const shown = /^(close|hide|cancel|done|back)\\b/i;
   const danger = /delete|remove|revoke|suspend|block|wipe|reset/i;
   const text = (el) => (el.textContent || '').trim();
+  // A panel's own dismiss control is a short command — "Close", "Close file", "Cancel".
+  // A filter chip called "Back on the road" is not, and treating it as one made the sweep
+  // report a form it never opened: the register was measured with its rows closed.
+  const dismisses = (el) => {
+    const t = text(el);
+    return shown.test(t) && t.split(/\\s+/).length <= 2 && t.length <= 12;
+  };
   const btns = [...document.querySelectorAll('.app-main button, .app-main a.waisha-btn')]
     .filter(el => !el.closest('[hidden]') && el.getBoundingClientRect().height > 0);
-  const already = btns.find(el => shown.test(text(el)));
+  const already = btns.find(dismisses);
   if (already) return 'already open (' + text(already).slice(0, 20) + ')';
   const hit = btns.find(el => opener.test(text(el)) && !danger.test(text(el)));
   if (!hit) return 'no create control';
