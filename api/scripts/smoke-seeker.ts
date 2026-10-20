@@ -106,12 +106,17 @@ async function main() {
   await clearBuckets("signup:", "otp:", "otp-resend:", "login:");
 
   // One real director: the cross-account-type collision probe and the
-  // promoted-account guard both need a staff identity that exists.
+  // promoted-account guard both need a staff identity that exists. It has to be a
+  // director of a company still in service: the office can block or close any tenant
+  // from /control/tenants at any hour, and a token minted for a blocked seat is
+  // answered 403 TENANT_BLOCKED by the gate — which would read as a broken smoke, not
+  // as a desk that has been busy.
   const dir = (await oi(
     `select u.id as user_id, u.email, u.tenant_id from users u
       where u.user_type = 'director' and u.status = 'active' and u.deleted_at is null
+        and platform_auth.tenant_block_state(u.tenant_id) is null
       order by u.created_at limit 1`)).rows[0];
-  if (!dir) throw new Error("Smoke needs one active director in the database");
+  if (!dir) throw new Error("Smoke needs one active director of an in-service company");
 
   let userId: string | null = null;
   let seekerId: string | null = null;

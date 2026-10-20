@@ -1,5 +1,5 @@
 import { decryptField } from "../util/crypto.js";
-import { sendMail } from "./mail.js";
+import { sendMail, DeliveryContext, SendReceipt } from "./mail.js";
 
 /**
  * What a company is told when the office acts on it.
@@ -143,8 +143,14 @@ export interface DeliveryReceipt {
 /**
  * Sends on both channels and returns the receipt for the register. Never throws: every
  * failure is a line in the receipt the desk can read.
+ *
+ * Both transports now answer with their own receipt rather than throwing, so the count here
+ * follows `delivered` — a Resend rejection used to be recorded as a send, because the only
+ * way this function could learn about a failure was an exception the transports no longer
+ * raise.
  */
-export async function sendTenantNotice(a: AppliedAction, sendSmsImpl: (e164: string, message: string) => Promise<void>):
+export async function sendTenantNotice(a: AppliedAction,
+  sendSmsImpl: (e164: string, message: string, ctx?: DeliveryContext) => Promise<SendReceipt>):
   Promise<DeliveryReceipt> {
   const message = smsText(a);
   const mail = { to: "", subject: subjectOf(a), text: bodyText(a), html: bodyHtml(a) };
@@ -152,30 +158,29 @@ export async function sendTenantNotice(a: AppliedAction, sendSmsImpl: (e164: str
     subject: subjectOf(a), recipients: a.targets.length,
     sms: { sent: 0, failed: 0 }, email: { sent: 0, failed: 0 }, to: [], errors: []
   };
+  const ctx = { purpose: "tenant_notice" as const, tenantId: a.tenant_id };
 
   for (const t of a.targets) {
     const entry: { sms?: string; email?: string } = {};
     const phone = phoneOf(t);
     if (phone) {
       entry.sms = maskPhone(phone);
-      try {
-        await sendSmsImpl(phone, message);
-        receipt.sms.sent++;
-      } catch (e) {
+      const r = await sendSmsImpl(phone, message, ctx);
+      if (r.delivered) receipt.sms.sent++;
+      else {
         receipt.sms.failed++;
-        receipt.errors.push(`sms ${String(e).slice(0, 120)}`);
+        if (r.error) receipt.errors.push(`sms ${r.error.slice(0, 120)}`);
       }
     } else {
       receipt.sms.failed++;
     }
     if (t.email) {
       entry.email = maskEmail(t.email);
-      try {
-        await sendMail({ ...mail, to: t.email });
-        receipt.email.sent++;
-      } catch (e) {
+      const r = await sendMail({ ...mail, to: t.email }, ctx);
+      if (r.delivered) receipt.email.sent++;
+      else {
         receipt.email.failed++;
-        receipt.errors.push(`email ${String(e).slice(0, 120)}`);
+        if (r.error) receipt.errors.push(`email ${r.error.slice(0, 120)}`);
       }
     } else {
       receipt.email.failed++;

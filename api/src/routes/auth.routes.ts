@@ -13,6 +13,7 @@ import { enforceRateLimit, identityBucket } from "../security/ratelimit.js";
 import { blockedMessage, tenantBlockState } from "../security/tenant-state.js";
 import { writeAudit } from "../audit/audit.js";
 import { sendMail, sendSms } from "../mail/mail.js";
+import { otpEmail, resetEmail } from "../mail/templates.js";
 import { env, isProd } from "../env.js";
 
 const e164 = z.string().regex(/^\+[1-9]\d{7,14}$/, "Use international format, e.g. +255712345678");
@@ -62,13 +63,56 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
     req.user = claims;
   };
 
+  /**
+   * HIBP breach check, with one retry.
+   *
+   * The range endpoint answers in a couple of hundred milliseconds or returns 429 — it
+   * rate-limits the shared egress of every client on it, which for a machine behind one
+   * office connection is exactly the situation during a busy morning of registrations. One
+   * second later the same call usually succeeds. Without the retry, that 429 surfaced as a
+   * "Request validation failed" the person could do nothing about, and their next few tries
+   * were consumed by the sign-up limiter before they ever reached a database.
+   *
+   * It still fails closed if both tries fail: the posture 001's password check was written
+   * with ("an outage blocks signup rather than weakening it") is a deliberate decision, and
+   * quietly accepting a password that appears in a breach dump is a worse trade than asking
+   * somebody to try again in a minute. What changes is that the refusal now says what it is
+   * — a distinct code, and the fact that no account was created — instead of looking like a
+   * validation error in the person's own typing.
+   */
   async function checkPwned(password: string): Promise<void> {
-    let n = 0;
-    try { n = await pwnedCount(password); }
-    catch { throw new ApiError("VALIDATION_FAILED", "Password breach check is temporarily unavailable. Please try again.", 503); }
+    let n: number | null = null;
+    for (let attempt = 1; attempt <= 2 && n === null; attempt++) {
+      try {
+        n = await pwnedCount(password);
+      } catch {
+        if (attempt === 2) break;
+        await new Promise(r => setTimeout(r, 750));
+      }
+    }
+    if (n === null) {
+      throw new ApiError("PASSWORD_CHECK_UNAVAILABLE",
+        "WAISHA could not reach the password-safety service, so your account was not created. "
+        + "Nothing you typed has been kept — try again in a minute.", 503);
+    }
     if (n > 0) {
       throw new ApiError("VALIDATION_FAILED", "This password has appeared in a known data breach. Choose another.", 400, [{ field: "password" }]);
     }
+  }
+
+  /**
+   * The sign-up limiter shared by all three self-registration doors.
+   *
+   * The IP ceiling used to be 10 an hour. That reads sensible for a person and is wrong for
+   * a clearing office: six clerks on one +255 broadband line registering their own companies
+   * and their shippers over a morning hit it, and the answer they got back — "Too many
+   * attempts. Please wait and try again." with no idea how long — is the report this task
+   * started from. 40 an hour per connection still bounds a flood, and the bucket keyed on the
+   * address itself is what stops one target being ground at, which an IP ceiling never could.
+   */
+  async function limitSignup(req: any, email: string): Promise<void> {
+    await enforceRateLimit(`signup:ip:${req.ip}`, 40, 3600);
+    await enforceRateLimit(identityBucket("signup:email", email), 6, 86400);
   }
 
   // ---------------- Transporter sign-up (spec 4.2) ----------------
@@ -88,8 +132,8 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   app.post("/auth/transporter/signup", async (req: any, reply) => {
-    await enforceRateLimit(`signup:ip:${req.ip}`, 10, 3600);
     const data = transporterSignup.parse(req.body);
+    await limitSignup(req, data.email);
     const tin = validateTin(data.tin);
     await checkPwned(data.password);
 
@@ -134,10 +178,10 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
          encryptField(data.phone), searchHash(data.phone),
          await hashPassword(data.password), data.companyName]);
       await c.query(
-        `insert into otp_codes (id, user_id, tenant_id, purpose, destination_search,
+        `insert into otp_codes (id, user_id, tenant_id, purpose, channel, destination_search,
            code_hash, expires_at, resend_available_at)
-         values ($1,$2,$3,'signup',$4,$5, now() + interval '5 minutes', now())`,
-        [uuidv7(), userId, tenantId, searchHash(data.phone), hashOtp(code)]);
+         values ($1,$2,$3,'signup','email',$4,$5, now() + interval '5 minutes', now())`,
+        [uuidv7(), userId, tenantId, searchHash(data.email), hashOtp(code)]);
       await writeAudit(c, {
         tenantId, actorUserId: userId, ip: req.ip,
         userAgent: req.headers["user-agent"] ?? null,
@@ -147,8 +191,25 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
       });
     });
 
-    await sendSms(data.phone, `Your WAISHA verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes.`);
-    return reply.status(201).send({ userId, phoneMasked: maskPhone(data.phone) });
+    // The code goes to the address, not to the phone. This insert used to leave channel out,
+    // so it took 001's 'sms' default and the route then "sent" an SMS through a transport that
+    // only writes to stdout: a company could register, was told a text was on its way, and
+    // could never finish signing up. 060 already made this call for seekers — email is the one
+    // channel that reaches a person until an SMS aggregator is wired.
+    //
+    // The receipt decides what the screen says next. It is deliberately not an exception: the
+    // tenant, the seat and the OTP are already committed, and answering a person who had
+    // successfully registered with a 500 left them retrying into "this email is already
+    // registered". They are told the code did not go, and the register holds why.
+    const receipt = await sendMail(otpEmail(data.email, code, OTP_TTL_MINUTES),
+      { purpose: "signup_otp", tenantId, userId });
+    return reply.status(201).send({
+      userId, emailMasked: maskEmail(data.email), channel: "email",
+      codeSent: receipt.delivered,
+      // The code screen opens immediately and the server refuses a resend until this
+      // instant, so the countdown the person sees is the wait rather than a guess.
+      resendAt: new Date(Date.now() + OTP_RESEND_SECONDS * 1000).toISOString()
+    });
   });
 
   // ---------------- Shipper sign-up (spec 4.3) ----------------
@@ -166,8 +227,8 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   app.post("/auth/shipper/signup", async (req: any, reply) => {
-    await enforceRateLimit(`signup:ip:${req.ip}`, 10, 3600);
     const data = shipperSignup.parse(req.body);
+    await limitSignup(req, data.email);
     await checkPwned(data.password);
 
     const tenantId = uuidv7();
@@ -196,10 +257,10 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
          encryptField(data.nida), searchHash(data.nida),
          await hashPassword(data.password), fullName]);
       await c.query(
-        `insert into otp_codes (id, user_id, tenant_id, purpose, destination_search,
+        `insert into otp_codes (id, user_id, tenant_id, purpose, channel, destination_search,
            code_hash, expires_at, resend_available_at)
-         values ($1,$2,$3,'signup',$4,$5, now() + interval '5 minutes', now())`,
-        [uuidv7(), userId, tenantId, searchHash(data.phone), hashOtp(code)]);
+         values ($1,$2,$3,'signup','email',$4,$5, now() + interval '5 minutes', now())`,
+        [uuidv7(), userId, tenantId, searchHash(data.email), hashOtp(code)]);
       await writeAudit(c, {
         tenantId, actorUserId: userId, ip: req.ip,
         userAgent: req.headers["user-agent"] ?? null,
@@ -209,8 +270,25 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
       });
     });
 
-    await sendSms(data.phone, `Your WAISHA verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes.`);
-    return reply.status(201).send({ userId, phoneMasked: maskPhone(data.phone) });
+    // The code goes to the address, not to the phone. This insert used to leave channel out,
+    // so it took 001's 'sms' default and the route then "sent" an SMS through a transport that
+    // only writes to stdout: a company could register, was told a text was on its way, and
+    // could never finish signing up. 060 already made this call for seekers — email is the one
+    // channel that reaches a person until an SMS aggregator is wired.
+    //
+    // The receipt decides what the screen says next. It is deliberately not an exception: the
+    // tenant, the seat and the OTP are already committed, and answering a person who had
+    // successfully registered with a 500 left them retrying into "this email is already
+    // registered". They are told the code did not go, and the register holds why.
+    const receipt = await sendMail(otpEmail(data.email, code, OTP_TTL_MINUTES),
+      { purpose: "signup_otp", tenantId, userId });
+    return reply.status(201).send({
+      userId, emailMasked: maskEmail(data.email), channel: "email",
+      codeSent: receipt.delivered,
+      // The code screen opens immediately and the server refuses a resend until this
+      // instant, so the countdown the person sees is the wait rather than a guess.
+      resendAt: new Date(Date.now() + OTP_RESEND_SECONDS * 1000).toISOString()
+    });
   });
 
   // ---------------- Seeker sign-up (spec: find a transporter or a CFA) ----------------
@@ -236,8 +314,8 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
   });
 
   app.post("/auth/seeker/signup", async (req: any, reply) => {
-    await enforceRateLimit(`signup:ip:${req.ip}`, 10, 3600);
     const data = seekerSignup.parse(req.body);
+    await limitSignup(req, data.email);
     await checkPwned(data.password);
 
     const tenantId = uuidv7();
@@ -290,15 +368,15 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
       });
     });
 
-    await sendMail({
-      to: data.email, subject: "Your WAISHA verification code",
-      text: `Your WAISHA verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes. `
-        + `If you did not ask for a WAISHA account, ignore this email.`,
-      html: `<p>Your WAISHA verification code is <b>${code}</b>.</p>`
-        + `<p>It expires in ${OTP_TTL_MINUTES} minutes.</p>`
-        + `<p>If you did not ask for a WAISHA account, ignore this email.</p>`
+    const receipt = await sendMail(otpEmail(data.email, code, OTP_TTL_MINUTES),
+      { purpose: "signup_otp", tenantId, userId });
+    return reply.status(201).send({
+      userId, seekerId, emailMasked: maskEmail(data.email), channel: "email",
+      codeSent: receipt.delivered,
+      // The code screen opens immediately and the server refuses a resend until this
+      // instant, so the countdown the person sees is the wait rather than a guess.
+      resendAt: new Date(Date.now() + OTP_RESEND_SECONDS * 1000).toISOString()
     });
-    return reply.status(201).send({ userId, seekerId, emailMasked: maskEmail(data.email) });
   });
 
   // ---------------- OTP verify / resend ----------------
@@ -392,18 +470,24 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
       [uuidv7(), userId, user.tenant_id, byEmail ? "email" : "sms",
        byEmail ? searchHash(user.email) : (user.phone_search ?? ""), hashOtp(code)]));
 
+    const ctx = { purpose: "otp_resend" as const, tenantId: user.tenant_id, userId };
+    let receipt;
     if (byEmail) {
-      await sendMail({
-        to: user.email, subject: "Your WAISHA verification code",
-        text: `Your WAISHA verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes.`,
-        html: `<p>Your WAISHA verification code is <b>${code}</b>.</p>`
-          + `<p>It expires in ${OTP_TTL_MINUTES} minutes.</p>`
-      });
+      receipt = await sendMail(otpEmail(user.email, code, OTP_TTL_MINUTES), ctx);
     } else {
       const phone = decryptField(bufFromHex(user.phone_encrypted));
-      await sendSms(phone, `Your WAISHA verification code is ${code}. It expires in 5 minutes.`);
+      receipt = await sendSms(phone,
+        `Your WAISHA verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes.`, ctx);
     }
-    return reply.send({ resendAt: new Date(Date.now() + OTP_RESEND_SECONDS * 1000).toISOString() });
+    // codeSent is what the screen reads out. A resend that the provider refused used to
+    // answer 200 and mean "a code is on its way", which is the promise this route can no
+    // longer keep quietly — the person is about to wait for something that did not go.
+    return reply.send({
+      resendAt: new Date(Date.now() + OTP_RESEND_SECONDS * 1000).toISOString(),
+      channel: byEmail ? "email" : "sms",
+      emailMasked: byEmail ? maskEmail(user.email) : null,
+      codeSent: receipt.delivered
+    });
   });
 
   /** Shipper and seeker sign-in both accept one free-text identity box, so the
@@ -664,7 +748,13 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------------- Forgot / reset password (spec 4.1) ----------------
   app.post("/auth/forgot-password", async (req: any, reply) => {
-    await enforceRateLimit(`forgot:ip:${req.ip}`, 5, 3600);
+    // 20 an hour per connection, not 5. This is the same mistake limitSignup() had to be
+    // taken off: a clearing office shares one +255 broadband line, and five forgotten
+    // passwords between eight clerks in a morning used to answer the sixth with "Too many
+    // attempts" and no idea when to come back — which reads as a broken platform, not as a
+    // limit. The real ceiling is the one keyed on the address below, because that is what
+    // stops any single person's inbox being flooded; an IP ceiling never could.
+    await enforceRateLimit(`forgot:ip:${req.ip}`, 20, 3600);
     const { email } = z.object({ email: emailSchema }).parse(req.body);
     // The same address again on a different connection. An IP-only ceiling is worth
     // nothing to an attacker with a handful of source addresses, and this route mints a
@@ -681,11 +771,11 @@ export async function authRoutes(app: FastifyInstance, _opts: unknown) {
          values ($1,$2,$3,$4, now() + interval '30 minutes')`,
         [uuidv7(), user.id, user.tenant_id, sha256(token)]));
       const link = `${env.WEB_ORIGIN}/reset-password?token=${encodeURIComponent(token)}`;
-      await sendMail({
-        to: email, subject: "Reset your WAISHA password",
-        text: `Use this link within 30 minutes: ${link}`,
-        html: `<p>Use this link within 30 minutes to reset your WAISHA password:</p><p><a href="${link}">${link}</a></p><p>If you did not request this, ignore this email.</p>`
-      });
+      // The answer stays neutral to the caller, but the register is not neutral: a reset
+      // that never reached the provider is the reason a person phones the office, and the
+      // desk has to be able to see it happened without asking them to try again.
+      await sendMail(resetEmail(email, link, 30),
+        { purpose: "password_reset", tenantId: user.tenant_id, userId: user.id });
     }
     // Neutral always — prevents account enumeration (spec 4.1)
     return reply.send({ message: "If that email is registered, a reset link has been sent" });

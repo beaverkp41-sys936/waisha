@@ -9,7 +9,17 @@ export async function enforceRateLimit(bucket: string, limit: number, windowSeco
     [bucket, limit, windowSeconds]
   );
   if (!rows[0].allowed) {
-    throw new ApiError("RATE_LIMITED", "Too many attempts. Please wait and try again.", 429);
+    // platform_auth.hit_rate_limit aligns its window to the epoch (001), so the instant this
+    // bucket empties is computable here and the person can be told when. "Please wait and try
+    // again" with no number is how a blocked office reads a limiter as a broken product: they
+    // retry immediately, burn the next window on refusals, and give up.
+    const waitSeconds = windowSeconds - Math.floor(Date.now() / 1000) % windowSeconds;
+    const when = waitSeconds >= 120
+      ? `${Math.round(waitSeconds / 60)} minutes`
+      : `${Math.max(waitSeconds, 10)} seconds`;
+    throw new ApiError("RATE_LIMITED",
+      `Too many attempts from here. You can try again in about ${when}.`, 429,
+      [{ retryIn: waitSeconds }]);
   }
 }
 

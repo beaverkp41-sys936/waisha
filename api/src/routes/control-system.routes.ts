@@ -1,9 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { pool } from "../db/pool.js";
+import { z } from "zod";
+import { pool, withTenant } from "../db/pool.js";
 import { env } from "../env.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
+import { writeAudit } from "../audit/audit.js";
+import { ApiError } from "../util/errors.js";
 import { storageConfigured } from "../storage/supabase.js";
 import { requireControl } from "./control.routes.js";
 import { requireControlPermission } from "./control-analytics.routes.js";
@@ -79,8 +82,11 @@ function runtimeFacts() {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     web_origin: env.WEB_ORIGIN,
     readiness: {
-      // Booleans only. The values are never read out of env for this payload.
+      // Presence flags, never values — except the sender, which is public by design.
       mail_configured: !!env.RESEND_API_KEY,
+      // The sender is a public part of every message the platform sends, so it is safe to
+      // show — and it is the one field that tells the office whether Resend will deliver.
+      mail_sender: env.MAIL_FROM,
       storage_configured: storageConfigured(),
       scheduler_secret_configured: !!env.INTERNAL_TICK_SECRET,
       app_role_password_configured: !!env.APP_DB_PASSWORD,
@@ -160,6 +166,21 @@ function runtimeAdvisory(drift: {
       evidence: []
     });
   }
+  if (env.RESEND_API_KEY && /@resend\.dev$/i.test(env.MAIL_FROM)) {
+    items.push({
+      item_id: "mail_sandbox_sender", rank: 2, kind: "risk", priority: "high",
+      area: "Accounts",
+      title: "Mail is sending from the Resend test address",
+      detail: "onboarding@resend.dev is a shared sandbox: Resend accepts the send and "
+        + "hands it back, then only delivers it to the address that owns the account. So a "
+        + "code shows as sent in the register and never reaches the client who asked for it, "
+        + "which is the worst of both outcomes — the office believes people were notified. "
+        + "Verify a domain in the Resend console and set MAIL_FROM to an address on it.",
+      metric: 0, unit: "sender",
+      action: "Verify a sending domain in Resend, then set MAIL_FROM to it.",
+      evidence: [{ mail_from: env.MAIL_FROM }]
+    });
+  }
   if (!storageConfigured()) {
     items.push({
       item_id: "storage_unset", rank: 3, kind: "risk", priority: "high",
@@ -188,6 +209,88 @@ function runtimeAdvisory(drift: {
   }
   return items;
 }
+
+/** Exported so the verify script executes the identical string, not a re-typing. */
+export const MAIL_SUMMARY_SQL =
+  "select channel, purpose, status, sends, distinct_addresses, last_at " +
+  "from platform_auth.message_delivery_summary($1)";
+
+/** Purposes that end with a person waiting at a screen. A tenant notice that never sent
+ *  is a complaint; a sign-up code that never sent is an account that cannot exist. */
+const BLOCKING_PURPOSES = ["signup_otp", "otp_resend", "password_reset", "staff_invite"];
+
+/**
+ * What the delivery register (112) says actually left the building.
+ *
+ * Every other rule here is about configuration, and configuration is only a promise. This
+ * is the one mail line that is a fact about the last two days: an operator with a key set
+ * and a sandbox sender looks healthy on every rule above, and the register is the only
+ * place where the sends that were accepted but undeliverable are separated from the ones
+ * that were refused outright.
+ */
+async function mailDeliveryAdvisory(days: number) {
+  const items: Array<Record<string, unknown>> = [];
+  const { rows } = await pool.query(MAIL_SUMMARY_SQL, [days]);
+  const summary = rows.map((r: any) => ({
+    channel: r.channel, purpose: r.purpose, status: r.status,
+    sends: Number(r.sends), addresses: Number(r.distinct_addresses), last_at: r.last_at
+  }));
+
+  const count = (pick: (x: (typeof summary)[number]) => boolean) =>
+    summary.filter(pick).reduce((acc, x) => acc + x.sends, 0);
+  const failed = count(x => x.status === "failed" && BLOCKING_PURPOSES.includes(x.purpose));
+  const skipped = count(x => x.status === "skipped" && BLOCKING_PURPOSES.includes(x.purpose));
+
+  if (failed > 0) {
+    items.push({
+      item_id: "mail_sends_failed", rank: 1, kind: "risk", priority: "high",
+      area: "Accounts",
+      title: `${failed} message${failed === 1 ? "" : "s"} to a waiting person was refused by the provider`,
+      detail: "These are codes, reset links and invitations that the provider rejected, so "
+        + "nobody received them. The address is stored masked and the provider's own words "
+        + "are kept next to it, so the desk can tell a bad address from a rejected sender "
+        + "without opening a database console.",
+      metric: failed, unit: "sends refused",
+      action: "Open Deliveries in the panel, read the error on the newest failed line, then "
+        + "act on whichever of the two it is.",
+      evidence: summary.filter(x => x.status === "failed").slice(0, 8)
+    });
+  }
+  if (skipped > 0) {
+    items.push({
+      item_id: "mail_sends_skipped", rank: 2, kind: "risk",
+      priority: skipped >= 5 ? "high" : "medium",
+      area: "Accounts",
+      title: `${skipped} message${skipped === 1 ? "" : "s"} went to the server log instead of to anyone`,
+      detail: "A skipped line means the code was generated and stored and then sent to "
+        + "nothing: either no provider key was set when it was written, or it was an SMS and "
+        + "no aggregator is wired. Every one of these is a person sitting on a verification "
+        + "screen that can never be completed by them.",
+      metric: skipped, unit: "sends logged only",
+      action: "Configure the provider, then reinvite or let the person resend their code.",
+      evidence: summary.filter(x => x.status === "skipped").slice(0, 8)
+    });
+  }
+  return { items, headline: { window_days: days, rows: summary, failed, skipped } };
+}
+
+/* ---------------- the delivery register (112) ---------------- */
+
+const MANAGE = "control.system.manage";
+
+/** The CHECK lists on message_deliveries, kept here so a bad filter is refused by Zod with a
+ *  400 instead of quietly matching nothing — an empty register and a filtered-empty register
+ *  look identical on screen and mean completely different things. */
+const DELIVERY_PURPOSES = ["signup_otp", "otp_resend", "password_reset", "staff_invite",
+  "tenant_notice", "platform_test"] as const;
+const DELIVERY_STATUSES = ["sent", "failed", "skipped"] as const;
+const DELIVERY_CHANNELS = ["email", "sms"] as const;
+
+export const MAIL_LOG_SQL =
+  "select id, channel, purpose, to_masked, subject, status, provider, " +
+  "provider_message_id, error, attempts, tenant_id, user_id, sent_at " +
+  "from platform_auth.message_delivery_log($1,$2,$3,$4,$5,$6)";
+export const MAIL_PRUNE_SQL = "select platform_auth.prune_message_deliveries($1) as r";
 
 export const NOT_MEASURED = [
   {
@@ -309,8 +412,12 @@ export async function controlSystemRoutes(app: FastifyInstance, _opts: unknown) 
     // Revenue desk reads, same window, so a card and a panel cannot disagree.
     const allocation = await moduleAllocationAdvisory(90);
 
-    const items = [...dbItems, ...driftItems, ...errorItems, ...reliability.items,
-      ...churn.items, ...allocation.items]
+    // Messages that left the building, from 112's register. Configuration rules can say a
+    // key is set; only this can say whether the codes reached anyone.
+    const mail = await mailDeliveryAdvisory(2);
+
+    const items = [...dbItems, ...driftItems, ...errorItems, ...mail.items,
+      ...reliability.items, ...churn.items, ...allocation.items]
       .sort((a: any, b: any) => {
       if (a.rank !== b.rank) return a.rank - b.rank;
       const p = PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority);
@@ -345,7 +452,68 @@ export async function controlSystemRoutes(app: FastifyInstance, _opts: unknown) 
       churn: churn.headline,
       // And for the allocation lines: what part of the split is evidence and what is the
       // even fall-back, off one control_module_allocation call.
-      allocation: allocation.headline
+      allocation: allocation.headline,
+      // And for the two mail lines: the register grouped by channel, purpose and status.
+      mail: mail.headline
+    };
+  });
+
+  // ---------- the delivery register ----------
+  app.get("/control/system/deliveries", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, SYSTEM);
+    await enforceRateLimit(`deliveries:uid:${req.control.user_id}`, 60, 60);
+
+    const q = z.object({
+      purpose: z.enum(DELIVERY_PURPOSES).optional(),
+      status: z.enum(DELIVERY_STATUSES).optional(),
+      channel: z.enum(DELIVERY_CHANNELS).optional(),
+      q: z.string().trim().max(200).optional(),
+      days: z.coerce.number().int().min(1).max(90).default(7),
+      limit: z.coerce.number().int().min(1).max(500).default(100)
+    }).strict().parse(req.query ?? {});
+
+    const { rows } = await pool.query(MAIL_LOG_SQL,
+      [q.purpose ?? null, q.status ?? null, q.channel ?? null, q.q || null, q.days, q.limit]);
+    const summary = await pool.query(MAIL_SUMMARY_SQL, [q.days]);
+
+    return {
+      window_days: q.days,
+      filters: { purpose: q.purpose ?? null, status: q.status ?? null, channel: q.channel ?? null, q: q.q ?? null },
+      // Said out loud because it changes how to read every line below: with no key, an
+      // address on this list was printed to a server log and delivered to nobody.
+      readiness: { mail_configured: !!env.RESEND_API_KEY, mail_sender: env.MAIL_FROM },
+      summary: summary.rows.map((r: any) => ({
+        channel: r.channel, purpose: r.purpose, status: r.status, sends: Number(r.sends),
+        addresses: Number(r.distinct_addresses), last_at: r.last_at
+      })),
+      // Masked addresses only — the register cannot answer "does this exact email have an
+      // account", which is the reason it is safe to show a platform seat at all.
+      items: rows
+    };
+  });
+
+  // ---------- retention: an operator decision, not a background job ----------
+  app.post("/control/system/deliveries/retention", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, MANAGE);
+    await enforceRateLimit(`deliveries-prune:uid:${req.control.user_id}`, 5, 3600);
+
+    const body = z.object({ keepDays: z.number().int().min(7).max(3650) }).strict().parse(req.body);
+    const { rows } = await pool.query(MAIL_PRUNE_SQL, [body.keepDays]);
+    const result = rows[0]?.r ?? {};
+    if (result.status !== "ok") {
+      throw new ApiError("CONFLICT", result.message ?? "Retention was refused.", 400);
+    }
+
+    await withTenant(req.control.tenant_id, (c) => writeAudit(c, {
+      tenantId: req.control.tenant_id, actorUserId: req.control.user_id, ip: req.ip,
+      userAgent: req.headers["user-agent"] ?? null, requestId: req.requestId,
+      entity: "message_deliveries", entityId: null, action: "control.delivery.retention",
+      after: { keep_days: body.keepDays, deleted: result.deleted, cutoff: result.cutoff }
+    }));
+    return {
+      deleted: result.deleted ?? 0,
+      keep_days: body.keepDays,
+      cutoff: result.cutoff ? new Date(result.cutoff).toISOString() : null
     };
   });
 }

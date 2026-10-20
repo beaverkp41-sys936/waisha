@@ -3,14 +3,34 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 type Panel = "login" | "signup" | "otp" | "success";
-/** Which door a code went out of. A seeker is verified by email because the SMS
- *  transport is still a dev stub, so the same six boxes have to tell two truths. */
+/** Which door a code went out of. Email is the only transport that delivers today: the
+ *  SMS path has no aggregator behind it, so a code that went that way reached nobody. */
 type Channel = "sms" | "email";
 type ServiceGroup = {
   key: string; name: string; description: string | null; services: string[];
   seat_limit: number; price_monthly: string; price_quarterly: string;
   price_annual: string; currency: string;
 };
+
+/**
+ * One sentence about where the code went — and it has to be the truth.
+ *
+ * This caption used to be chosen by which tab the person was standing on, so a clearing
+ * company was told "sent by SMS to the phone you typed" while the code went to a console
+ * log. The person waited, then pressed resend until the limiter answered 429. It now reads
+ * the receipt the server actually returned, including the case where nothing left.
+ */
+function otpCaption(p: { channel: Channel; to: string | null; codeSent: boolean }): string {
+  if (!p.codeSent) {
+    return "WAISHA could not send a code just now, so nothing is on its way to you. If an "
+      + "earlier code did arrive, type it before it expires. Otherwise wait for the "
+      + "countdown and press Resend.";
+  }
+  const where = p.to ?? (p.channel === "email" ? "the address you typed" : "the phone you typed");
+  return p.channel === "email"
+    ? `We emailed a six-digit code to ${where}. It expires in 5 minutes.`
+    : `We texted a six-digit code to ${where}. It expires in 5 minutes.`;
+}
 
 function useGreeting() {
   const [greeting, setGreeting] = useState("");
@@ -234,6 +254,12 @@ export default function LoginPage() {
   const [showPw, setShowPw] = useState(false);
   const [pending, setPending] = useState<{
     userId: string; tab: number; channel: Channel; resendAt: string;
+    /** Where the code went, in the form the server chose to publish it — masked, and
+     *  null when nothing was sent at all. */
+    to: string | null;
+    /** false means no message left the building: the panel has to say that instead of
+     *  letting a person sit and watch for a code that was never on its way. */
+    codeSent: boolean;
     /** Which panel the code was asked for. "Change details" must not push a user who
      *  was only ever signing in into the sign-up form. */
     from: "login" | "signup";
@@ -305,7 +331,13 @@ export default function LoginPage() {
         const rr = await post("/auth/otp/resend", { userId }).catch(() => null);
         setPending({
           userId, tab: loginTab, from: "login",
-          channel: loginTab === 2 ? "email" : "sms",
+          // The account knows how it should be reached, and that answer changed when
+          // company codes moved from the console-only SMS path to email. Reading it off
+          // the reply is the only way this screen is right for both old and new accounts;
+          // email is the fall-back because nothing today is delivered by SMS.
+          channel: rr?.json?.channel === "sms" ? "sms" : "email",
+          to: rr?.json?.emailMasked ?? null,
+          codeSent: rr?.json?.codeSent === true,
           resendAt: rr?.json?.resendAt ?? new Date(Date.now() + 60000).toISOString()
         });
         setPanel("otp");
@@ -343,8 +375,12 @@ export default function LoginPage() {
       setPending({
         userId: r.json.userId,
         tab: seeker ? 2 : 0, from: "signup",
-        channel: seeker ? "email" : "sms",
-        resendAt: new Date().toISOString()
+        // Read off the reply, not guessed from which tab was used: every code the
+        // platform can actually deliver today goes out by email, including a company's.
+        channel: r.json.channel === "sms" ? "sms" : "email",
+        to: r.json.emailMasked ?? null,
+        codeSent: r.json.codeSent === true,
+        resendAt: r.json.resendAt ?? new Date(Date.now() + 60000).toISOString()
       });
       setPanel("otp");
     } finally { setBusy(false); }
@@ -361,9 +397,19 @@ export default function LoginPage() {
 
   async function resendCode() {
     if (!pending) return;
+    setError(null);
     const r = await post("/auth/otp/resend", { userId: pending.userId });
-    if (r.ok && r.json?.resendAt) setPending({ ...pending, resendAt: r.json.resendAt });
-    else if (!r.ok) setError(errorText(r.json, "Could not resend"));
+    if (!r.ok) { setError(errorText(r.json, "Could not resend")); return; }
+    // The whole receipt is taken from this reply, not kept from the last one: a resend
+    // can land on a different channel than the original send, and the caption below has
+    // to describe the code that was just attempted, not the previous one.
+    setPending({
+      ...pending,
+      channel: r.json?.channel === "sms" ? "sms" : "email",
+      to: r.json?.emailMasked ?? pending.to,
+      codeSent: r.json?.codeSent === true,
+      resendAt: r.json?.resendAt ?? new Date(Date.now() + 60000).toISOString()
+    });
   }
 
   useEffect(() => {
@@ -521,11 +567,15 @@ export default function LoginPage() {
             {panel === "otp" && pending && (
               <div key="otp" className="panel-enter">
                 <h2 className="mb-8 text-2xl font-bold tracking-tight" style={{ color: "#ffffff" }}>Six-digit code</h2>
-                <p className="mb-16 text-sm" style={{ color: "rgba(255,255,255,0.82)" }}>
-                  {pending.channel === "email"
-                    ? "We emailed you a verification code. It expires in 5 minutes."
-                    : "Sent by SMS to the phone you typed. Expires in 5 minutes."}
-                </p>
+                {pending.codeSent ? (
+                  <p className="mb-16 text-sm" style={{ color: "rgba(255,255,255,0.82)" }}>
+                    {otpCaption(pending)}
+                  </p>
+                ) : (
+                  <div role="alert" aria-live="polite" className="auth-error mb-16 px-12 py-8 text-sm">
+                    {otpCaption(pending)}
+                  </div>
+                )}
                 <OtpInput onComplete={verifyOtp} />
                 <div className="mt-16 flex items-center justify-between text-sm">
                   <button type="button" disabled={cooldown > 0} className="auth-link underline disabled:opacity-50"

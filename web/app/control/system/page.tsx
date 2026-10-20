@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnnouncementTicker } from "@/components/AnnouncementTicker";
 import { ControlNav } from "@/components/ControlNav";
 
@@ -9,9 +9,10 @@ const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 /**
  * The machine room (069).
  *
- * Two halves on one desk. The advisory is first because it is the part that changes
- * what someone does today; the technical report is underneath it because it is the
- * evidence the advisory is standing on.
+ * Three halves on one desk. The advisory is first because it is the part that changes
+ * what someone does today; the delivery register (112) is the evidence an account call is
+ * argued from — what was sent, to a masked whom, and the provider's own words when it was
+ * refused; the technical report is underneath both because it is the ground they stand on.
  *
  * Everything here is a read of a fact the database already holds. The panel shows the
  * `not_measured` list for the same reason a lab report lists its limits: the office has
@@ -65,10 +66,35 @@ type Report = {
   };
 };
 
+/**
+ * The delivery register (112), read through GET /control/system/deliveries.
+ *
+ * Masked addresses only: the register is safe to put in front of a platform seat because
+ * it cannot answer "does this exact email have an account" — the same reason the auth
+ * desks print `j***@domain.test` and never the whole thing.
+ */
+type DeliveryLine = {
+  id: number; channel: string; purpose: string; to_masked: string; subject: string | null;
+  status: string; provider: string | null; provider_message_id: string | null;
+  error: string | null; attempts: number; sent_at: string;
+};
+type Deliveries = {
+  window_days: number;
+  filters: { purpose: string | null; status: string | null; channel: string | null; q: string | null };
+  readiness: { mail_configured: boolean; mail_sender: string | null };
+  summary: Array<{ channel: string; purpose: string; status: string; sends: number;
+    addresses: number; last_at: string | null }>;
+  items: DeliveryLine[];
+};
+const PURPOSE_LABEL: Record<string, string> = {
+  signup_otp: "Sign-up code", otp_resend: "Code resend", password_reset: "Password reset",
+  staff_invite: "Staff invite", notification: "Notification", other: "Other"
+};
+const DELIVERY_WINDOWS = [1, 7, 30, 90];
+
 const PRIORITY_EDGE: Record<string, string> = {
   high: "var(--danger)", medium: "var(--warning)", low: "var(--adm-line)"
-};
-const KIND_LABEL: Record<string, string> = {
+};const KIND_LABEL: Record<string, string> = {
   risk: "Risk", revenue: "Revenue", growth: "Growth", retention: "Retain", improve: "Improve"
 };
 const KIND_FILTERS = ["", "risk", "revenue", "growth", "retention", "improve"];
@@ -239,7 +265,9 @@ const STATUS_EDGE: Record<string, string> = {
   pending_verification: "var(--ink-soft)", paid: "var(--success)",
   issued: "var(--warning)", draft: "var(--ink-soft)", void: "var(--ink-soft)",
   live: "var(--success)", awaiting_verification: "var(--warning)",
-  rejected: "var(--danger)", cancelled: "var(--ink-soft)"
+  rejected: "var(--danger)", cancelled: "var(--ink-soft)",
+  // The three outcomes the delivery register can hold (112).
+  sent: "var(--success)", failed: "var(--danger)", skipped: "var(--warning)"
 };
 
 function StatusPills({ map }: { map: Record<string, number> | undefined }) {
@@ -268,6 +296,16 @@ export default function ControlSystemPage() {
   const [error, setError] = useState("");
   const [kind, setKind] = useState("");
 
+  const [delivery, setDelivery] = useState<Deliveries | null>(null);
+  const [deliveryError, setDeliveryError] = useState("");
+  const [days, setDays] = useState(7);
+  const [sentStatus, setSentStatus] = useState("");
+  const [manage, setManage] = useState(false);
+  const [keepDays, setKeepDays] = useState(30);
+  const [armed, setArmed] = useState(false);
+  const [pruning, setPruning] = useState(false);
+  const [pruneNote, setPruneNote] = useState("");
+
   async function get(path: string): Promise<Response> {
     const res = await fetch(`${API}/api/v1${path}`, { credentials: "include" });
     if (res.status === 401) { window.location.href = "/control/login"; throw new Error("signed out"); }
@@ -282,6 +320,10 @@ export default function ControlSystemPage() {
         const m = await fetch(`${API}/api/v1/control/auth/me`, { credentials: "include" });
         if (!m.ok) { window.location.href = "/control/login"; return; }
         setMe(await m.json());
+        // The right to prune the register is a different duty from the right to read it, so
+        // the desk asks which seat it is in rather than showing a button that will 403.
+        const p = await fetch(`${API}/api/v1/control/auth/permissions`, { credentials: "include" });
+        if (p.ok) setManage(((await p.json()).permissions ?? []).includes("control.system.manage"));
         const [r, a] = await Promise.all([
           get("/control/system/report"), get("/control/system/advisory")
         ]);
@@ -295,6 +337,44 @@ export default function ControlSystemPage() {
       }
     })();
   }, []);
+
+  const loadDeliveries = useCallback(async () => {
+    const params = new URLSearchParams({ days: String(days) });
+    if (sentStatus) params.set("status", sentStatus);
+    try {
+      const res = await fetch(`${API}/api/v1/control/system/deliveries?${params}`,
+        { credentials: "include" });
+      if (res.status === 401) { window.location.href = "/control/login"; return; }
+      if (!res.ok) throw new Error(`answered ${res.status}`);
+      setDelivery(await res.json());
+      setDeliveryError("");
+    } catch {
+      // A register that will not answer is reported on the panel that reads it, not folded
+      // into the system-report error: the report is fine, this window is not.
+      setDeliveryError("The delivery register did not answer.");
+    }
+  }, [days, sentStatus]);
+
+  useEffect(() => { loadDeliveries(); }, [loadDeliveries]);
+
+  async function pruneDeliveries() {
+    setPruning(true); setPruneNote("");
+    try {
+      const res = await fetch(`${API}/api/v1/control/system/deliveries/retention`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keepDays })
+      });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(j?.error?.message ?? `answered ${res.status}`);
+      setPruneNote(`${int(j?.deleted)} line(s) older than ${j?.keep_days} days deleted.`);
+      await loadDeliveries();
+    } catch (e) {
+      setPruneNote((e as Error).message || "Retention was refused.");
+    } finally {
+      setPruning(false); setArmed(false);
+    }
+  }
 
   const items = useMemo(
     () => (advisory?.items ?? []).filter(i => !kind || i.kind === kind),
@@ -429,6 +509,194 @@ export default function ControlSystemPage() {
                   </p>
                 )}
               </div>
+            </Section>
+
+            {/* ---------------------------------------------- delivery register */}
+            <Section title="Delivery register"
+              note="every code, reset link and invite the platform tried to send, and what the provider said">
+              <div className="mt-14 flex flex-wrap items-center gap-8">
+                {DELIVERY_WINDOWS.map(d => {
+                  const active = days === d;
+                  return (
+                    <button key={d} type="button" onClick={() => setDays(d)}
+                      className="rounded-input border px-12 py-6 text-[11px] font-semibold uppercase tracking-[0.1em]"
+                      style={{
+                        borderColor: active ? "var(--adm-accent)" : "var(--line)",
+                        background: active ? "var(--adm-accent-soft)" : "transparent",
+                        color: active ? "var(--adm-accent)" : "var(--ink-soft)"
+                      }}>
+                      last {d} day{d > 1 ? "s" : ""}
+                    </button>
+                  );
+                })}
+                <span className="mx-6 hidden h-4 sm:block"
+                  style={{ borderLeft: "1px solid var(--line)" }} aria-hidden />
+                {["", "sent", "failed", "skipped"].map(s => {
+                  const active = sentStatus === s;
+                  const count = s ? (delivery?.summary ?? [])
+                    .filter(x => x.status === s).reduce((t, x) => t + x.sends, 0)
+                    : (delivery?.summary ?? []).reduce((t, x) => t + x.sends, 0);
+                  return (
+                    <button key={s || "all"} type="button" onClick={() => setSentStatus(s)}
+                      className="rounded-input border px-12 py-6 text-[11px] font-semibold uppercase tracking-[0.1em]"
+                      style={{
+                        borderColor: active ? (STATUS_EDGE[s] ?? "var(--adm-accent)") : "var(--line)",
+                        background: active
+                          ? `color-mix(in srgb, ${STATUS_EDGE[s] ?? "var(--adm-accent)"} 14%, transparent)`
+                          : "transparent",
+                        color: active ? (STATUS_EDGE[s] ?? "var(--adm-accent)") : "var(--ink-soft)"
+                      }}>
+                      {s || "all"} · {int(count)}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Read this before any number below: it decides what a failed line means. */}
+              <div className="mt-14 rounded-card border p-16"
+                style={{ borderColor: "var(--line)", background: "var(--surface)" }}>
+                <div className="flex flex-wrap items-center gap-10">
+                  <Chip ok={delivery?.readiness?.mail_configured === true}
+                    label={delivery?.readiness?.mail_configured ? "provider key set" : "no provider key"} />
+                  <span className="text-xs tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                    sending as {delivery?.readiness?.mail_sender ?? "—"}
+                  </span>
+                </div>
+                <p className="mt-10 text-sm" style={{ color: "var(--ink-soft)" }}>
+                  {delivery?.readiness?.mail_configured
+                    ? "A sending key is configured, so each line below carries the provider's own answer, not a guess. A sent line means the provider accepted the message — it is still not proof that an inbox received it."
+                    : "No sending key is configured. Every code was stored and printed to the server console, and delivered to nobody: an account that cannot verify is the expected result of this state, not a bug in the sign-up form."}
+                </p>
+                {/@resend\.dev$/i.test(delivery?.readiness?.mail_sender ?? "") && (
+                  <p className="mt-8 text-sm font-semibold" style={{ color: "var(--danger)" }}>
+                    {delivery?.readiness?.mail_sender} is Resend&rsquo;s shared test address. It accepts a
+                    send and then delivers it only to the inbox that owns the Resend account, so every
+                    other company that signs up is told a code is on its way and never gets one. Verify a
+                    domain in the Resend console and point MAIL_FROM at it.
+                  </p>
+                )}
+              </div>
+
+              {deliveryError && (
+                <div role="alert" className="mt-14 rounded-input px-12 py-8 text-sm"
+                  style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)",
+                    borderLeft: "4px solid var(--danger)", color: "var(--ink)" }}>
+                  {deliveryError}
+                </div>
+              )}
+
+              {(delivery?.summary ?? []).length > 0 && (
+                <div className="mt-18 grid gap-12"
+                  style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
+                  {delivery!.summary.slice(0, 12).map(s => (
+                    <div key={`${s.channel}-${s.purpose}-${s.status}`}
+                      className="rounded-card border p-14"
+                      style={{ borderColor: "var(--line)", background: "var(--surface)",
+                        borderLeft: `4px solid ${STATUS_EDGE[s.status] ?? "var(--line)"}` }}>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em]"
+                        style={{ color: "var(--adm-accent)" }}>
+                        {PURPOSE_LABEL[s.purpose] ?? s.purpose} · {s.channel}
+                      </p>
+                      <p className="mt-6 text-base font-bold tabular-nums"
+                        style={{ color: STATUS_EDGE[s.status] ?? "var(--ink)" }}>
+                        {int(s.sends)} {s.status}
+                      </p>
+                      <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                        {int(s.addresses)} address{ s.addresses === 1 ? "" : "es"} · last {ago(s.last_at)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {(delivery?.items ?? []).length > 0 && (
+                <ul className="mt-18 space-y-10">
+                  {delivery!.items.slice(0, 40).map(it => (
+                    <li key={it.id} className="rounded-card border p-14"
+                      style={{ borderColor: "var(--line)", background: "var(--surface)",
+                        borderLeft: `4px solid ${STATUS_EDGE[it.status] ?? "var(--line)"}` }}>
+                      <div className="flex flex-wrap items-center gap-8 text-[10px] font-semibold uppercase tracking-[0.12em]">
+                        <span style={{ color: STATUS_EDGE[it.status] ?? "var(--ink-soft)" }}>
+                          {it.status}
+                        </span>
+                        <span style={{ color: "var(--adm-accent)" }}>
+                          {PURPOSE_LABEL[it.purpose] ?? it.purpose}
+                        </span>
+                        <span className="tabular-nums" style={{ color: "var(--ink)" }}>{it.to_masked}</span>
+                        <span className="ml-auto text-right tabular-nums"
+                          style={{ color: "var(--ink-soft)" }}>
+                          {ago(it.sent_at)} · {it.attempts} attempt{it.attempts === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                      {it.subject && (
+                        <p className="mt-6 text-sm font-semibold" style={{ color: "var(--ink)" }}>
+                          {it.subject}
+                        </p>
+                      )}
+                      {it.error && (
+                        <p className="mt-4 text-xs" style={{ color: "var(--danger)" }}>{it.error}</p>
+                      )}
+                      {it.provider_message_id && (
+                        <p className="mt-4 text-[11px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                          provider id {it.provider_message_id} · {it.provider ?? "resend"}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {!delivery && !deliveryError && (
+                <p className="mt-14 text-sm" style={{ color: "var(--ink-soft)" }}>
+                  Reading the register…
+                </p>
+              )}
+              {delivery && !delivery.items.length && !deliveryError && (
+                <p className="mt-14 text-sm" style={{ color: "var(--ink-soft)" }}>
+                  Nothing was sent inside {delivery.window_days} day{delivery.window_days === 1 ? "" : "s"}.
+                  Widen the window above before reading that as a healthy system — the register only
+                  holds what has been kept, and pruning is a decision this desk makes on purpose.
+                </p>
+              )}
+
+              {manage && (
+                <div className="mt-24 rounded-card border p-20"
+                  style={{ borderColor: "var(--line)", background: "var(--milk)" }}>
+                  <h3 className="text-sm font-bold uppercase tracking-[0.12em]" style={{ color: "var(--ink)" }}>
+                    Retention
+                  </h3>
+                  <p className="mt-8 max-w-[760px] text-sm" style={{ color: "var(--ink-soft)" }}>
+                    Lines older than the number below are deleted. Nothing runs this on a timer: the
+                    register is the evidence behind every &ldquo;we never got the code&rdquo; call, so
+                    clearing it is an operator decision and is audited as{" "}
+                    <code>control.delivery.retention</code>.
+                  </p>
+                  <div className="mt-14 flex flex-wrap items-end gap-12">
+                    <label className="block">
+                      <span className="mb-4 block text-[10px] font-bold uppercase tracking-[0.12em]"
+                        style={{ color: "var(--ink-soft)" }}>Keep the last (days)</span>
+                      <input type="number" min={7} max={3650} value={keepDays}
+                        onChange={e => { setKeepDays(Number(e.target.value)); setArmed(false); }}
+                        className="rounded-input border px-10 py-6 text-sm tabular-nums w-[120px]"
+                        style={{ borderColor: "var(--line)", background: "var(--surface)", color: "var(--ink)" }} />
+                    </label>
+                    <button type="button"
+                      onClick={() => { if (!armed) { setArmed(true); return; } if (!pruning) pruneDeliveries(); }}
+                      disabled={pruning || !(keepDays >= 7 && keepDays <= 3650)}
+                      className="rounded-input border px-16 py-8 text-xs font-semibold disabled:opacity-40"
+                      style={{
+                        borderColor: armed ? "var(--danger)" : "var(--adm-line)",
+                        color: armed ? "var(--danger)" : "var(--ink)"
+                      }}>
+                      {pruning ? "Pruning" : armed ? "Tap again to delete the old lines" : "Prune older lines"}
+                    </button>
+                    {pruneNote && (
+                      <span role="status" aria-live="polite" className="text-[11px]"
+                        style={{ color: "var(--ink-soft)" }}>{pruneNote}</span>
+                    )}
+                  </div>
+                </div>
+              )}
             </Section>
 
             {/* ---------------------------------------------- not measured */}

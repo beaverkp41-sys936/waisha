@@ -64,9 +64,10 @@ async function main() {
   const who = await owner.query(
     `select u.id as user_id, u.tenant_id, u.full_name from users u
      where u.user_type = 'director' and u.status = 'active' and u.deleted_at is null
+       and platform_auth.tenant_block_state(u.tenant_id) is null
      order by (select count(*) from cargo_shipments s where s.tenant_id = u.tenant_id and s.deleted_at is null) desc,
               u.created_at limit 1`);
-  if (!who.rowCount) throw new Error("No active director found");
+  if (!who.rowCount) throw new Error("No active director of an in-service company found");
   const { user_id, tenant_id, full_name } = who.rows[0];
   console.log(`probe tenant ${tenant_id} as "${full_name}"`);
 

@@ -175,18 +175,41 @@ function postHandlers(rel: string, src: string) {
   const at: { path: string; index: number }[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(src))) at.push({ path: m[1], index: m.index });
+  const helpers = limiterHelperNames(src);
   return at.map((h, i) => ({
     path: h.path,
     line: src.slice(0, h.index).split("\n").length,
     body: src.slice(h.index, i + 1 < at.length ? at[i + 1].index : src.length),
+    helpers,
     rel
   }));
+}
+
+/**
+ * Names of this file's own helpers that throttle — a local function whose body calls
+ * `enforceRateLimit`. A handler that calls one is limited; reading only the handler's own
+ * text would accuse the three signup routes of having no bucket precisely because their
+ * buckets were gathered into one `limitSignup()` call, which is the shape the last review
+ * asked for. Nested declarations are found by their own indentation, so the helper's
+ * closing brace is the first line that dedents back to it.
+ */
+function limiterHelperNames(src: string): string[] {
+  const names: string[] = [];
+  const re = /^([ \t]*)(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    const rest = src.slice(m.index + m[0].length);
+    const close = new RegExp(`^ {${m[1].length}}\\}`, "m").exec(rest);
+    if (close && /enforceRateLimit\s*\(/.test(rest.slice(0, close.index))) names.push(m[2]);
+  }
+  return names;
 }
 
 function checkCredentialLimiters(handlers: ReturnType<typeof postHandlers>) {
   for (const h of handlers) {
     if (!isCredentialPath(h.path)) continue;
     if (/enforceRateLimit\s*\(/.test(h.body)) continue;
+    if (h.helpers.some((n) => new RegExp(`\\b${n}\\s*\\(`).test(h.body))) continue;
     const exempt = Object.keys(NO_LIMITER_ALLOWED).find((p) => h.path.endsWith(p));
     if (exempt) continue;
     failures.push(`${h.rel}:${h.line}  POST ${h.path} checks or mints a credential with ` +

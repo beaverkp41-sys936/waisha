@@ -10,6 +10,7 @@ import { requirePermission } from "../security/permissions.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
 import { writeAudit } from "../audit/audit.js";
 import { sendMail } from "../mail/mail.js";
+import { inviteEmail } from "../mail/templates.js";
 import { env } from "../env.js";
 
 async function requireAuth(req: any) {
@@ -206,18 +207,14 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
         throw e;
       }
 
-      // Convenience copy only — the accept URL is returned to the director
-      // regardless, so a mail outage never blocks onboarding.
-      try {
-        await sendMail({
-          to: body.email,
-          subject: `You're invited to the WAISHA portal for ${tenantName}`,
-          text: `${body.fullName}, you have been invited to the WAISHA portal for ${tenantName}. Accept within ${INVITE_TTL_DAYS} days: ${inviteUrl} — then sign in with the company TIN and this email.`,
-          html: `<p>${body.fullName}, you have been invited to the <b>WAISHA</b> portal for <b>${tenantName}</b>.</p><p>Accept your invite within ${INVITE_TTL_DAYS} days:</p><p><a href="${inviteUrl}">${inviteUrl}</a></p><p>After choosing a password, sign in with the company TIN and this email.</p>`
-        });
-      } catch { /* mail failures never block an invite */ }
+      // Convenience copy only — the accept URL is returned to the director regardless, so a
+      // mail outage never blocks onboarding. It is still reported: a director who cannot see
+      // that the invite did not go out will wait for an email instead of sending the link.
+      const invite = await sendMail(
+        inviteEmail(body.email, { fullName: body.fullName, tenantName, url: inviteUrl, days: INVITE_TTL_DAYS }),
+        { purpose: "staff_invite", tenantId: req.user.tid, userId: id });
 
-      return reply.status(201).send({ id, inviteUrl });
+      return reply.status(201).send({ id, inviteUrl, mailSent: invite.delivered });
     });
 
   // ---------- Self-service profile (no roles, no permission needed) ----------
@@ -368,9 +365,12 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
       await enforceRateLimit(`reinvite:uid:${req.user.sub}`, 20, 3600);
 
       let inviteUrl = "";
+      let mailSent = false;
       await withTenant(req.user.tid, async (c) => {
         const target = await c.query(
-          `select id, status, email, full_name from users where id = $1 and tenant_id = $2 and deleted_at is null`,
+          `select u.id, u.status, u.email, u.full_name, t.name as tenant_name
+             from users u join tenants t on t.id = u.tenant_id
+            where u.id = $1 and u.tenant_id = $2 and u.deleted_at is null`,
           [id, req.user.tid]);
         if (!target.rowCount) throw new ApiError("NOT_FOUND", "Staff member not found", 404);
         if (target.rows[0].status !== "pending_verification") {
@@ -393,15 +393,14 @@ export async function usersRoutes(app: FastifyInstance, _opts: unknown) {
           action: "staff.reinvited", after: { email: target.rows[0].email }
         });
 
-        try {
-          await sendMail({
-            to: target.rows[0].email,
-            subject: "Your WAISHA invite link (resent)",
-            text: `Accept within ${INVITE_TTL_DAYS} days: ${inviteUrl}`,
-            html: `<p>Accept your WAISHA invite within ${INVITE_TTL_DAYS} days:</p><p><a href="${inviteUrl}">${inviteUrl}</a></p>`
-          });
-        } catch { /* mail failures never block a reinvite */ }
+        const resent = await sendMail(
+          inviteEmail(target.rows[0].email, {
+            fullName: target.rows[0].full_name ?? "",
+            tenantName: target.rows[0].tenant_name, url: inviteUrl, days: INVITE_TTL_DAYS
+          }),
+          { purpose: "staff_invite", tenantId: req.user.tid, userId: id });
+        mailSent = resent.delivered;
       });
-      return reply.send({ ok: true, inviteUrl });
+      return reply.send({ ok: true, inviteUrl, mailSent });
     });
 }
