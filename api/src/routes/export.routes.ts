@@ -107,7 +107,8 @@ export async function exportRoutes(app: FastifyInstance, _opts: unknown) {
       // The name goes on the face of the file: a register handed to an auditor says
       // whose desk printed it. The token carries no name, so it is read from the seat.
       const who = ok
-        ? await c.query("select full_name from users where id = $1", [req.user.sub])
+        ? await c.query("select full_name from users where id = $1 and tenant_id = $2",
+          [req.user.sub, req.user.tid])
         : null;
       return { allowed: ok, actor: who?.rows[0]?.full_name ?? req.user.sub };
     });

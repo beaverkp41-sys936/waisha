@@ -11,6 +11,10 @@
  * Every check here writes through the real HTTP surface and then reads the value
  * back, because a 200 alone was exactly what the bug looked like from the outside.
  *
+ * The last section is the other half of the same class: statements that bind the
+ * *caller's* tenant at all. Those read another company's row rather than missing it,
+ * so they answered 200 too — with someone else's data.
+ *
  * Run against a booted API on port 4000: npx tsx scripts/smoke-tenant-binds.ts
  */
 import "dotenv/config";
@@ -71,6 +75,9 @@ async function main() {
       await oi(`delete from freight_invoice_items where tenant_id = $1`, [t]);
       await oi(`delete from freight_invoice_payments where tenant_id = $1`, [t]);
       await oi(`delete from freight_invoices where tenant_id = $1`, [t]);
+      await oi(`delete from payments where tenant_id = $1`, [t]);
+      await oi(`delete from invoices where tenant_id = $1`, [t]);
+      await oi(`delete from subscriptions where tenant_id = $1`, [t]);
       await oi(`delete from route_checkpoints where tenant_id = $1`, [t]);
       await oi(`delete from routes where tenant_id = $1`, [t]).catch(() => { });
       await oi(`delete from branches where tenant_id = $1`, [t]);
@@ -230,6 +237,54 @@ async function main() {
     const settled = await call(`/invoices/${invoiceId}`, token);
     check("the invoice now reads as paid", settled.json?.effective_status === "paid",
       settled.json?.effective_status);
+
+    // ============================ licence payments ============================
+    // Three statements about a charge took their caller's tenant on faith: the
+    // idempotency read matched any company's key, and the status poll — and the lazy
+    // expiry that rides with it — matched any company's reference. A reference is in
+    // the URL and a key is a header, so both were guessable by design.
+    const IDEM = `bind-${STAMP}`;
+    const intent = (t: string, key: string) => call("/payments/intent", t, {
+      ...post({ planKey: "starter", billingCycle: "monthly", seats: 2, payerPhone: "+255710000555" }),
+      headers: { "Idempotency-Key": key }
+    });
+
+    const first = await intent(token, IDEM);
+    check("a licence intent is created", first.status === 201 && !!first.json?.intentReference,
+      [first.status, first.json]);
+    const refA = first.json?.intentReference as string;
+
+    const repeat = await intent(token, IDEM);
+    check("the same key from the same seat returns the same intent, not a second charge",
+      repeat.json?.idempotent === true && repeat.json?.intentReference === refA,
+      [repeat.status, repeat.json]);
+
+    const foreignKey = await intent(otherToken, IDEM);
+    check("another tenant guessing that key gets its own intent, not this seat's reference",
+      foreignKey.status === 201 && !!foreignKey.json?.intentReference
+        && foreignKey.json.intentReference !== refA && foreignKey.json.idempotent !== true,
+      [foreignKey.status, foreignKey.json]);
+
+    const foreignRead = await call(`/payments/${refA}/status`, otherToken);
+    check("another tenant cannot read this tenant's payment by its reference "
+      + "(it answered 200 with the amount before the fix)",
+      foreignRead.status === 404, [foreignRead.status, foreignRead.json]);
+
+    // Aged past the 10-minute window, so the poll's lazy expiry is a live question
+    // rather than a branch the statement never reaches.
+    await oi(`update payments set requested_at = now() - interval '31 minutes'
+              where intent_reference = $1 and tenant_id = $2`, [refA, T]);
+    const strangerPoll = await call(`/payments/${refA}/status`, otherToken);
+    const stillPending = (await oi(`select status from payments where intent_reference = $1`, [refA])).rows[0];
+    check("a stranger's poll cannot time this tenant's payment off "
+      + "(the definer ran over any company's row before the fix)",
+      strangerPoll.status === 404 && stillPending?.status === "pending",
+      [strangerPoll.status, stillPending]);
+
+    const ownPoll = await call(`/payments/${refA}/status`, token);
+    const ownRow = (await oi(`select status from payments where intent_reference = $1`, [refA])).rows[0];
+    check("the seat's own poll still expires its own stale payment",
+      ownPoll.status === 200 && ownRow?.status === "timed_out", [ownPoll.status, ownRow]);
   } finally {
     await wipe();
     const residue = await oi(`select
@@ -237,7 +292,9 @@ async function main() {
       (select count(*) from users where tenant_id = any($1::uuid[]))::int as users,
       (select count(*) from routes where tenant_id = any($1::uuid[]))::int as routes,
       (select count(*) from branches where tenant_id = any($1::uuid[]))::int as branches,
-      (select count(*) from freight_invoices where tenant_id = any($1::uuid[]))::int as invoices`, [[T, TO]]);
+      (select count(*) from freight_invoices where tenant_id = any($1::uuid[]))::int as invoices,
+      (select count(*) from payments where tenant_id = any($1::uuid[]))::int as payments,
+      (select count(*) from invoices where tenant_id = any($1::uuid[]))::int as billing_invoices`, [[T, TO]]);
     console.log("\nresidue:", residue.rows[0]);
     await owner.end();
   }

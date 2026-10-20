@@ -33,10 +33,14 @@ export async function paymentsRoutes(app: FastifyInstance, _opts: unknown) {
       payerPhone: z.string().regex(/^\+[1-9]\d{7,14}$/)
     }).parse(req.body);
 
-    // Idempotency-Key (spec 10): same key returns the same intent, never a double charge
+    // Idempotency-Key (spec 10): same key returns the same intent, never a double charge.
+    // Bound to this tenant on purpose: the key is a client-supplied header, so an unbound
+    // lookup would hand a caller another company's intent_reference for the crime of
+    // guessing its key, and would skip creating the charge this seat actually asked for.
     const idemKey = (req.headers["idempotency-key"] as string | undefined)?.trim() || uuidv7();
     const existing = await withTenant(req.user.tid, (c) => c.query(
-      "select intent_reference from payments where idempotency_key = $1", [idemKey]));
+      "select intent_reference from payments where idempotency_key = $1 and tenant_id = $2",
+      [idemKey, req.user.tid]));
     if (existing.rowCount) {
       return reply.send({ intentReference: existing.rows[0].intent_reference, idempotent: true });
     }
@@ -112,14 +116,18 @@ export async function paymentsRoutes(app: FastifyInstance, _opts: unknown) {
   app.get("/payments/:ref/status", { preHandler: [requireAuth] }, async (req: any) => {
     const { ref } = req.params as { ref: string };
     // Lazy expiry: a pending payment older than the window becomes timed_out.
+    // Both halves bind this tenant. The reference is the URL segment, so an unbound
+    // read would price another company's licence to whoever asked, and an unbound
+    // expiry — the FROM is what decides whether the definer runs — would let a
+    // stranger time a payment off that is not theirs.
     await withTenant(req.user.tid, (c) => c.query(
       `select platform_auth.complete_payment($1, 'timed_out') as r
-       from payments where intent_reference = $2 and status = 'pending'
-         and requested_at < now() - make_interval(mins => $3)`,
-      [ref, ref, PENDING_TIMEOUT_MINUTES]));
+       from payments where intent_reference = $2 and tenant_id = $3 and status = 'pending'
+         and requested_at < now() - make_interval(mins => $4)`,
+      [ref, ref, req.user.tid, PENDING_TIMEOUT_MINUTES]));
     const current = await withTenant(req.user.tid, (c) => c.query(
       `select status, provider, amount, completed_at, invoice_id
-       from payments where intent_reference = $1`, [ref]));
+       from payments where intent_reference = $1 and tenant_id = $2`, [ref, req.user.tid]));
     if (!current.rowCount) throw new ApiError("NOT_FOUND", "Payment not found", 404);
     const licence = await pool.query("select platform_auth.get_licence($1) as l", [req.user.tid]);
     return {
