@@ -15,7 +15,9 @@ import { sendTenantNotice } from "../mail/tenant-notice.js";
  * control desk go through the same definer, which means the register row, the audit row,
  * the session revoke and the notice list are identical whoever pulled the lever. The only
  * difference is `actor_kind`, and that is the point — the desk can always tell the timer
- * from a person.
+ * from a person. Since 121 that single difference also carries the two-person rule: a
+ * person's ban needs a second seat's signature before the same definer will write it, and
+ * the timer's does not, so a sweep passes a null approval and stays a timer.
  *
  * Running it twice is safe. `tenant_apply_action` takes a row lock and re-reads the state
  * inside it, so a second pass finds the company already suspended and answers `conflict`,
@@ -33,9 +35,9 @@ export const CLOSE_AFTER_DAYS = 90;
 
 /** Params: block window, close window. */
 export const CANDIDATES_SQL = "select platform_auth.tenant_policy_candidates($1, $2) as c";
-/** Params: tenant, action, reason, note, actor kind, actor user, actor role, ip. */
+/** Params: tenant, action, reason, note, actor kind, actor user, actor role, ip, approval. */
 export const APPLY_SQL =
-  "select platform_auth.tenant_apply_action($1,$2,$3,$4,$5,$6,$7,$8) as r";
+  "select platform_auth.tenant_apply_action($1,$2,$3,$4,$5,$6,$7,$8,$9) as r";
 /** Params: action id, receipt jsonb. */
 export const RECEIPT_SQL = "select platform_auth.tenant_action_receipt($1, $2::jsonb) as r";
 
@@ -75,7 +77,12 @@ async function applyIdleAction(tenantId: string, action: TenantAction, note: str
   const { rows } = await pool.query(APPLY_SQL, [
     // reason_code long_idle is the timer's own: a person blocking for the same lapse
     // picks the reason themselves, and the register keeps those apart.
-    tenantId, action, "long_idle", note, "system", null, "system", null
+    //
+    // The null is the 121 signature column, and it is the timer's honest answer: no second
+    // seat signed this. `tenant_actions_two_seats` only tests rows written by a control
+    // actor, so a sweep stays automatic — a timer has no second hand, and 45 days of
+    // warnings already preceded it.
+    tenantId, action, "long_idle", note, "system", null, "system", null, null
   ]);
   return (rows[0]?.r as (AppliedAction & { status: string }) | null) ?? null;
 }

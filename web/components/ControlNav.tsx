@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Activity, Banknote, Boxes, Bug, Building2, CreditCard, Globe, Headphones, Languages, Lightbulb, LogOut,
-  Megaphone, ScrollText, Settings2, Tag, TrendingUp, UserCog, Users, type LucideIcon
+  Megaphone, ScrollText, Settings2, Stamp, Tag, TrendingUp, UserCog, Users, type LucideIcon
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
@@ -37,6 +37,12 @@ const SCREENS: Screen[] = [
   { href: "/control/gateway", label: "Gateway", icon: CreditCard,
     keys: ["control.gateway.view", "control.gateway.manage"] },
   { href: "/control/tenants", label: "Tenants", icon: Building2, roles: LICENCE, keys: ["control.tenants.manage"] },
+  // The second seat's desk. Both keys open it because the register is read by people who
+  // cannot sign as well as by people who can — a ban that needs a second opinion must be
+  // visible to whoever is asked for it, or the queue sits unnoticed and the company stays
+  // blocked by nothing except waiting.
+  { href: "/control/approvals", label: "Approvals", icon: Stamp,
+    keys: ["control.approvals.view", "control.approvals.decide"] },
   { href: "/control/directory", label: "Directory", icon: Globe, roles: LICENCE },
   { href: "/control/recommendations", label: "Inbox", icon: Lightbulb,
     keys: ["control.recommendations.view", "control.recommendations.manage"] },

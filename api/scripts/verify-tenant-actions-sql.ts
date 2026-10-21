@@ -1,6 +1,6 @@
 /**
  * Live proof for #127 — the seat ladder, the action register and the gate behind them
- * (migrations 078, 079, 080, 081).
+ * (migrations 078, 079, 080, 081) and for the signature a ban now stands on (121).
  *
  * Same rule 066 established and 068 re-proved: EXPLAIN cannot see inside a SECURITY
  * DEFINER body, so a function that licenses the wrong seat count, answers a duplicate
@@ -21,6 +21,7 @@ import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { BLOCK_STATE_SQL, SUSPENSIONS_SQL } from "../src/security/tenant-state.js";
 import { CANDIDATES_SQL, APPLY_SQL, RECEIPT_SQL } from "../src/util/tenant-policy.js";
+import { DECIDE_SQL, PROPOSE_SQL } from "../src/control/approvals.js";
 import { HISTORY_SQL } from "../src/routes/control-tenants.routes.js";
 
 let failures = 0;
@@ -121,14 +122,58 @@ async function main() {
   // ================================================================
   console.log("\n--- 2 · the seat ladder, on a company that rolls back ---");
 
+  // The gate's snapshot is not empty on a development database: the office has closed
+  // companies by hand here, and those rows are other people's work. So every assertion
+  // below about the snapshot measures this script against the set it found, not against an
+  // empty table. What the script may not do is add to it — before or after the rollback.
+  const baseline = new Set<string>(((await owner.query(SUSPENSIONS_SQL)).rows[0].s as any[])
+    .map((x) => x.tenant_id));
+
   const tid = randomUUID();
   const tid2 = randomUUID();
   const subId = randomUUID();
+  const desk = randomUUID();
+  const seatA = randomUUID();
+  const seatB = randomUUID();
   const actor = (await owner.query(
     `select id from users where user_type = 'platform' and status = 'active' limit 1`)).rows[0]?.id ?? null;
 
   await owner.query("begin");
   try {
+    // 121: a control-actor block is refused by a trigger unless a released two-seat
+    // signature stands behind it, so this script needs two platform seats of its own. They
+    // are made here, in the same transaction as everything else, and rolled back with it —
+    // borrowing real seats would leave a proposal nobody raised sitting against a real
+    // company the moment a probe failed half-way.
+    await owner.query(
+      `insert into tenants (id, type, name, status) values ($1,'platform','081 verify desk (rolled back)','active')`,
+      [desk]);
+    await owner.query(
+      `insert into users (id, tenant_id, user_type, full_name, email,
+             email_normalized_search, status, totp_enabled)
+       values ($1,$2,'platform','Vera Raiser',$4,$5,'active',false),
+              ($3,$2,'platform','Wesley Signer',$6,$7,'active',false)`,
+      [seatA, desk, seatB, `v081.a.${Date.now()}@waisha.test`, `v081.a.${Date.now()}@waisha.test`,
+      `v081.b.${Date.now()}@waisha.test`, `v081.b.${Date.now()}@waisha.test`]);
+
+    /**
+     * The signature a control ban now has to stand on: raised by one seat, released by the
+     * other, spent by the second. `verify-approvals-sql.ts` proves that machinery line by
+     * line; here it only exists so the register and the gate can be run at all.
+     */
+    const release = async (tenant: string, act: string, code: string, note: string) => {
+      const p = (await owner.query(PROPOSE_SQL, [
+        `tenant.${act}`, "tenant", tenant,
+        JSON.stringify({ tenant_id: tenant, reason_code: code, note }),
+        "Probe: the two seats behind this ban.", seatA, "super_admin", "127.0.0.1", "verify"
+      ])).rows[0].r;
+      if (p?.status !== "ok") throw new Error(`proposal refused: ${JSON.stringify(p)}`);
+      const d = (await owner.query(DECIDE_SQL,
+        [p.approval_id, "approve", "Probe: signed by the second seat.", seatB,
+        "compliance_officer", "127.0.0.1", "verify"])).rows[0].r;
+      if (d?.status !== "ok") throw new Error(`signature refused: ${JSON.stringify(d)}`);
+      return p.approval_id as string;
+    };
     await owner.query(
       `insert into tenants (id, type, name, status, licence_expires_at)
        values ($1,'transporter',$2,'active', now() + interval '30 days')`,
@@ -164,9 +209,16 @@ async function main() {
     // ----------------------------------------------------------------
     console.log("\n--- 3 · the register and the gate, on the same rolled-back company ---");
 
+    const banNote = "Probe: the register must keep a real sentence.";
+    const signed = await release(tid, "block", "terms_violation", banNote);
     const blocked = (await owner.query(APPLY_SQL,
-      [tid, "block", "terms_violation", "Probe: the register must keep a real sentence.",
-      "control", actor, "super_admin", "127.0.0.1"])).rows[0].r;
+      [tid, "block", "terms_violation", banNote,
+      // The seat that signed is the seat the register names as its author, and the
+      // proposal it signed is on the row beside it (121).
+      "control", seatB, "compliance_officer", "127.0.0.1", signed])).rows[0].r;
+    check("a control ban lands when a released signature stands behind it",
+      blocked.status === "ok" && blocked.approval_id === signed,
+      { status: blocked.status, approval_id: blocked.approval_id });
     // 081: the payload used to carry two keys called 'status', and the second one — the
     // tenant's new status — won. Every successful act therefore looked like a refusal.
     check("tenant_apply_action answers with one status key, and it says ok",
@@ -183,9 +235,11 @@ async function main() {
     check("tenant_block_state reports the suspension with its reason and note",
       state?.reason_code === "terms_violation" && state?.closed === false
       && !!state?.since && !!state?.by, state);
-    const susp = (await owner.query(SUSPENSIONS_SQL)).rows[0].s;
-    check("the gate's snapshot contains exactly this company and no real one",
-      Array.isArray(susp) && susp.length === 1 && susp[0].tenant_id === tid, susp);
+    const susp = (await owner.query(SUSPENSIONS_SQL)).rows[0].s as any[];
+    check("the gate's snapshot holds this company and adds no other",
+      susp.some((x) => x.tenant_id === tid)
+      && susp.filter((x) => !baseline.has(x.tenant_id)).every((x) => x.tenant_id === tid),
+      susp.filter((x) => !baseline.has(x.tenant_id)));
 
     const receipt = (await owner.query(RECEIPT_SQL,
       [blocked.action_id, JSON.stringify({ subject: "probe", recipients: 1 })])).rows[0].r;
@@ -197,29 +251,34 @@ async function main() {
     check("the desk reader returns the row with its receipt",
       history.length === 1 && history[0].action === "block"
       && history[0].delivery?.subject === "probe", history);
+    check("…and names the two seats the ban stands on, not just the one that pressed it",
+      history[0].approval_id === signed && history[0].raised_by === "Vera Raiser"
+      && history[0].signed_by === "Wesley Signer" && !!history[0].signed_at, history);
 
     const second = (await owner.query(APPLY_SQL,
       [tid, "block", "abuse", "A second block on a company already suspended.",
-      "control", actor, "super_admin", null])).rows[0].r;
+      "control", seatB, "compliance_officer", null, signed])).rows[0].r;
     check("a second block is a conflict, not a second suspension",
       second.status === "conflict", second);
+    // Both refused by the definer before it ever reaches the register table, which is why a
+    // null signature is enough to ask the question: the trigger is not what stops them.
     const bad = (await owner.query(APPLY_SQL,
-      [tid, "block", "terms_violation", "short", "control", actor, "super_admin", null])).rows[0].r;
+      [tid, "block", "terms_violation", "short", "control", seatB, "compliance_officer", null, null])).rows[0].r;
     check("a note too thin to defend is refused before anything is written",
       bad.status === "invalid", bad);
     const ghost = (await owner.query(APPLY_SQL,
       [randomUUID(), "block", "abuse", "A company that does not exist at all.",
-      "control", actor, "super_admin", null])).rows[0].r;
+      "control", seatB, "compliance_officer", null, null])).rows[0].r;
     check("an unknown company is not_found", ghost.status === "not_found", ghost);
 
     const unblocked = (await owner.query(APPLY_SQL,
       [tid, "unblock", "other", "Probe cleanup: put it back where it was found.",
-      "control", actor, "super_admin", null])).rows[0].r;
-    check("unblock restores the status the block found",
+      "control", seatA, "super_admin", null, null])).rows[0].r;
+    check("unblock restores the status the block found, and needs no second seat",
       unblocked.status === "ok" && unblocked.new_status === "active", unblocked);
     check("…and the company leaves the gate's snapshot",
-      (await owner.query(SUSPENSIONS_SQL)).rows[0].s.length === 0,
-      (await owner.query(SUSPENSIONS_SQL)).rows[0].s);
+      !(await owner.query(SUSPENSIONS_SQL)).rows[0].s.some((x: any) => x.tenant_id === tid),
+      (await owner.query(SUSPENSIONS_SQL)).rows[0].s.filter((x: any) => x.tenant_id === tid));
 
     // ----------------------------------------------------------------
     console.log("\n--- 4 · the idle clock's own arithmetic ---");
@@ -255,12 +314,16 @@ async function main() {
       cand.length === 1 && cand[0].tenant_id === tid2 && cand[0].action === "block"
       && cand[0].days_idle >= 45, cand);
     const swept = (await owner.query(APPLY_SQL,
-      [tid2, "block", "long_idle", "Probe: the clock's own note.", "system", null, "system", null])).rows[0].r;
+      [tid2, "block", "long_idle", "Probe: the clock's own note.",
+      // A timer has no second hand, and 121's trigger reads exactly that: the exemption is
+      // on `actor_kind`, not on the act, so the sweep stays automatic with a null signature.
+      "system", null, "system", null, null])).rows[0].r;
     check("the clock's act is recorded as the clock's act",
       swept.status === "ok" && swept.new_status === "suspended", swept);
     const regSwept = (await owner.query(HISTORY_SQL, [tid2, 5])).rows[0].a;
     check("…with the system as its author and no human claimed behind it",
-      regSwept[0].actor_kind === "system" && regSwept[0].actor_role === "system", regSwept);
+      regSwept[0].actor_kind === "system" && regSwept[0].actor_role === "system"
+      && regSwept[0].approval_id === null, regSwept);
     const cand2 = (await owner.query(CANDIDATES_SQL, [45, 90])).rows[0].c;
     check("a suspended company is not asked to be suspended again",
       cand2.length === 0, cand2);
@@ -274,23 +337,26 @@ async function main() {
       cand3.length === 1 && cand3[0].action === "close" && cand3[0].days_idle >= 90, cand3);
     const closed = (await owner.query(APPLY_SQL,
       [tid2, "close", "long_idle", "Probe: past the three-month window.",
-      "system", null, "system", null])).rows[0].r;
+      "system", null, "system", null, null])).rows[0].r;
     check("a close suspends as well as tombstones, so no window can widen later",
       closed.status === "ok" && closed.new_status === "suspended" && closed.closed === true, closed);
     const closedState = (await owner.query(BLOCK_STATE_SQL, [tid2])).rows[0].s;
     check("the gate still sees a closed company, and calls it withdrawn",
       closedState?.closed === true && closedState?.reason_code === "long_idle", closedState);
+    // Refused by the definer's own state read — the company is tombstoned — before the
+    // register is touched, so an unblock never gets far enough to need a signature.
     const afterClose = (await owner.query(APPLY_SQL,
       [tid2, "unblock", "other", "Trying to reopen a company the clock closed.",
-      "control", actor, "super_admin", null])).rows[0].r;
+      "control", actor, "super_admin", null, null])).rows[0].r;
     check("once closed, no action reaches the company again",
       afterClose.status === "not_found", afterClose);
     const cand4 = (await owner.query(CANDIDATES_SQL, [45, 90])).rows[0].c;
     check("…and it is off the idle list for good", cand4.length === 0, cand4);
-    const suspAll = (await owner.query(SUSPENSIONS_SQL)).rows[0].s;
+    const withdrawn = (await owner.query(SUSPENSIONS_SQL)).rows[0].s
+      .find((x: any) => x.tenant_id === tid2);
     check("the snapshot carries the closed one, with the withdrawn flag",
-      suspAll.length === 1 && suspAll[0].tenant_id === tid2
-      && suspAll[0].state?.closed === true, suspAll);
+      withdrawn?.state?.closed === true && withdrawn?.state?.reason_code === "long_idle",
+      withdrawn);
 
     await owner.query("rollback");
   } catch (e) {
@@ -303,16 +369,27 @@ async function main() {
             (select count(*) from tenant_actions where tenant_id = any($1::uuid[])) as actions,
             (select count(*) from subscriptions where tenant_id = any($1::uuid[])) as subs,
             (select count(*) from invoices where tenant_id = any($1::uuid[])) as invoices,
-            (select count(*) from audit_logs where tenant_id = any($1::uuid[])) as audit`,
-    [[tid, tid2]]);
-  check("nothing survives the probe: no company, register row, licence, invoice or audit row",
+            (select count(*) from audit_logs where tenant_id = any($1::uuid[])) as audit,
+            (select count(*) from platform_approvals
+              where proposed_by = any($2::uuid[]) or decided_by = any($2::uuid[])) as approvals,
+            (select count(*) from users where id = any($2::uuid[])) as seats`,
+    [[tid, tid2, desk], [seatA, seatB]]);
+  check("nothing survives the probe: no company, seat, register row, signature, licence, "
+    + "invoice or audit row",
     residue.rows[0].tenant === "0" && residue.rows[0].actions === "0"
     && residue.rows[0].subs === "0" && residue.rows[0].invoices === "0"
-    && residue.rows[0].audit === "0", residue.rows[0]);
+    && residue.rows[0].audit === "0" && residue.rows[0].approvals === "0"
+    && residue.rows[0].seats === "0", residue.rows[0]);
 
-  const liveSusp = await owner.query(`select platform_auth.tenant_suspensions() as s`);
-  check("no real company is suspended or closed on the platform right now",
-    (liveSusp.rows[0].s as any[]).length === 0, liveSusp.rows[0].s);
+  const liveSusp = (await owner.query(`select platform_auth.tenant_suspensions() as s`))
+    .rows[0].s as any[];
+  // The honest version of "nothing is shut": this script may not be what shut it. Companies
+  // the office closed by hand are allowed to be in the snapshot; a probe company is not.
+  check("no company this probe made is left suspended or closed",
+    !liveSusp.some((x) => x.tenant_id === tid || x.tenant_id === tid2)
+    && liveSusp.every((x) => baseline.has(x.tenant_id)),
+    liveSusp.filter((x) => !baseline.has(x.tenant_id)));
+  console.log(`     (${liveSusp.length} companies were already shut on this database before the probe ran.)`);
   const liveCand = await owner.query(`select platform_auth.tenant_policy_candidates(45,90) as c`);
   check("and none is a candidate for the idle clock, so a sweep today changes nothing",
     (liveCand.rows[0].c as any[]).length === 0, liveCand.rows[0].c);

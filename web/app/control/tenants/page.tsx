@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { AnnouncementTicker } from "@/components/AnnouncementTicker";
 import { ControlNav } from "@/components/ControlNav";
@@ -32,6 +33,14 @@ interface RegisterRow {
   id: string; action: string; reason_code: string; note: string;
   prior_status: string; new_status: string; seats_licensed: number | null;
   actor_kind: string; actor_role: string | null; delivery: Receipt; created_at: string;
+  // 121: a ban written by a person carries the proposal that licensed it, and the two
+  // seats whose signatures it took. The clock's own acts carry none of it, and say so.
+  approval_id: string | null; raised_by: string | null; signed_by: string | null;
+}
+/** The answer to a proposed ban: nothing has happened to the company yet. */
+interface Proposal {
+  approval_id: string; action: string; target_name: string; payload_sha256: string;
+  approval_status: string; expires_at: string;
 }
 interface Candidate {
   tenant_id: string; name: string; action: string; days_idle: number; lapsed_at: string | null;
@@ -112,6 +121,11 @@ export default function TenantsPage() {
   const [manage, setManage] = useState<TenantRow | null>(null);
   const [reasonCode, setReasonCode] = useState("terms_violation");
   const [note, setNote] = useState("");
+  // The sentence the second seat signs. Separate from `note` on purpose: one is sent to a
+  // company, the other is kept in the office, and a desk that writes one sentence for both
+  // ends up telling the company what it was really accused of.
+  const [reason, setReason] = useState("");
+  const [mProposed, setMProposed] = useState<Proposal | null>(null);
   const [mError, setMError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [history, setHistory] = useState<RegisterRow[]>([]);
@@ -169,8 +183,8 @@ export default function TenantsPage() {
   }
 
   function openManage(t: TenantRow) {
-    setManage(t); setReasonCode("terms_violation"); setNote("");
-    setMError(null); setOutcome(null); setArmed(null);
+    setManage(t); setReasonCode("terms_violation"); setNote(""); setReason("");
+    setMError(null); setOutcome(null); setMProposed(null); setArmed(null);
     loadHistory(t.tenant_id);
   }
 
@@ -199,17 +213,32 @@ export default function TenantsPage() {
   }
 
   /**
-   * Act on a company. The API writes the register row and sends the notice before it
-   * answers, so whatever comes back — even an error — is a reason to re-read both.
+   * Act on a company.
+   *
+   * Two paths now, and the desk has to be honest about which one it took. Opening a door
+   * or sending a message is one person's job and the answer is what happened to the
+   * company. Shutting a door is two: this raises a proposal, nothing changes, and the
+   * company stays exactly as it was until a second seat signs the sentence on
+   * /control/approvals. Whatever comes back — even an error — is a reason to re-read the
+   * register, because a refusal may still have landed a row on it.
    */
   async function act(action: "block" | "unblock" | "close" | "notice") {
     if (!manage) return;
-    setBusy(true); setMError(null); setOutcome(null);
+    const ban = action === "block" || action === "close";
+    setBusy(true); setMError(null); setOutcome(null); setMProposed(null);
     try {
-      const res = await fetch(`${API}/api/v1/control/tenants/${manage.tenant_id}/${action}`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
-        body: JSON.stringify({ reasonCode, note: note.trim() })
-      });
+      const res = ban
+        ? await fetch(`${API}/api/v1/control/approvals`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+          body: JSON.stringify({
+            action: `tenant.${action}`, targetId: manage.tenant_id,
+            reasonCode, note: note.trim(), reason: reason.trim()
+          })
+        })
+        : await fetch(`${API}/api/v1/control/tenants/${manage.tenant_id}/${action}`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+          body: JSON.stringify({ reasonCode, note: note.trim() })
+        });
       const j = await res.json().catch(() => ({}));
       loadHistory(manage.tenant_id);
       if (canManage) loadIdle();
@@ -221,8 +250,10 @@ export default function TenantsPage() {
         // The API answers a short note with "Request validation failed"; the field list
         // is the part that says what to type, and the desk has to be able to read it.
         const hints = (j?.error?.details ?? []).map((d: any) => d.message).join(" · ");
-        setMError([j?.error?.message ?? "The action was refused.", hints].filter(Boolean).join(" — "));
+        setMError([j?.error?.message ?? (ban ? "The proposal was not raised." : "The action was refused."),
+          hints].filter(Boolean).join(" — "));
       }
+      else if (ban) setMProposed(j as Proposal);
       else setOutcome(j as Outcome);
     } finally { setBusy(false); }
   }
@@ -278,8 +309,8 @@ export default function TenantsPage() {
     } finally { setBorrowBusy(null); }
   }
 
-  // Armed on the first tap, run on the second. These write to another company's access
-  // and its directors' phones, so a stray click must cost nothing.
+  // Armed on the first tap, run on the second. The clock acts on every overdue company at
+  // once and tells their directors, so a stray click must cost nothing.
   const twoTap = (key: string, run: () => void) => () => {
     if (armed !== key) { setArmed(key); return; }
     run();
@@ -318,8 +349,10 @@ export default function TenantsPage() {
         <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Tenants</h1>
         <p className="mt-8 mb-16 text-sm" style={{ color: "var(--ink-soft)" }}>
           Activate or extend licences when payment was verified out-of-band (wallet/bank transfer, gateway outage),
-          and block, notify or close a company that has broken the terms. Every act is recorded on the company&apos;s
-          register and told to its directors by SMS and email before it leaves this screen.
+          and notify, block or close a company that has broken the terms. Every act is recorded on the company&apos;s
+          register and told to its directors by SMS and email before it leaves this screen — except a ban, which sits
+          on <Link href="/control/approvals" className="font-semibold underline" style={{ color: "var(--adm-accent)" }}>Approvals</Link>{" "}
+          until a second platform seat signs it. One seat may open a door; two are needed to shut one.
         </p>
 
         {canBorrow && (
@@ -558,6 +591,14 @@ export default function TenantsPage() {
               {mRow.name} · {mRow.status}
               {mRow.blocked_reason ? ` · blocked for ${reasonLabel(mRow.blocked_reason)}` : ""}
             </p>
+            <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+              Opening a door or sending a message is one seat&apos;s job and happens now. Shutting a
+              door takes two: the buttons below raise a proposal that nothing acts on until a second
+              platform seat signs it on{" "}
+              <Link href="/control/approvals" className="font-semibold underline"
+                style={{ color: "var(--adm-accent)" }}>Approvals</Link>. The company is not told,
+              blocked or touched while a proposal waits — and it lapses on its own after a week.
+            </p>
 
             <div className="mt-16 space-y-12">
               <label className="block">
@@ -576,6 +617,21 @@ export default function TenantsPage() {
                   className={`${inputCls} font-sans`} style={inputStyle} />
                 <span className="mt-2 block text-[10px]" style={{ color: "var(--ink-soft)" }}>
                   {note.trim().length}/600
+                </span>
+              </label>
+              {/* Only the two ban buttons read this field. It is kept visible beside the
+                  note rather than hidden behind them, because the difference between the two
+                  sentences is the thing a desk gets wrong: one goes out to a company, this
+                  one stays in the office and is what a second seat agrees to. */}
+              <label className="block">
+                <span className={labelCls} style={{ color: "var(--ink-soft)" }}>
+                  Why the office is shutting the door — for the second seat (8–600 characters)
+                </span>
+                <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+                  placeholder="What was seen, when, and what has already been tried. Not sent to the company."
+                  className={`${inputCls} font-sans`} style={inputStyle} />
+                <span className="mt-2 block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                  {reason.trim().length}/600 · used by Block access and Close account only
                 </span>
               </label>
             </div>
@@ -597,13 +653,35 @@ export default function TenantsPage() {
                 <Receipt r={outcome.delivery ?? {}} />
               </div>
             )}
+            {mProposed && (
+              <div role="status" className="mt-12 rounded-input px-12 py-8"
+                style={{ borderLeft: "4px solid var(--adm-accent)" }}>
+                <p className="text-xs font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink)" }}>
+                  {mProposed.action === "tenant.close" ? "Proposed close" : "Proposed block"} · waiting
+                  for a second seat
+                </p>
+                <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                  {mProposed.target_name} is still {mRow.status} — nothing was changed and nobody was
+                  told. Sign it on{" "}
+                  <Link href="/control/approvals" className="font-semibold underline"
+                    style={{ color: "var(--adm-accent)" }}>Approvals</Link>
+                  {" "}(you cannot sign your own) or it lapses {when(mProposed.expires_at)}.
+                </p>
+                <p className="mt-4 text-[10px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                  sha256 {mProposed.payload_sha256} · the second seat signs these exact bytes
+                </p>
+              </div>
+            )}
 
             <div className="mt-16 flex flex-wrap gap-8">
+              {/* No second tap on the two bans: a proposal changes nothing, so a stray click
+                  costs an entry in a queue rather than a company's access. The arming that is
+                  left sits on the clock, which does suspend companies in one press. */}
               <button type="button" disabled={busy || mSuspended || mClosed}
                 onClick={() => act("block")}
                 className="rounded-input border px-16 py-10 text-xs font-semibold disabled:opacity-40"
                 style={{ borderColor: "var(--danger)", color: "var(--ink)" }}>
-                {mClosed ? "Account closed" : mSuspended ? "Already suspended" : "Block access"}
+                {mClosed ? "Account closed" : mSuspended ? "Already suspended" : "Propose a block"}
               </button>
               <button type="button" disabled={busy || !mSuspended}
                 onClick={() => act("unblock")}
@@ -617,12 +695,10 @@ export default function TenantsPage() {
                 Send notice only
               </button>
               <button type="button" disabled={busy || mClosed}
-                onClick={twoTap(`close-${mRow.tenant_id}`, () => act("close"))}
+                onClick={() => act("close")}
                 className="rounded-input border px-16 py-10 text-xs font-semibold disabled:opacity-40"
-                style={armed === `close-${mRow.tenant_id}`
-                  ? { borderColor: "var(--danger)", background: "color-mix(in srgb, var(--danger) 14%, transparent)", color: "var(--ink)" }
-                  : { borderColor: "var(--danger)", color: "var(--ink)" }}>
-                {armed === `close-${mRow.tenant_id}` ? "Tap again to close the account" : "Close account"}
+                style={{ borderColor: "var(--danger)", color: "var(--ink)" }}>
+                {mClosed ? "Account closed" : "Propose a close"}
               </button>
             </div>
 
@@ -644,6 +720,17 @@ export default function TenantsPage() {
                       {h.prior_status} → {h.new_status} · by {h.actor_kind}
                       {h.actor_role ? ` (${h.actor_role})` : ""}
                     </p>
+                    {/* Who stood behind the act. A ban written after 121 names both seats; the
+                        clock's own acts and the acts that never needed a signature say so, so
+                        the register is not left looking like a gap in the rule. */}
+                    {!!h.approval_id || h.actor_kind === "control" ? (
+                      <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.1em]"
+                        style={{ color: h.approval_id ? "var(--success)" : "var(--warning)" }}>
+                        {h.approval_id
+                          ? `two seats · raised by ${h.raised_by ?? "a platform seat"}, signed by ${h.signed_by ?? "a second seat"}`
+                          : "one seat · no signature recorded on this act"}
+                      </p>
+                    ) : null}
                     <p className="mt-4 text-xs" style={{ color: "var(--ink)" }}>{h.note}</p>
                     <Receipt r={h.delivery ?? {}} />
                   </li>

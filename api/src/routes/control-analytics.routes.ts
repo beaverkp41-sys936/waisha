@@ -93,7 +93,11 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       "control.recommendations.manage", "control.impersonate",
       "control.departments.view", "control.departments.manage",
       "control.tickets.view", "control.tickets.manage",
-      "control.gateway.view", "control.gateway.manage"];
+      "control.gateway.view", "control.gateway.manage",
+      // The two-person register. Reading it and signing it are separate duties: a seat
+      // that can see a ban waiting but cannot sign it is the second opinion the rule asks
+      // for, and 121 seeded `decide` only onto the roles that can already manage tenants.
+      "control.approvals.view", "control.approvals.decide"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });
 

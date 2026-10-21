@@ -9,7 +9,8 @@ import { sendSms } from "../mail/mail.js";
 import type { AppliedAction, TenantAction } from "../mail/tenant-notice.js";
 import { sendTenantNotice } from "../mail/tenant-notice.js";
 import {
-  BLOCK_AFTER_DAYS, CLOSE_AFTER_DAYS, CANDIDATES_SQL, runTenantPolicy
+  BLOCK_AFTER_DAYS, CLOSE_AFTER_DAYS, CANDIDATES_SQL, runTenantPolicy,
+  APPLY_SQL, RECEIPT_SQL
 } from "../util/tenant-policy.js";
 import { forgetSuspensions } from "../security/tenant-state.js";
 
@@ -31,15 +32,17 @@ import { forgetSuspensions } from "../security/tenant-state.js";
  * at the desk; the length limits below exist only so a mistake is answered with a 400
  * rather than with the definer's string, which would reach the browser as a 500-shaped
  * surprise. The definer validates them again, and that copy is the one that holds.
+ *
+ * Since 121 two of the four acts live elsewhere. A ban — block or close — is now raised as
+ * a proposal on `/control/approvals` and only reaches this definer when a second seat has
+ * signed it, so the loop below keeps the two acts one person may take alone: opening a door
+ * and sending a message. `unblock` stays single-seat on purpose. A desk that cannot put a
+ * company back without a second signature keeps companies shut out of bureaucracy, and the
+ * rule the office asked for is about bans, not about undoing them.
  */
 
 const MANAGE = "control.tenants.manage";
 
-/** Params: tenant, action, reason, note, actor kind, actor user, actor role, ip. */
-const APPLY_SQL =
-  "select platform_auth.tenant_apply_action($1,$2,$3,$4,$5,$6,$7,$8) as r";
-/** Params: action id, receipt. */
-const RECEIPT_SQL = "select platform_auth.tenant_action_receipt($1, $2::jsonb) as r";
 /** Params: tenant, limit. Exported so the verify script reads the same statement. */
 export const HISTORY_SQL = "select platform_auth.control_tenant_actions($1, $2) as a";
 
@@ -78,7 +81,11 @@ async function applyAndNotify(
 ) {
   const { rows } = await pool.query(APPLY_SQL, [
     tenantId, action, reasonCode, note, "control",
-    req.control.user_id, (req.control.roles ?? [])[0] ?? null, req.ip
+    req.control.user_id, (req.control.roles ?? [])[0] ?? null, req.ip,
+    // The signature column. Null for every act this file still owns: the trigger that
+    // reads it only demands one from a row whose action is a ban, and a ban does not
+    // come from here any more.
+    null
   ]);
   const res = rows[0]?.r as (AppliedAction & { status: string }) | undefined;
   if (!res) throw new ApiError("UPSTREAM_ERROR", "The action could not be recorded.", 502);
@@ -128,7 +135,10 @@ export async function controlTenantsRoutes(app: FastifyInstance, _opts: unknown)
     return runTenantPolicy();
   });
 
-  for (const action of ["block", "unblock", "close", "notice"] as const) {
+  // The two acts that need one signature. `block` and `close` are not here: they are
+  // proposed on /control/approvals and applied by the seat that signs them, because a ban
+  // is the act the office refused to let one person take alone.
+  for (const action of ["unblock", "notice"] as const) {
     app.post(`/control/tenants/:id/${action}`, { preHandler: [requireControl] }, async (req: any) => {
       await requireControlPermission(req, MANAGE);
       await enforceRateLimit(`tenant-action:${req.control.user_id}`, 20, 3600);

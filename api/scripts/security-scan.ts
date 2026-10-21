@@ -263,7 +263,11 @@ function checkNavProbe(webRoot: string, apiRoutes: string) {
   const probeKeys = new Set<string>();
   const arr = probe.match(/const keys\s*=\s*\[([\s\S]*?)\];/);
   if (arr) {
-    for (const item of arr[1].split(",")) {
+    // Prose goes between the keys to say why a duty is probed, and prose contains commas.
+    // Split on those and a key arrives mid-sentence, stops matching `^"`, and drops out of
+    // the contract silently — the scan then reports a duty the probe plainly lists.
+    const body = arr[1].replace(/\/\/[^\n]*/g, "");
+    for (const item of body.split(",")) {
       const token = item.trim();
       if (!token) continue;
       if (/^"/.test(token)) { probeKeys.add(token.replace(/^"|"$/g, "")); continue; }
