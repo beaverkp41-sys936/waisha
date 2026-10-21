@@ -605,36 +605,25 @@ body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 44px) + 4px)
 .crumb b { color: #fff; font-weight: 700; }
 .topbar-right { display: flex; align-items: center; gap: 18px; }
 
-/* The mark, under the notification bar. The office asked for the marketing line to be
-   said where a person already looks, not in a footer nobody scrolls to: one small row
-   that sticks under the header, and the header's own height is untouched because this is
-   a sibling of it, not a child.
+/* The mark, opening the footer bar. It was moved up under the notification bar when the
+   office wanted it where a person already looks; it is back at the foot of the page, and it
+   keeps the small size and the alternating colours that made it readable there.
    The colour alternates between two values that are both readable on the pane — gold on
    photo and the shell's own white — with steps() so it changes rather than fades.
    prefers-reduced-motion stops it on the near-phrase, and an empty content block removes
    the row entirely rather than leaving a band of glass. */
-.brand-strip {
-  position: sticky;
-  top: var(--topbar-h);
-  z-index: 1;
-  display: flex;
-  justify-content: center;
-  margin: 0;
-  padding: 3px 16px;
+.footer-brand {
+  display: block;
+  margin: 0 auto 6px;
+  padding: 0 16px 3px;
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   text-align: center;
-  background: rgba(6, 24, 38, 0.55);
-  -webkit-backdrop-filter: blur(8px) saturate(1.2);
-  backdrop-filter: blur(8px) saturate(1.2);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
-}
-.brand-strip-words {
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   animation: brand-alternate 6s steps(1, end) infinite;
 }
 @keyframes brand-alternate {
@@ -642,10 +631,7 @@ body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 44px) + 4px)
   50%, 100% { color: #eaf6ff; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .brand-strip-words { animation: none; color: var(--gold-on-photo); }
-}
-@media print {
-  .brand-strip { display: none; }
+  .footer-brand { animation: none; color: var(--gold-on-photo); }
 }
 
 /* Announcement ticker — admin-posted notices scrolling mid-header on every

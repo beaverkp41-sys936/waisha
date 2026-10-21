@@ -16,9 +16,7 @@ import { CONTENT_FIELDS, decode } from "../content/fields.js";
  * deliberate "do not show this", which is how a line is removed without deleting the row.
  */
 
-/** The two contact lines every footer on the system has always carried. The brand mark is
- *  not one of them: 105 moved it to the sign-in card, because a bar whose job is to be read
- *  out loud to a caller is the wrong place for advertising. */
+/** The two contact lines every footer on the system has always carried. */
 const FOOTER_FALLBACK: Record<string, string> = {
   supportEmail: "support@tengoaegis.com",
   phone: ""
@@ -55,7 +53,15 @@ function wireOf(group: "footer" | "signin", map: Map<string, string>,
 export async function contentRoutes(app: FastifyInstance, _opts: unknown) {
   app.get("/content/footer", async (req: any) => {
     const locale = req.query?.lang === "sw" ? "sw" : "en";
-    return wireOf("footer", await blocks(locale), FOOTER_FALLBACK);
+    const map = await blocks(locale);
+    // The mark opens the bar, as it did before 105 moved it to the sign-in card. It stays one
+    // block (`login.brand`) so the desk has one place to rephrase it. Absent is the page's own
+    // words; present but empty is the office switching the advertising off.
+    const brandRow = "login.brand";
+    return {
+      ...wireOf("footer", map, FOOTER_FALLBACK),
+      brand: map.has(brandRow) ? (map.get(brandRow) as string) : COPY_FALLBACK.loginBrand
+    };
   });
 
   app.get("/content/copy", async (req: any) => {

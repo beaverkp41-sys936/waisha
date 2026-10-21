@@ -14,13 +14,15 @@ import { FooterReserve } from "@/components/FooterReserve";
    not read would be a worse lie than a hard-coded line, so the list below and the registry
    in api/src/content/fields.ts are the two ends of one contract.
 
-   The brand line is not in that list. It used to open this bar; 105 moved it to the foot of
-   the sign-in card, which is the one page every person sees before they see anything else. */
+   The brand line opens this bar, as it did before 105 moved it to the foot of the sign-in
+   card. It is the desk's `login.brand` block, served on this payload as `brand` — one block,
+   two pages, and an empty one means the bar carries no mark at all. */
 
 export type FooterLink = { label: string; href: string };
 export type FooterSocial = { network: string; handle: string; href: string };
 
 export type FooterContent = {
+  brand: string;
   supportEmail: string;
   phone: string;
   whatsapp: string;
@@ -33,6 +35,7 @@ export type FooterContent = {
 
 /** What the bar shows when the API never answered — the words it shipped with. */
 export const FOOTER_DEFAULT: FooterContent = {
+  brand: "powered by T ENGO AEGIS",
   supportEmail: "support@tengoaegis.com",
   phone: "+255 717 601 440 / +255 754 000 440",
   whatsapp: "",
@@ -52,6 +55,7 @@ const rows = <T extends object>(v: unknown): T[] =>
 export function normalizeFooter(j: any): FooterContent {
   if (!j || typeof j !== "object") return FOOTER_DEFAULT;
   return {
+    brand: text(j.brand),
     supportEmail: text(j.supportEmail),
     phone: text(j.phone),
     whatsapp: text(j.whatsapp),
@@ -88,7 +92,7 @@ function waLink(e164: string): string | null {
    would be noise on every keystroke. */
 export function FooterBar({ content, weather = true }:
   { content: FooterContent; weather?: boolean }) {
-  const { supportEmail, phone, whatsapp, address, hours, copyright, links, social } = content;
+  const { brand, supportEmail, phone, whatsapp, address, hours, copyright, links, social } = content;
   const chat = waLink(whatsapp);
   const words = [
     // The address is a mailto:, but it is read as a line of text first: the office asked
@@ -103,6 +107,9 @@ export function FooterBar({ content, weather = true }:
 
   return (
     <footer className="app-footer w-full py-12 text-[13px] tracking-[0.04em] text-white">
+      {/* The mark opens the bar, small and on its own line, in two alternating colours so it is
+          read as the platform speaking rather than as part of the contact sentence below it. */}
+      {brand && <p className="footer-brand">{brand}</p>}
       <div className="footer-line">
         <span className="footer-words">
           {words.map((w, i) => (

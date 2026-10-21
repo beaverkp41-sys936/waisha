@@ -8,7 +8,6 @@ import { CFA_NAV, OFFICE_NAV, TRANSPORTER_NAV } from "./nav";
 import type { NavItem } from "./nav";
 import { ShellFooter } from "@/components/ShellFooter";
 import { AnnouncementTicker } from "@/components/AnnouncementTicker";
-import { BrandLine } from "@/components/BrandLine";
 import { SupportBanner } from "@/components/SupportBanner";
 
 const WORKSPACES = [
@@ -136,7 +135,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </span>
           </div>
         </header>
-        <BrandLine />
         <div className="app-content">{children}</div>
         <ShellFooter />
       </div>
