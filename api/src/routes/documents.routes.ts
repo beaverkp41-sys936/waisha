@@ -27,7 +27,9 @@ async function requireAuth(req: any) {
 
 const ENTITY_KINDS = ["tenant", "user", "vessel", "driver", "trip", "shipment", "message", "licence", "employee", "office_cost", "quotation", "cargo_intake",
   // 109: the garage's own bill, photographed on the desk that closed the visit.
-  "work_order"] as const;
+  "work_order",
+  // 118: the store's own paper — a gate pass, a weighbridge slip — filed beside the hold it counts for.
+  "warehouse_stay"] as const;
 const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road_licence", "delivery_note", "invoice", "bill_of_lading", "packing_list", "contract", "other", "attachment", "receipt",
   // Clearing-pipeline kinds stored by the job document register (042).
   "arrival_notice", "delivery_order", "declaration", "assessment", "release_note", "permit", "pod", "handover",
@@ -49,7 +51,7 @@ const ENTITY_TABLES: Record<string, string> = {
   user: "users", vessel: "vessels", driver: "drivers", trip: "trips",
   shipment: "cargo_shipments", licence: "regulatory_licences", employee: "employees",
   office_cost: "office_costs", quotation: "quotations", cargo_intake: "cargo_intake_drafts",
-  work_order: "work_orders"
+  work_order: "work_orders", warehouse_stay: "warehouse_stays"
 };
 
 /** Exported because a day's photo proof is written by the attendance route, and a storage

@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { apiFetch, seatPermissions } from "../../../api-client";
 import { CARGO_PAPER_KINDS, kindLabel } from "../../../doc-kinds";
 import { ImportMaster } from "@/components/ImportMaster";
+import { WarehouseDesk } from "@/components/WarehouseDesk";
 import { CargoFileExportButtons } from "@/components/CargoFileExportButtons";
 
 function errorText(json: any, fallback: string): string {
@@ -409,6 +410,14 @@ export default function CargoDetailPage() {
       {/* Master document — the signed cover sheet over this file's three papers */}
       <ImportMaster shipmentId={id}
         onNotice={(m) => { setError(null); setNotice(m); }} />
+
+      {/* The store's book for this file: what is standing where, and the days it is costing */}
+      <section className="no-print mt-24">
+        <h2 className="pane-note text-sm font-bold uppercase tracking-[0.14em]">Warehouse</h2>
+        <div className="mt-16">
+          <WarehouseDesk shipmentId={id} fileLabel={file.file_number} />
+        </div>
+      </section>
 
       {/* Tasks */}
       <section className="no-print mt-24">

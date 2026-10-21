@@ -22,7 +22,8 @@ const ENTITY_LABELS: Record<string, string> = {
   tenant: "Company", user: "Staff member", vessel: "Vessel",
   driver: "Driver", trip: "Trip", shipment: "Cargo file", message: "Message",
   licence: "Regulatory licence", employee: "Employee", office_cost: "Office cost",
-  quotation: "Quotation", cargo_intake: "Scanned page", work_order: "Work order"
+  quotation: "Quotation", cargo_intake: "Scanned page", work_order: "Work order",
+  warehouse_stay: "Warehouse hold"
 };
 
 export default function DocumentsVaultPage() {

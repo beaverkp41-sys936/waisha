@@ -333,7 +333,18 @@ export async function officeCostsRoutes(app: FastifyInstance, _opts: unknown) {
     });
 
   // ---------- File costs against revenue ----------
-
+  //
+  // Two registers feed a file's cost: 039's own office costs, and 118's storage days. The second is
+  // not a row in the first — the store's charge is read from the tariff and the dockets each time,
+  // by the functions that price the desk, the alert and the export — so the margin here subtracts
+  // what the file has spent in both places and neither figure is typed twice.
+  //
+  // A file's money is TZS: `payment_amount`, `processing_cost` and the office costs carry no currency
+  // column. A store may price in another, so that charge is returned beside the margin rather than
+  // inside it — an office that adds dollars to shillings gets a number that means nothing.
+  //
+  // The office-costs subquery is an inner join: a file with only storage days and no office costs is
+  // not listed here at all. It shows on the warehouse desk, which is where its own book lives.
   app.get("/office-costs/file-costs", { preHandler: [requireAuth, requirePermission("office_costs.view")] },
     async (req: any) => {
       return withTenant(req.user.tid, async (c) => {
@@ -345,14 +356,33 @@ export async function officeCostsRoutes(app: FastifyInstance, _opts: unknown) {
            where oc.tenant_id = $1 and oc.deleted_at is null and oc.shipment_id is not null`,
           [req.user.tid]);
 
+        const storage = await c.query(
+          `select count(distinct w.shipment_id)::int as files,
+                  coalesce(sum(public.warehouse_storage_charge(w.entered_on, w.exited_on, w.free_days,
+                                                              w.daily_rate, k.today))
+                           filter (where w.currency = 'TZS'), 0)::float8 as charge,
+                  coalesce(sum(public.warehouse_storage_charge(w.entered_on, w.exited_on, w.free_days,
+                                                              w.daily_rate, k.today))
+                           filter (where w.currency <> 'TZS'), 0)::float8 as other,
+                  array_agg(distinct w.currency order by w.currency) as currencies
+             from warehouse_stays w
+             cross join (select (timezone('Africa/Dar_es_Salaam', now()))::date as today) k
+            where w.tenant_id = $1 and w.deleted_at is null and w.shipment_id is not null
+              and w.status <> 'cancelled'`,
+          [req.user.tid]);
+
         const { rows } = await c.query(
           `select s.id, s.file_number, s.shipment_type, s.stage, s.status, s.consignee_name,
                   s.payment_status,
                   s.payment_amount::float8 as payment_amount,
                   s.processing_cost::float8 as processing_cost,
-                  c.allocated::float8 as allocated,
-                  c.pending_amount::float8 as pending_amount,
-                  c.entries::int as entries
+                  coalesce(c.allocated, 0)::float8 as allocated,
+                  coalesce(c.pending_amount, 0)::float8 as pending_amount,
+                  coalesce(c.entries, 0)::int as entries,
+                  coalesce(w.holds, 0)::int as holds,
+                  coalesce(w.storage_charge, 0)::float8 as storage_charge,
+                  coalesce(w.storage_other, 0)::float8 as storage_other,
+                  w.storage_currencies
            from cargo_shipments s
            join (select shipment_id,
                         coalesce(sum(amount) filter (where status = 'approved'), 0) as allocated,
@@ -361,8 +391,22 @@ export async function officeCostsRoutes(app: FastifyInstance, _opts: unknown) {
                  from office_costs
                  where tenant_id = $1 and deleted_at is null and shipment_id is not null
                  group by shipment_id) c on c.shipment_id = s.id
+           left join (select w.shipment_id,
+                        (count(*))::int as holds,
+                        coalesce(sum(public.warehouse_storage_charge(w.entered_on, w.exited_on, w.free_days,
+                                                                    w.daily_rate, k.today))
+                                 filter (where w.currency = 'TZS'), 0) as storage_charge,
+                        coalesce(sum(public.warehouse_storage_charge(w.entered_on, w.exited_on, w.free_days,
+                                                                    w.daily_rate, k.today))
+                                 filter (where w.currency <> 'TZS'), 0)::float8 as storage_other,
+                        array_agg(distinct w.currency order by w.currency) as storage_currencies
+                   from warehouse_stays w
+                   cross join (select (timezone('Africa/Dar_es_Salaam', now()))::date as today) k
+                  where w.tenant_id = $1 and w.deleted_at is null and w.shipment_id is not null
+                    and w.status <> 'cancelled'
+                  group by w.shipment_id) w on w.shipment_id = s.id
            where s.tenant_id = $1 and s.deleted_at is null
-           order by c.allocated desc, s.file_number
+           order by (coalesce(c.allocated, 0) + coalesce(w.storage_charge, 0)) desc, s.file_number
            limit 200`,
           [req.user.tid]);
 
@@ -370,13 +414,20 @@ export async function officeCostsRoutes(app: FastifyInstance, _opts: unknown) {
           totals: {
             files: Number(totals.rows[0].files),
             allocated: Number(totals.rows[0].allocated),
-            pending: Number(totals.rows[0].pending)
+            pending: Number(totals.rows[0].pending),
+            storage_files: Number(storage.rows[0].files),
+            storage_charge: Number(storage.rows[0].charge),
+            storage_other: Number(storage.rows[0].other),
+            storage_currencies: (storage.rows[0].currencies ?? []) as string[]
           },
           rows: rows.map((r: any) => ({
             ...r,
+            // The file's own money is TZS, like the office costs and the payment. A hold priced in
+            // another currency travels beside the margin as `storage_other`, never inside it.
             margin: r.payment_amount === null
               ? null
-              : Math.round((Number(r.payment_amount) - Number(r.processing_cost ?? 0) - Number(r.allocated)) * 100) / 100
+              : Math.round((Number(r.payment_amount) - Number(r.processing_cost ?? 0)
+                  - Number(r.allocated) - Number(r.storage_charge)) * 100) / 100
           }))
         };
       });

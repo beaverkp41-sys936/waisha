@@ -37,9 +37,19 @@ interface FileCost {
   id: string; file_number: string; shipment_type: string; stage: string; status: string;
   consignee_name: string; payment_status: string;
   payment_amount: number | null; processing_cost: number | null;
-  allocated: number; pending_amount: number; entries: number; margin: number | null;
+  allocated: number; pending_amount: number; entries: number;
+  holds: number; storage_charge: number; storage_other: number;
+  storage_currencies: string[] | null;
+  margin: number | null;
 }
-interface FileCosts { totals: { files: number; allocated: number; pending: number }; rows: FileCost[] }
+interface FileCosts {
+  totals: {
+    files: number; allocated: number; pending: number;
+    storage_files: number; storage_charge: number; storage_other: number;
+    storage_currencies: string[];
+  };
+  rows: FileCost[];
+}
 interface Budget { id: string; period: string; category: string; amount: number; notes: string | null; created_at: string }
 interface EmployeeOption { id: string; full_name: string; status: string }
 interface FileOption { id: string; file_number: string; status: string }
@@ -835,7 +845,7 @@ export default function OfficeCostsPage() {
       {view === "filecosts" && (
         <section className="mt-24">
           <h2 className={`${h2Cls} pane-note`}>File costs against revenue</h2>
-          <section className="mt-16 grid grid-cols-2 gap-16 md:grid-cols-3">
+          <section className="mt-16 grid grid-cols-2 gap-16 md:grid-cols-4">
             <div className={card} style={cardStyle}>
               <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Files carrying office costs</p>
               <p className="mt-8 text-2xl font-bold tabular-nums" style={{ color: "var(--ink)" }}>{fileCosts?.totals.files ?? 0}</p>
@@ -851,6 +861,20 @@ export default function OfficeCostsPage() {
                 {fmtMoney(fileCosts?.totals.pending ?? 0)}
               </p>
             </div>
+            <div className={card} style={cardStyle}>
+              <p className={labelCls} style={{ color: "var(--ink-soft)" }}>Storage to date</p>
+              <p className="mt-8 text-2xl font-bold tabular-nums" style={{ color: "var(--ink)" }}>
+                {fmtMoney(fileCosts?.totals.storage_charge ?? 0)}
+              </p>
+              <p className="mt-6 text-xs" style={{ color: "var(--ink-soft)" }}>
+                {fileCosts?.totals.storage_files ?? 0} file{(fileCosts?.totals.storage_files ?? 0) === 1 ? "" : "s"} in store · TZS.
+                {(fileCosts?.totals.storage_other ?? 0) > 0
+                  ? ` Another ${fmtMoney(fileCosts?.totals.storage_other)} sits in ${
+                      (fileCosts?.totals.storage_currencies ?? []).filter((c) => c !== "TZS").join(", ")
+                    } and is not added.`
+                  : ""}
+              </p>
+            </div>
           </section>
           <div className="mt-16 overflow-x-auto rounded-card border bg-surface" style={cardStyle}>
             <table className="w-full text-sm">
@@ -858,7 +882,8 @@ export default function OfficeCostsPage() {
                 <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
                   <th className={thCls}>File</th><th className={thCls}>Consignee</th>
                   <th className={thCls}>Payment (TZS)</th><th className={thCls}>Processing (TZS)</th>
-                  <th className={thCls}>Office costs (TZS)</th><th className={thCls}>Awaiting (TZS)</th>
+                  <th className={thCls}>Office costs (TZS)</th><th className={thCls}>Storage (TZS)</th>
+                  <th className={thCls}>Awaiting (TZS)</th>
                   <th className={thCls}>Margin (TZS)</th><th className={thCls}>Entries</th>
                 </tr>
               </thead>
@@ -874,6 +899,20 @@ export default function OfficeCostsPage() {
                     <td className={`${tdCls} tabular-nums`} style={{ color: "var(--ink-soft)" }}>{fmtMoney(r.payment_amount)}</td>
                     <td className={`${tdCls} tabular-nums`} style={{ color: "var(--ink-soft)" }}>{fmtMoney(r.processing_cost)}</td>
                     <td className={`${tdCls} tabular-nums font-semibold`} style={{ color: "var(--ink)" }}>{fmtMoney(r.allocated)}</td>
+                    <td className={`${tdCls} tabular-nums`} style={{ color: r.storage_charge > 0 ? "var(--ink)" : "var(--ink-soft)" }}>
+                      {fmtMoney(r.storage_charge)}
+                      {r.storage_other > 0 && (
+                        <span className="ml-6 whitespace-nowrap text-[10px] font-bold uppercase"
+                          style={{ color: "var(--warning)" }}>
+                          +{fmtMoney(r.storage_other)} {r.storage_currencies?.filter((c) => c !== "TZS").join("/") ?? ""}
+                        </span>
+                      )}
+                      {r.holds > 0 && (
+                        <span className="ml-6 text-[10px] uppercase" style={{ color: "var(--ink-soft)" }}>
+                          {r.holds} hold{r.holds === 1 ? "" : "s"}
+                        </span>
+                      )}
+                    </td>
                     <td className={`${tdCls} tabular-nums`} style={{ color: r.pending_amount > 0 ? "var(--warning)" : "var(--ink-soft)" }}>
                       {r.pending_amount > 0 ? fmtMoney(r.pending_amount) : "—"}
                     </td>
@@ -885,7 +924,7 @@ export default function OfficeCostsPage() {
                   </tr>
                 ))}
                 {ready && (fileCosts?.rows ?? []).length === 0 && (
-                  <tr><td colSpan={8} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+                  <tr><td colSpan={9} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
                     No office costs allocated to cargo files yet — pick a file when recording a cost and its
                     cost-against-revenue margin shows here.
                   </td></tr>
@@ -894,7 +933,11 @@ export default function OfficeCostsPage() {
             </table>
           </div>
           <p className="pane-note mt-8 text-xs">
-            Margin = payment amount − processing cost − approved office costs allocated to the file.
+            Margin = payment amount − processing cost − approved office costs − storage run up on the
+            file&apos;s holds, priced against today. Storage charged in a currency other than TZS is
+            printed beside the figure, never inside it. A file appears here once it carries an office
+            cost; goods standing in a store with no cost against them yet are on the Warehouse desk —
+            open the file, or the store&apos;s own register, where each hold shows its days, tariff and papers.
           </p>
         </section>
       )}

@@ -41,6 +41,12 @@ const MODULES = [
     plan: "Business"
   },
   {
+    name: "Warehouse & Storage",
+    href: "/app/cfa/warehouse",
+    description: "The store's own book for goods that belong to a cargo file — open a hold against the file, count deliveries in and gate passes out on numbered dockets, set the daily tariff and its free period, and read the storage charge that grows each morning and lands on that file's cost side.",
+    plan: "Business"
+  },
+  {
     name: "Financial Ledger",
     href: "/app/cfa/ledger",
     description: "Accounts receivable and payable, profit-and-loss summary cards and a monthly revenue-versus-expenses view of cash flow.",

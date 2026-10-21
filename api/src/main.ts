@@ -45,6 +45,7 @@ import { ledgerRoutes } from "./routes/ledger.routes.js";
 import { dutyRoutes } from "./routes/duty.routes.js";
 import { fuelRoutes } from "./routes/fuel.routes.js";
 import { inventoryRoutes } from "./routes/inventory.routes.js";
+import { warehouseRoutes } from "./routes/warehouse.routes.js";
 import { incidentsRoutes } from "./routes/incidents.routes.js";
 import { clientsRoutes } from "./routes/clients.routes.js";
 import { notificationsRoutes } from "./routes/notifications.routes.js";
@@ -169,6 +170,7 @@ async function main() {
   await app.register(dutyRoutes, { prefix: "/api/v1" });
   await app.register(fuelRoutes, { prefix: "/api/v1" });
   await app.register(inventoryRoutes, { prefix: "/api/v1" });
+  await app.register(warehouseRoutes, { prefix: "/api/v1" });
   await app.register(incidentsRoutes, { prefix: "/api/v1" });
   await app.register(clientsRoutes, { prefix: "/api/v1" });
   await app.register(notificationsRoutes, { prefix: "/api/v1" });

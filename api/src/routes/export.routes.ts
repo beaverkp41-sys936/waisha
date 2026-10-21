@@ -67,7 +67,9 @@ const REPORTS: Record<string, string> = {
   // 109's register. It has no `.export` duty of its own — the four keys the migration seeds are
   // view/create/edit/close — so the read duty is the gate, which is what this map does for the
   // office registers too.
-  "work-orders": "work_orders.view"
+  "work-orders": "work_orders.view",
+  // 118's store book, for the same reason: view/entry/exit/edit/void/cancel, no `.export` key.
+  "warehouse": "warehouse.view"
 };
 
 /** A 20 000-row PDF is 700 pages of drawText on the API box: Excel is the file for that. */

@@ -81,6 +81,11 @@ const REGISTERS: RegisterLink[] = [
   { sheet: "File documents", table: "job_documents", on: "shipment_id", caption: "The document register: expected, received, verified" },
   { sheet: "Import masters", table: "cargo_import_masters", on: "shipment_id",
     caption: "The signed master sheets: invoice, packing list and bill of lading in one declaration" },
+  { sheet: "Warehouse holds", table: "warehouse_stays", on: "shipment_id",
+    caption: "Goods of this file standing in a store, the tariff they are priced at and the days they have sat" },
+  { sheet: "Warehouse dockets", table: "warehouse_slips", on: "stay_id",
+    via: [{ table: "warehouse_stays", on: "shipment_id" }],
+    caption: "Every unit counted in and let out against those holds, voided paper included" },
   { sheet: "Messages", table: "messages", on: "shipment_id", caption: "The thread on this file" },
   { sheet: "Read states", table: "message_reads", on: "shipment_id", caption: "Who has read the thread up to where" },
   { sheet: "Office tasks", table: "office_tasks", on: "shipment_id", caption: "Office work raised against this file" },
@@ -512,6 +517,8 @@ const DOCUMENTS_OF_FILE = `
         (select id from office_costs where shipment_id = $1 and tenant_id = ${TENANT}))
     or (d.entity_type = 'quotation' and d.entity_id in
         (select id from quotations where shipment_id = $1 and tenant_id = ${TENANT}))
+    or (d.entity_type = 'warehouse_stay' and d.entity_id in
+        (select id from warehouse_stays where shipment_id = $1 and tenant_id = ${TENANT}))
     or d.id in (select document_id from job_documents
                 where shipment_id = $1 and tenant_id = ${TENANT} and document_id is not null))`;
 
