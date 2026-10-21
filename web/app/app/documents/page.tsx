@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { apiFetch } from "../api-client";
+import { DOC_KIND_LABELS, kindLabel } from "../doc-kinds";
 
 function errorText(json: any, fallback: string): string {
   const d = json?.error?.details;
@@ -20,14 +21,8 @@ interface Doc {
 const ENTITY_LABELS: Record<string, string> = {
   tenant: "Company", user: "Staff member", vessel: "Vessel",
   driver: "Driver", trip: "Trip", shipment: "Cargo file", message: "Message",
-  licence: "Regulatory licence", employee: "Employee", office_cost: "Office cost"
-};
-const KIND_LABELS: Record<string, string> = {
-  logo: "Logo", avatar: "Photo", licence: "Licence", insurance: "Insurance",
-  inspection: "Inspection", road_licence: "Road licence", delivery_note: "Delivery note",
-  invoice: "Invoice", bill_of_lading: "Bill of Lading", packing_list: "Packing list",
-  contract: "Contract", other: "Other", attachment: "Attachment", receipt: "Receipt",
-  shipper_upload: "Shipper upload"
+  licence: "Regulatory licence", employee: "Employee", office_cost: "Office cost",
+  quotation: "Quotation", cargo_intake: "Scanned page", work_order: "Work order"
 };
 
 export default function DocumentsVaultPage() {
@@ -86,7 +81,7 @@ export default function DocumentsVaultPage() {
           <span className={`${labelCls} pane-note`}>Document type</span>
           <select value={kind} onChange={e => setKind(e.target.value)} className={inputCls} style={inputStyle}>
             <option value="">All types</option>
-            {Object.entries(KIND_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            {Object.entries(DOC_KIND_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </select>
         </label>
       </section>
@@ -104,7 +99,7 @@ export default function DocumentsVaultPage() {
             {docs.map((d, i) => (
               <tr key={d.id} style={{ background: i % 2 ? "var(--milk-deep)" : "transparent" }}>
                 <td className="p-12 font-semibold" style={{ color: "var(--ink)" }}>{d.file_name}</td>
-                <td className="p-12" style={{ color: "var(--ink-soft)" }}>{KIND_LABELS[d.kind] ?? d.kind}</td>
+                <td className="p-12" style={{ color: "var(--ink-soft)" }}>{kindLabel(d.kind)}</td>
                 <td className="p-12" style={{ color: "var(--ink)" }}>
                   {d.entity_label ?? "—"}
                   <span className="ml-8 text-[10px] uppercase" style={{ color: "var(--ink-soft)" }}>

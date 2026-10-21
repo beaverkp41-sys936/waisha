@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { portalFetch } from "../api-client";
 import { fmtDateTime, fmtBytes, errorText } from "../labels";
+import { kindLabel } from "@/app/app/doc-kinds";
 
 export default function PortalDocumentsPage() {
   const [docs, setDocs] = useState<any[]>([]);
@@ -52,7 +53,7 @@ export default function PortalDocumentsPage() {
               <span className="min-w-0">
                 <span className="block truncate text-sm font-semibold" style={{ color: "var(--ink)" }}>{d.file_name}</span>
                 <span className="text-xs" style={{ color: "var(--ink-soft)" }}>
-                  File {d.file_number} · {d.kind.replace(/_/g, " ")} · {fmtBytes(d.size_bytes)} · {fmtDateTime(d.created_at)}
+                  File {d.file_number} · {kindLabel(d.kind)} · {fmtBytes(d.size_bytes)} · {fmtDateTime(d.created_at)}
                 </span>
               </span>
               <button type="button" onClick={() => openDocument(d.id)}

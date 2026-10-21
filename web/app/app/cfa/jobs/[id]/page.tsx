@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { apiFetch } from "../../../api-client";
+import { kindLabel } from "../../../doc-kinds";
 
 function errorText(json: any, fallback: string): string {
   const d = json?.error?.details;
@@ -14,16 +15,12 @@ function errorText(json: any, fallback: string): string {
   return (json?.error?.message ?? fallback) + (parts.length ? ` (${parts.join("; ")})` : "");
 }
 
-const DOC_KINDS = ["bill_of_lading", "packing_list", "invoice", "arrival_notice", "delivery_order",
-  "declaration", "assessment", "receipt", "inspection", "release_note", "permit", "pod",
-  "handover", "contract", "delivery_note", "other"];
-const DOC_LABEL: Record<string, string> = {
-  bill_of_lading: "Bill of Lading", packing_list: "Packing list", invoice: "Invoice",
-  arrival_notice: "Arrival notice", delivery_order: "Delivery order", declaration: "Declaration",
-  assessment: "Customs assessment", receipt: "Receipt", inspection: "Inspection report",
-  release_note: "Release note", permit: "Permit", pod: "Proof of delivery", handover: "Handover note",
-  contract: "Contract", delivery_note: "Delivery note", other: "Other"
-};
+// A job's register offers the paper a clearing job actually carries, not every kind the column
+// can hold — a logo has no place in a document register. The names come from the shared reading
+// of the column, so a kind added to the CHECK is not a raw key on this screen.
+const DOC_KINDS = ["bill_of_lading", "packing_list", "invoice", "prevision", "arrival_notice", "delivery_order",
+  "declaration", "assessment", "tdrn", "receipt", "inspection", "release_note", "permit", "pod",
+  "handover", "contract", "delivery_note", "warehouse_entry", "warehouse_exit", "warehouse_receipt", "other"];
 const DOC_EDGE: Record<string, string> = {
   pending: "var(--ink-soft)", received: "var(--gold)", verified: "var(--success)", rejected: "var(--danger)"
 };
@@ -382,7 +379,7 @@ export default function JobDetailPage() {
                     <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
                       {s.open_tasks} task{s.open_tasks === 1 ? "" : "s"} open · {s.docs_in_stage} document{s.docs_in_stage === 1 ? "" : "s"} registered
                       {missing.length > 0 && (
-                        <span style={{ color: "var(--danger)" }}> · needs verified: {missing.map(k => DOC_LABEL[k] ?? k).join(", ")}</span>
+                        <span style={{ color: "var(--danger)" }}> · needs verified: {missing.map(kindLabel).join(", ")}</span>
                       )}
                     </p>
                     {s.status === "blocked" && s.blocked_reason && (
@@ -457,7 +454,7 @@ export default function JobDetailPage() {
                       )}
                     </div>
                     <p className="mt-16 border-t pt-16 text-[11px]" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
-                      Required verified documents: {(s.required_documents ?? []).map(k => DOC_LABEL[k] ?? k).join(", ") || "none"}
+                      Required verified documents: {(s.required_documents ?? []).map(kindLabel).join(", ") || "none"}
                       {s.started_at && ` · started ${fmtWhen(s.started_at)}`}
                       {s.completed_at && ` · completed ${fmtWhen(s.completed_at)}`}
                     </p>
@@ -522,7 +519,7 @@ export default function JobDetailPage() {
               <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Type</span>
               <select value={doc.kind} onChange={e => setDoc({ ...doc, kind: e.target.value })}
                 className={inputCls} style={inputStyle}>
-                {DOC_KINDS.map(k => <option key={k} value={k}>{DOC_LABEL[k] ?? k}</option>)}
+                {DOC_KINDS.map(k => <option key={k} value={k}>{kindLabel(k)}</option>)}
               </select>
             </label>
             <label className="block">
@@ -578,7 +575,7 @@ export default function JobDetailPage() {
             <div key={d.id} className="flex flex-wrap items-center justify-between gap-12 rounded-card border bg-surface px-16 py-12" style={cardStyle}>
               <div className="min-w-0 text-sm">
                 <span className="font-semibold" style={{ color: "var(--ink)" }}>{d.title}</span>
-                <span className="ml-8 text-[11px] uppercase" style={{ color: "var(--ink-soft)" }}>{DOC_LABEL[d.kind] ?? d.kind}</span>
+                <span className="ml-8 text-[11px] uppercase" style={{ color: "var(--ink-soft)" }}>{kindLabel(d.kind)}</span>
                 <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
                   {d.direction === "issued" ? "Issued by us" : "Received"}
                   {d.from_party && ` from ${d.from_party}`}{d.to_party && ` to ${d.to_party}`}

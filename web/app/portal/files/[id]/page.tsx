@@ -7,6 +7,7 @@ import {
   STAGE_LABELS, STAGE_COLORS, STAGE_ORDER, TYPE_LABELS, CONTAINER_LABELS,
   fmt, fmtDate, fmtDateTime, fmtBytes, errorText
 } from "../../labels";
+import { kindLabel } from "@/app/app/doc-kinds";
 
 export default function PortalFileDetailPage() {
   const params = useParams<{ id: string }>();
@@ -194,7 +195,7 @@ export default function PortalFileDetailPage() {
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-semibold" style={{ color: "var(--ink)" }}>{d.file_name}</span>
                   <span className="text-xs" style={{ color: "var(--ink-soft)" }}>
-                    {d.kind.replace(/_/g, " ")} · {fmtBytes(d.size_bytes)} · {fmtDateTime(d.created_at)}
+                    {kindLabel(d.kind)} · {fmtBytes(d.size_bytes)} · {fmtDateTime(d.created_at)}
                   </span>
                 </span>
                 <button type="button" onClick={() => openDocument(d.id)}

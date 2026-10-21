@@ -8,6 +8,7 @@ import {
 import { EmptyState } from "@/components/EmptyState";
 import { WorkshopDesk } from "@/components/WorkshopDesk";
 import { apiFetch, seatPermissions } from "../api-client";
+import { kindLabel } from "../doc-kinds";
 import type { MapPoint } from "../routes/route-map";
 
 const RouteMap = dynamic(() => import("../routes/route-map"), {
@@ -736,7 +737,7 @@ function PlateDossier({ vesselId, label, perms, drivers, onChanged, onClose }: {
               <div key={doc.id} className="flex flex-wrap items-baseline gap-8 border-b py-8 text-xs last:border-0"
                 style={{ borderColor: "var(--line)" }}>
                 <span className="font-semibold" style={{ color: "var(--ink)" }}>{doc.file_name}</span>
-                <span style={tiny}>{doc.kind}</span>
+                <span style={tiny}>{kindLabel(doc.kind)}</span>
                 <span style={tiny}>{(doc.size_bytes / 1024).toFixed(0)} kB · {stamp(doc.created_at)}</span>
                 {perms.seeDocs && (
                   <button type="button" className="underline" style={{ color: "var(--brand)" }}

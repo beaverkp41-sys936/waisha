@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { portalFetch } from "./api-client";
 import { STAGE_LABELS, STAGE_COLORS, TYPE_LABELS, fmt, fmtDate, fmtDateTime, fmtBytes, errorText } from "./labels";
+import { kindLabel } from "@/app/app/doc-kinds";
 
 interface Overview {
   client: { id: string; name: string; fullName: string | null };
@@ -165,7 +166,7 @@ export default function PortalOverviewPage() {
                   </span>
                 </span>
                 <span className="text-[10px] font-bold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
-                  {d.kind.replace(/_/g, " ")}
+                  {kindLabel(d.kind)}
                 </span>
               </li>
             ))}

@@ -4,6 +4,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { apiFetch, seatPermissions } from "../../../api-client";
+import { CARGO_PAPER_KINDS, kindLabel } from "../../../doc-kinds";
 import { ImportMaster } from "@/components/ImportMaster";
 import { CargoFileExportButtons } from "@/components/CargoFileExportButtons";
 
@@ -23,16 +24,6 @@ const STAGE_LABELS: Record<string, string> = {
 const TYPE_PREFIX: Record<string, string> = { export: "1", import: "4", transhipment: "7", transit: "8" };
 const CONTAINER_LABELS: Record<string, string> = {
   "20ft": "20FT", "40ft": "40FT", loose_cargo: "Loose Cargo", car: "Car"
-};
-const DOC_KINDS = [
-  { kind: "invoice", label: "Invoice" },
-  { kind: "bill_of_lading", label: "Bill of Lading" },
-  { kind: "packing_list", label: "Packing list" },
-  { kind: "other", label: "Other" }
-];
-const DOC_KIND_LABELS: Record<string, string> = {
-  invoice: "Invoice", bill_of_lading: "Bill of Lading",
-  packing_list: "Packing list", other: "Other"
 };
 
 interface Shipment {
@@ -606,7 +597,7 @@ export default function CargoDetailPage() {
           <label className="block">
             <span className={labelCls} style={{ color: "var(--ink-soft)" }}>Type</span>
             <select value={docKind} onChange={e => setDocKind(e.target.value)} className={inputCls} style={inputStyle}>
-              {DOC_KINDS.map(k => <option key={k.kind} value={k.kind}>{k.label}</option>)}
+              {CARGO_PAPER_KINDS.map(k => <option key={k.kind} value={k.kind}>{k.label}</option>)}
             </select>
           </label>
           <label className="block">
@@ -619,7 +610,7 @@ export default function CargoDetailPage() {
           {file.documents.map(d => (
             <div key={d.id} className="flex items-center justify-between rounded-input border bg-surface px-16 py-12" style={cardStyle}>
               <div className="min-w-0 text-sm">
-                <span className="font-semibold" style={{ color: "var(--ink)" }}>{DOC_KIND_LABELS[d.kind] ?? d.kind}</span>
+                <span className="font-semibold" style={{ color: "var(--ink)" }}>{kindLabel(d.kind)}</span>
                 <span className="ml-8 text-xs" style={{ color: "var(--ink-soft)" }}>{d.file_name}</span>
               </div>
               <DocLink docId={d.id} />

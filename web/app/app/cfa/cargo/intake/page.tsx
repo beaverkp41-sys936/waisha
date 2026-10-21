@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiFetch, seatPermissions } from "../../../api-client";
+import { kindLabel } from "../../../doc-kinds";
 
 /**
  * The intake shelf. A clerk numbers the papers, this page reads what each page prints and
@@ -53,15 +54,24 @@ const TYPES: Record<string, string> = {
   export: "Export (1)", import: "Import (4)",
   transhipment: "Transhipment (7)", transit: "Transit (8)"
 };
-const KINDS = [
-  ["declaration", "Customs declaration"], ["bill_of_lading", "Bill of lading / AWB"],
-  ["arrival_notice", "Arrival notice"], ["packing_list", "Packing list"],
-  ["invoice", "Invoice / advisory"], ["delivery_order", "Delivery order"],
-  ["delivery_note", "Delivery note"], ["release_note", "Release note"],
-  ["assessment", "Customs assessment"], ["permit", "Permit"],
-  ["handover", "Handover note"], ["pod", "Proof of delivery"],
-  ["receipt", "Receipt"], ["other", "Other paper"]
+/**
+ * The kinds the scanner will file a page under — the server's INTAKE_KINDS list minus the two
+ * that are not cargo paper (`contract`, `attachment`). Three of these labels say more than the
+ * vault word does, because a scanned page often arrives as the pair rather than one sheet.
+ */
+const KINDS: string[] = [
+  "declaration", "bill_of_lading", "arrival_notice", "packing_list", "invoice", "delivery_order",
+  "delivery_note", "release_note", "assessment", "permit",
+  "handover", "pod", "receipt",
+  "prevision", "tdrn", "warehouse_entry", "warehouse_exit", "warehouse_receipt",
+  "other"
 ];
+const SCAN_HINTS: Record<string, string> = {
+  bill_of_lading: "Bill of lading / AWB",
+  invoice: "Invoice / advisory",
+  other: "Other paper"
+};
+const scanKindLabel = (kind: string) => SCAN_HINTS[kind] ?? kindLabel(kind);
 
 /** The cargo form's own field names, in the order a clerk reads them down the page. */
 const FIELD_LABELS: [string, string][] = [
@@ -332,7 +342,7 @@ export default function CargoIntakePage() {
                       <select aria-label={`Paper kind ${i + 1}`} value={r.kind}
                         onChange={e => setQueue(q => q.map(x => x.key === r.key ? { ...x, kind: e.target.value } : x))}
                         className="rounded-input border px-8 py-4 text-xs" style={inputStyle}>
-                        {KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                        {KINDS.map(k => <option key={k} value={k}>{scanKindLabel(k)}</option>)}
                       </select>
                     </td>
                     <td className="p-8 text-xs" style={{ color: "var(--ink)" }}>
@@ -401,7 +411,7 @@ export default function CargoIntakePage() {
                     <td className="p-12" style={{ color: "var(--ink)" }}>
                       {d.label || d.file_name}
                       <span className="ml-8 text-[10px] uppercase" style={{ color: "var(--ink-soft)" }}>
-                        {d.document_kind.replace(/_/g, " ")} · {KB(d.size_bytes)}
+                        {kindLabel(d.document_kind)} · {KB(d.size_bytes)}
                       </span>
                     </td>
                     <td className="p-12" style={{ color: "var(--ink-soft)" }}>{TYPES[d.shipment_type] ?? d.shipment_type}</td>
@@ -607,6 +617,13 @@ export default function CargoIntakePage() {
 function guessKind(name: string): string {
   const n = name.toLowerCase();
   if (/bl\b|bill|b_l|b-l/.test(n)) return "bill_of_lading";
+  // 117: the three slips a store signs, then the prevision note. These come before the older
+  // tests because a file called "prevision notice.pdf" would otherwise be read as an arrival.
+  if (/warehouse.*receipt|goods.*receipt/.test(n)) return "warehouse_receipt";
+  if (/warehouse.*entr|gate.*entr|store.*entr/.test(n)) return "warehouse_entry";
+  if (/warehouse.*exit|gate.*exit|store.*exit|out.?going/.test(n)) return "warehouse_exit";
+  if (/tdrn/.test(n)) return "tdrn";
+  if (/prevision|provision/.test(n)) return "prevision";
   if (/declar|tansad|dsid|c10/.test(n)) return "declaration";
   if (/invoice|advis|charges/.test(n)) return "invoice";
   if (/pack/.test(n)) return "packing_list";

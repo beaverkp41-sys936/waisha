@@ -33,6 +33,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { withTenant } from "../db/pool.js";
+import { CARGO_PAPER_KINDS } from "../cargo/paper.js";
 import { ApiError } from "../util/errors.js";
 import { sniffFileType } from "../util/upload.js";
 import { uuidv7 } from "../util/uuid.js";
@@ -59,7 +60,9 @@ const MAX_BATCH = 60;
 const INTAKE_KINDS = [
   "arrival_notice", "bill_of_lading", "declaration", "delivery_note", "delivery_order",
   "invoice", "packing_list", "release_note", "assessment", "permit", "contract",
-  "handover", "pod", "receipt", "attachment", "other"
+  "handover", "pod", "receipt", "attachment", "other",
+  // 117: the same paper is scanned as it is filed, so the scanner offers what the vault holds.
+  ...CARGO_PAPER_KINDS
 ] as const;
 
 const fieldsSchema = z.object({

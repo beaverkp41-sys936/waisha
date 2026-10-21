@@ -111,6 +111,8 @@ const ownerRef = { client: null as pg.Client | null };
 const draftIds: string[] = [];
 const paperIds: string[] = [];
 const fileIds: string[] = [];
+/** The second company this run mints for the isolation gates, so its seat goes with it. */
+const strangerTenants: string[] = [];
 /** Both batch ids this run uses, so the sweep catches a page whose response was never read. */
 const sweptBatches = [BATCH];
 const oi = (sql: string, p: unknown[] = []) => ownerRef.client!.query(sql, p as any[]);
@@ -125,7 +127,12 @@ async function sweep() {
     ["cargo_intake_drafts", "delete from cargo_intake_drafts where id = any($1::uuid[])" +
       " or batch_id = any($2::uuid[])", [draftIds, sweptBatches]],
     ["documents", "delete from documents where id = any($1::uuid[])", [paperIds]],
-    ["cargo_shipments", "delete from cargo_shipments where id = any($1::uuid[])", [fileIds]]
+    ["cargo_shipments", "delete from cargo_shipments where id = any($1::uuid[])", [fileIds]],
+    ["user_roles", "delete from user_roles where user_id in" +
+      " (select id from users where tenant_id = any($1::uuid[]))", [strangerTenants]],
+    ["users", "delete from users where tenant_id = any($1::uuid[])", [strangerTenants]],
+    ["company_profiles", "delete from company_profiles where tenant_id = any($1::uuid[])", [strangerTenants]],
+    ["tenants", "delete from tenants where id = any($1::uuid[])", [strangerTenants]]
   ];
   for (const [name, sql, p] of steps) {
     try {
@@ -161,27 +168,29 @@ async function main() {
     tok ? { Authorization: `Bearer ${tok}` } : {};
   console.log(`seat ${userId} tenant ${tid} code ${companyCode} batch ${BATCH.slice(0, 8)}`);
 
-  // A second company's shelf, if one exists: the desk must answer 404, not 403, for a page
-  // that is simply not theirs.
-  const foreignSeat = (await oi(
-    "select u.id, u.tenant_id from users u" +
-    " join user_roles ur on ur.user_id = u.id join roles r on r.id = ur.role_id" +
-    " where r.key = 'director' and u.deleted_at is null and u.tenant_id <> $1 limit 1",
-    [tid])).rows[0] as { id: string; tenant_id: string } | undefined;
+  // A second company, minted for this run rather than borrowed from a real director seat. A
+  // stranger whose own account the office has since withdrawn answers TENANT_BLOCKED before the
+  // desk ever reaches the ownership check — so a borrowed seat proves the gatekeeper works, not
+  // the isolation. The fixture is named `Intake Stranger …` and swept with the rest.
+  const foreignTenantId = randomUUID();
+  const foreignSeatId = randomUUID();
+  strangerTenants.push(foreignTenantId);
+  await oi("insert into tenants (id, type, name) values ($1,'transporter',$2)",
+    [foreignTenantId, `Intake Stranger ${STAMP}`]);
+  await oi("insert into users (id, tenant_id, user_type, full_name, status)" +
+    " values ($1,$2,'staff',$3,'active')", [foreignSeatId, foreignTenantId, `Intake Stranger Director ${STAMP}`]);
+  await oi("insert into user_roles (user_id, role_id) values ($1," +
+    "(select id from roles where key = 'director' and tenant_id is null))", [foreignSeatId]);
   // A cargo file belonging to another company, planted so the commit guard has something
   // real to refuse even when the database holds only one CFA.
-  const foreignTenantId = foreignSeat?.tenant_id
-    ?? (await oi("select id from tenants where id <> $1 limit 1", [tid])).rows[0]?.id;
   const foreignShipment = randomUUID();
   fileIds.push(foreignShipment);
   const FSEQ = 5_000_000 + Math.floor(Math.random() * 90_000);
-  if (foreignTenantId) {
-    await oi("insert into cargo_shipments (id, tenant_id, file_number, seq, file_year," +
-      " shipment_type, container_type, consignee_name, consignor_name, stage, status," +
-      " created_by, updated_by) values ($1,$2,$3,$4,2026,'import','20ft'," +
-      "'Another Company Consignee','Another Company Consignor','pre_arrival','open',$5,$5)",
-      [foreignShipment, foreignTenantId, `4FOR-${STAMP}`, FSEQ, userId]);
-  }
+  await oi("insert into cargo_shipments (id, tenant_id, file_number, seq, file_year," +
+    " shipment_type, container_type, consignee_name, consignor_name, stage, status," +
+    " created_by, updated_by) values ($1,$2,$3,$4,2026,'import','20ft'," +
+    "'Another Company Consignee','Another Company Consignor','pre_arrival','open',$5,$5)",
+    [foreignShipment, foreignTenantId, `4FOR-${STAMP}`, FSEQ, userId]);
 
   // --- the multipart channel ---------------------------------------------------------------
   async function uploadPage(opts: { position?: number; label?: string; batchId?: string;
@@ -451,24 +460,19 @@ async function main() {
   const anonymous = await get("/cargo/intake", null);
   check("no token, no shelf", anonymous.status === 401, anonymous.status);
 
-  if (foreignSeat) {
-    const strangerToken = await mint(foreignSeat.id, "director", foreignSeat.tenant_id);
-    const strangerRead = await get(`/cargo/intake/${d1.id}`, strangerToken);
-    check("another company's director gets a 404 for this page",
-      strangerRead.status === 404, strangerRead.status);
-    const strangerShelf = await get("/cargo/intake", strangerToken);
-    check("and their own shelf holds none of these pages",
-      strangerShelf.status === 200
-      && (strangerShelf.j?.drafts ?? []).every((d: any) => d.batch_id !== BATCH),
-      strangerShelf.j?.drafts?.length);
-    const strangerCommit = await post(`/cargo/intake/${page2.j.id}/commit`,
-      { shipmentId }, strangerToken);
-    check("and cannot file this company's page onto this company's file",
-      strangerCommit.status === 404, strangerCommit);
-  } else {
-    check("a second company's director was available for the cross-tenant gates", false,
-      { foreignTenantId });
-  }
+  const strangerToken = await mint(foreignSeatId, "director", foreignTenantId);
+  const strangerRead = await get(`/cargo/intake/${d1.id}`, strangerToken);
+  check("another company's director gets a 404 for this page",
+    strangerRead.status === 404, strangerRead.status);
+  const strangerShelf = await get("/cargo/intake", strangerToken);
+  check("and their own shelf holds none of these pages",
+    strangerShelf.status === 200
+    && (strangerShelf.j?.drafts ?? []).every((d: any) => d.batch_id !== BATCH),
+    strangerShelf.j?.drafts?.length);
+  const strangerCommit = await post(`/cargo/intake/${page2.j.id}/commit`,
+    { shipmentId }, strangerToken);
+  check("and cannot file this company's page onto this company's file",
+    strangerCommit.status === 404, strangerCommit);
   const strangerShipment = await post(`/cargo/intake/${page2.j.id}/commit`,
     { shipmentId: randomUUID() });
   check("a commit to a file that is not on this desk is refused before a stamp",

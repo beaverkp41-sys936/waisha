@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { apiFetch } from "@/app/app/api-client";
 import { downloadMasterBundle } from "@/app/app/export-client";
+import { kindLabel } from "@/app/app/doc-kinds";
 import { fmtBytes } from "@/app/portal/labels";
 
 /**
@@ -31,12 +32,6 @@ const BILL_KINDS: { value: string; label: string }[] = [
 
 /** The kind a paper uploaded into this slot is filed under in the vault. */
 const UPLOAD_KIND = { invoice: "invoice", packing: "packing_list", bill: "bill_of_lading" };
-
-/** The vault's own names for a paper, so the picker reads like the documents list below it. */
-const KIND_LABEL: Record<string, string> = {
-  invoice: "Invoice", bill_of_lading: "Bill of lading", packing_list: "Packing list", other: "Other"
-};
-const kindLabel = (kind: string) => KIND_LABEL[kind] ?? kind;
 
 type SlotKey = "invoice" | "packing" | "bill";
 type FieldKind = "text" | "date" | "number" | "select";

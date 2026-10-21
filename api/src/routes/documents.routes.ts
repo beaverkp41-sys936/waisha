@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { withTenant } from "../db/pool.js";
+import { CARGO_PAPER_KINDS } from "../cargo/paper.js";
 import { ApiError } from "../util/errors.js";
 import { sniffFileType } from "../util/upload.js";
 import { uuidv7 } from "../util/uuid.js";
@@ -35,7 +36,9 @@ const DOC_KINDS = ["logo", "avatar", "licence", "insurance", "inspection", "road
   // 'attendance_proof' is deliberately NOT here even though migration 107 lets the column hold
   // it: that kind is only ever written by /attendance/confirm, beside the day it proves. A desk
   // that could file one through this route would be filing an alibi with no day attached to it.
-  "proforma"] as const;
+  "proforma",
+  // 117: the prevision note, the port's TDRN and the three warehouse slips.
+  ...CARGO_PAPER_KINDS] as const;
 const IMAGE_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const DOC_MIMES = [...IMAGE_MIMES, "application/pdf"];
 const MAX_BYTES = 8 * 1024 * 1024; // 8MB per file

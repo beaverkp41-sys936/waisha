@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { withTenant } from "../db/pool.js";
+import { CARGO_PAPER_KINDS } from "../cargo/paper.js";
 import { ApiError } from "../util/errors.js";
 import { uuidv7 } from "../util/uuid.js";
 import { verifyAccessToken } from "../security/jwt.js";
@@ -25,7 +26,9 @@ const STAGE_KEYS = ["job_opening", "pre_arrival_docs", "shipment_tracking", "dec
 const DOC_KINDS = ["bill_of_lading", "packing_list", "invoice", "arrival_notice", "delivery_order",
   "declaration", "assessment", "receipt", "inspection", "release_note", "permit", "pod",
   "handover", "contract", "delivery_note", "licence", "insurance", "road_licence",
-  "attachment", "other"] as const;
+  "attachment", "other",
+  // 117: a job's paper trail includes the prevision, the port release and the warehouse slips.
+  ...CARGO_PAPER_KINDS] as const;
 
 const actorRole = (req: any): string | null => req.user?.roles?.[0] ?? null;
 
