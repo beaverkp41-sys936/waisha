@@ -7,6 +7,7 @@ import { verifyAccessToken } from "../security/jwt.js";
 import { requirePermission } from "../security/permissions.js";
 import { writeAudit } from "../audit/audit.js";
 import { openJob, assertAssignable } from "../util/jobs.js";
+import { CARGO_BOOKS, BOOK_OF_TYPE, TYPES_OF_BOOK, bookOf } from "../cargo/books.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -202,7 +203,15 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
       const q = z.object({
         stage: z.enum(["pre_arrival", "arrival", "customs", "inspection", "release", "exit"]).optional(),
         shipmentType: z.enum(["export", "import", "transhipment", "transit"]).optional(),
+        book: z.enum(["clearing", "transport"]).optional(),
         search: z.string().trim().max(60).optional()
+      }).superRefine((v, ctx) => {
+        // A type that is not in the book asked for is not an empty register — it is a desk
+        // asking for two different things, so it is named rather than answered with nothing.
+        if (v.book && v.shipmentType && BOOK_OF_TYPE[v.shipmentType] !== v.book) ctx.addIssue({
+          code: z.ZodIssueCode.custom, path: ["shipmentType"],
+          message: `"${v.shipmentType}" is not filed in the ${v.book} book.`
+        });
       }).parse(req.query);
 
       const term = q.search ? `%${q.search}%` : null;
@@ -223,13 +232,46 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
          where s.tenant_id = $1 and s.deleted_at is null
            and ($2::text is null or s.stage = $2)
            and ($3::text is null or s.shipment_type = $3)
+           and ($5::text[] is null or s.shipment_type = any($5::text[]))
            and ($4::text is null or s.file_number ilike $4
                 or s.consignee_name ilike $4 or s.consignor_name ilike $4
                 or s.reference_number ilike $4 or s.bill_number ilike $4)
          order by s.created_at desc
          limit 200`,
-        [req.user.tid, q.stage ?? null, q.shipmentType ?? null, term]));
+        [req.user.tid, q.stage ?? null, q.shipmentType ?? null, term,
+         q.book ? [...TYPES_OF_BOOK[q.book]] : null]));
       return rows;
+    });
+
+  // ---------- The two books, counted ----------
+  /**
+   * How many files each book holds, and each type within it.
+   *
+   * The register above caps at 200 rows, so a tab that printed `rows.length` would say "12
+   * clearing files" about an office with 400. The desk reads its counts here instead — one
+   * grouped read, folded by the same CARGO_BOOKS const that filters the list, so a number on a tab
+   * and the rows behind it cannot be two different stories.
+   *
+   * The predicate is the register's own (`deleted_at is null`, no status filter), because the
+   * count describes the list a clerk is looking at: a cancelled file stays on the register with
+   * its status said, and a tab that dropped it while the row stayed would be two stories again.
+   *
+   * Static path, so it is matched before `/cargo/:id` the way `/cargo/analytics` already is.
+   */
+  app.get("/cargo/books", { preHandler: [requireAuth, requirePermission("shipments.view")] },
+    async (req: any) => {
+      const { rows } = await withTenant(req.user.tid, (c) => c.query(
+        `select shipment_type, count(*)::int as count from cargo_shipments
+         where tenant_id = $1 and deleted_at is null
+         group by shipment_type`, [req.user.tid]));
+      const byType: Record<string, number> = {};
+      for (const r of rows) byType[r.shipment_type] = r.count;
+      const books = CARGO_BOOKS.map(b => ({
+        key: b.key, label: b.label,
+        types: b.types.map(t => ({ value: t, count: byType[t] ?? 0 })),
+        count: b.types.reduce((n, t) => n + (byType[t] ?? 0), 0)
+      }));
+      return { books, total: books.reduce((n, b) => n + b.count, 0) };
     });
 
   // ---------- Create (file number generated server-side) ----------
@@ -325,6 +367,9 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
 
         return {
           ...s.rows[0],
+          // Which book the file stands in, said the same way the register says it — the file
+          // page can then name the book and link back to it without holding its own copy.
+          book: bookOf(s.rows[0].shipment_type),
           tasks: tasks.rows,
           documents: docs.rows,
           staff: staff.rows

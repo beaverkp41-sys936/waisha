@@ -3,6 +3,7 @@ import { z } from "zod";
 import { withTenant } from "../db/pool.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { ApiError } from "../util/errors.js";
+import { bookHref } from "../cargo/books.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -52,13 +53,14 @@ export async function calendarRoutes(app: FastifyInstance, _opts: unknown) {
       };
 
       const cargo = await c.query(
-        `select id, file_number, consignee_name, eta, discharge_date, carry_in_date
+        `select id, file_number, consignee_name, shipment_type, eta, discharge_date, carry_in_date
          from cargo_shipments
          where tenant_id = $1 and deleted_at is null and status = 'open'`, [req.user.tid]);
       for (const s of cargo.rows) {
-        push(s.eta, "eta", `${s.file_number} arrives`, `Consignee ${s.consignee_name}`, "/app/cfa/cargo");
-        push(s.discharge_date, "discharge", `${s.file_number} discharge`, "Vessel discharge", "/app/cfa/cargo");
-        push(s.carry_in_date, "carry_in", `${s.file_number} carry-in`, "ICD carry-in", "/app/cfa/cargo");
+        const href = bookHref(s.shipment_type);
+        push(s.eta, "eta", `${s.file_number} arrives`, `Consignee ${s.consignee_name}`, href);
+        push(s.discharge_date, "discharge", `${s.file_number} discharge`, "Vessel discharge", href);
+        push(s.carry_in_date, "carry_in", `${s.file_number} carry-in`, "ICD carry-in", href);
       }
 
       const trips = await c.query(
@@ -87,12 +89,12 @@ export async function calendarRoutes(app: FastifyInstance, _opts: unknown) {
       }
 
       const tasks = await c.query(
-        `select k.title, k.due_date, s.file_number
+        `select k.title, k.due_date, s.file_number, s.shipment_type
          from cargo_tasks k join cargo_shipments s on s.id = k.shipment_id
          where k.tenant_id = $1 and k.status = 'pending' and k.due_date is not null`,
         [req.user.tid]);
       for (const t of tasks.rows) {
-        push(t.due_date, "task_due", `Task due: ${t.title}`, `File ${t.file_number}`, "/app/cfa/cargo");
+        push(t.due_date, "task_due", `Task due: ${t.title}`, `File ${t.file_number}`, bookHref(t.shipment_type));
       }
 
       const vessels = await c.query(

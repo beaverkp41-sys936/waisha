@@ -28,6 +28,19 @@ const TYPE_LABELS: Record<string, string> = {
   transhipment: "Transhipment (7)", transit: "Transit (8)"
 };
 const TYPE_PREFIX: Record<string, string> = { export: "1", import: "4", transhipment: "7", transit: "8" };
+/* What each book is for, in the office's own words. Which type stands in which book, and what
+   the books are called, is the API's answer (`/cargo/books`) — never a second copy here, so the
+   tab a clerk reads and the rows behind it are one story. */
+const BOOK_NOTES: Record<string, string> = {
+  clearing: "Inbound files this office clears at the border — import and transhipment",
+  transport: "Outbound movement — export and transit files that take goods away"
+};
+
+/** One book as `/cargo/books` describes it. */
+interface BookMeta {
+  key: string; label: string; count: number;
+  types: { value: string; count: number }[];
+}
 const CONTAINER_LABELS: Record<string, string> = {
   "20ft": "20FT", "40ft": "40FT", loose_cargo: "Loose Cargo", car: "Car"
 };
@@ -141,11 +154,17 @@ function CargoContent() {
   // A page off the intake shelf, opened by `?draft=`. The id is carried in the URL rather than
   // the extraction, so what fills the form is exactly what the shelf holds and the clerk saw.
   const draftId = params.get("draft");
+  // Which of the two books the desk is open on, read from `?book=` rather than kept in state:
+  // a link handed over from an alert or a colleague must land on the same register, and an
+  // unknown or missing value is the inbound book, which is what a clearing office works on first.
+  const bookParam = params.get("book");
+  const book = bookParam === "transport" ? "transport" : "clearing";
 
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [companyCode, setCompanyCode] = useState<string | null>(null);
   const [filterStage, setFilterStage] = useState("");
   const [filterType, setFilterType] = useState("");
+  const [books, setBooks] = useState<BookMeta[]>([]);
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY);
@@ -161,10 +180,23 @@ function CargoContent() {
   // check, so the set is pruned to the rows the desk is listing whenever the list loads.
   const [picked, setPicked] = useState<Set<string>>(new Set());
 
+  // The book as the server described it. `/cargo/books` owns which type stands where, so this
+  // desk never holds its own copy of that vocabulary.
+  const bookMeta = books.find(b => b.key === book);
+  const bookTypes = (bookMeta?.types ?? []).map(t => t.value);
+  // A type chosen on one book is not a filter on the other, so switching registers drops it
+  // rather than printing a list of nothing.
+  const typeFilter = bookMeta?.types.some(t => t.value === filterType) ? filterType : "";
+  const bookCount = bookMeta?.count ?? 0;
+  // Until the counts land, the desk words the book with its own key. The register is the same
+  // book either way, so the only difference before the first reply is a lowercase name.
+  const bookLabel = bookMeta?.label ?? book;
+
   const load = useCallback(async (editTarget?: string | null) => {
     const qs = new URLSearchParams();
+    qs.set("book", book);
     if (filterStage) qs.set("stage", filterStage);
-    if (filterType) qs.set("shipmentType", filterType);
+    if (typeFilter) qs.set("shipmentType", typeFilter);
     if (search.trim()) qs.set("search", search.trim());
     const res = await apiFetch(`/cargo${qs.toString() ? `?${qs}` : ""}`);
     if (res.ok) {
@@ -173,6 +205,10 @@ function CargoContent() {
       const listed = new Set(rows.map(r => r.id));
       setPicked(p => new Set([...p].filter(id => listed.has(id))));
     }
+    // The tab counts come from a grouped read, not from rows.length: this register caps at 200
+    // files, and a tab that said "200" about an office with 400 would be a number nobody trusts.
+    const b = await apiFetch("/cargo/books");
+    if (b.ok) { const j = await b.json().catch(() => ({})); setBooks(j.books ?? []); }
     const p = await apiFetch("/profile");
     if (p.ok) { const j = await p.json(); setCompanyCode(j.company_code ?? null); }
     // Edit mode: pull the file into the form.
@@ -204,7 +240,7 @@ function CargoContent() {
       }
     }
     setLoaded(true);
-  }, [filterStage, filterType, search]);
+  }, [book, filterStage, typeFilter, search]);
 
   useEffect(() => { load(editId); }, [load, editId]);
 
@@ -258,12 +294,23 @@ function CargoContent() {
   const containerCount = Number(form.containerCount) || 0;
   const numbersMatch = isLoose || containerLines.length === containerCount;
   const prefix = TYPE_PREFIX[form.shipmentType] ?? "4";
+  const isEditing = editId !== null;
+  // The form offers the open book's two types, plus whatever the file or the scanned page
+  // already carries, so a clerk is never shown a type the desk cannot list.
+  const formTypes = [...new Set([...bookTypes, form.shipmentType])];
   const filePreview = companyCode
     ? `${prefix}${companyCode}-###-${new Date().getFullYear()}`
     : "set your company code in Profile";
 
   function set<K extends keyof FormState>(k: K, v: FormState[K]) {
     setForm(f => ({ ...f, [k]: v }));
+  }
+
+  // The book lives in the URL, so an alert or a handed-over link lands on the same register.
+  function openBook(key: string) {
+    const qs = new URLSearchParams(params.toString());
+    qs.set("book", key);
+    router.replace(`/app/cfa/cargo?${qs.toString()}`);
   }
 
   // The banner restates what the shelf holds for this page, so every number in it comes from
@@ -275,7 +322,6 @@ function CargoContent() {
   async function save(mode: "close" | "new") {
     setError(null); setNotice(null); setBusy(true);
     try {
-      const editing = editId !== null;
       const payload = {
         shipmentType: form.shipmentType,
         hsCode: form.hsCode || null,
@@ -308,8 +354,8 @@ function CargoContent() {
         paymentStatus: form.paymentStatus,
         notes: form.notes || null
       };
-      const res = await apiFetch(editing ? `/cargo/${editId}` : "/cargo", {
-        method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" },
+      const res = await apiFetch(isEditing ? `/cargo/${editId}` : "/cargo", {
+        method: isEditing ? "PUT" : "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
       const j = await res.json().catch(() => ({}));
@@ -318,7 +364,7 @@ function CargoContent() {
       // listing it as still to file. A failed attach is reported as what it is — the file is
       // open either way, the paper simply stays on the shelf — never as a failed save.
       let filedNote = "";
-      if (!editing && draft) {
+      if (!isEditing && draft) {
         const c = await apiFetch(`/cargo/intake/${draft.id}/commit`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ shipmentId: j.id })
@@ -329,13 +375,14 @@ function CargoContent() {
           : ` Page ${draft.position} could not be attached — ${errorText(cj, "the shelf still lists it as unfiled.")}`;
         setDraft(null);
         scannedFor.current = null;
-        router.replace("/app/cfa/cargo");
+        // Back to the book the clerk was working in, not to the default one.
+        router.replace(`/app/cfa/cargo?book=${book}`);
       }
-      if (mode === "new" && !editing) {
+      if (mode === "new" && !isEditing) {
         setNotice("Cargo file opened — the form is ready for the next one." + filedNote);
         setForm(f => ({ ...EMPTY, shipmentType: f.shipmentType, containerType: f.containerType }));
       } else {
-        setNotice((editing ? "Cargo file updated." : `Cargo file ${j.fileNumber ?? ""} opened.`.trim()) + filedNote);
+        setNotice((isEditing ? "Cargo file updated." : `Cargo file ${j.fileNumber ?? ""} opened.`.trim()) + filedNote);
         setForm(EMPTY); setShowForm(false);
       }
       load(null);
@@ -379,7 +426,12 @@ function CargoContent() {
         <div>
           <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Cargo files</h1>
           <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
-            Clearing and forwarding files — {companyCode ? `your file numbers run as ${prefix}${companyCode}-001-${new Date().getFullYear()}` : "set your company code on the Profile page to open files"}.
+            {`Two books, kept apart: ${BOOK_NOTES[book].toLowerCase()}.`}
+            {companyCode
+              ? (bookTypes.length
+                ? ` This book numbers from ${bookTypes.map(t => TYPE_PREFIX[t]).join(" or ")}, so a file here reads ${TYPE_PREFIX[bookTypes[0]]}${companyCode}-001-${new Date().getFullYear()}.`
+                : "")
+              : " Set your company code on the Profile page to open files."}
           </p>
         </div>
         <div className="flex flex-wrap gap-8">
@@ -389,11 +441,29 @@ function CargoContent() {
           )}
           <Link href="/app/cfa/cargo/analytics"
             className="on-photo-btn px-16 py-8 text-xs font-semibold">Analytics</Link>
-          <button type="button" onClick={() => { setForm(EMPTY); setShowForm(s => !s); }}
+          <button type="button"
+            onClick={() => {
+              // A file opened from a book starts as that book's own type, so the number the
+              // preview prints is a number this register can actually list.
+              setForm({ ...EMPTY, shipmentType: bookMeta?.types[0]?.value ?? "import" });
+              setShowForm(s => !s);
+            }}
             className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">
-            {showForm ? "Close form" : "+ New file"}
+            {showForm ? "Close form" : `+ New ${bookLabel.toLowerCase()} file`}
           </button>
         </div>
+      </div>
+
+      {/* The two books, one tap apart, each counting from the server's grouped read rather than
+          from the 200 rows this register is allowed to print. */}
+      <div className="mt-20 flex flex-wrap gap-12" role="tablist" aria-label="Cargo books">
+        {books.map(b => (
+          <button key={b.key} type="button" role="tab" aria-selected={b.key === book}
+            onClick={() => openBook(b.key)}
+            className={`on-photo-btn px-16 py-8 text-xs font-semibold${b.key === book ? " is-on" : ""}`}>
+            {`${b.label} (${b.count})`}
+          </button>
+        ))}
       </div>
       {error && <div role="alert" className="mt-16 mb-16 px-12 py-8 text-sm"
         style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>{error}</div>}
@@ -411,9 +481,14 @@ function CargoContent() {
         </label>
         <label className="block">
           <span className={`${labelCls} pane-note`}>Type</span>
-          <select value={filterType} onChange={e => setFilterType(e.target.value)} className={inputCls} style={inputStyle}>
-            <option value="">All types</option>
-            {Object.entries(TYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          <select value={typeFilter} onChange={e => setFilterType(e.target.value)}
+            className={inputCls} style={inputStyle}>
+            <option value="">Every {bookLabel.toLowerCase()} type</option>
+            {(bookMeta?.types ?? []).map(t => (
+              <option key={t.value} value={t.value}>
+                {`${TYPE_LABELS[t.value] ?? t.value} — ${t.count} file${t.count === 1 ? "" : "s"}`}
+              </option>
+            ))}
           </select>
         </label>
         <label className="block">
@@ -465,11 +540,18 @@ function CargoContent() {
         <form onSubmit={e => { e.preventDefault(); save("close"); }}
           className="mt-24 space-y-24 rounded-card border bg-surface p-24" style={cardStyle}>
           {sec("1. Classification", <>
-            {field("Shipment type *",
-              <select required value={form.shipmentType} onChange={e => set("shipmentType", e.target.value)}
-                className={inputCls} style={inputStyle}>
-                {Object.entries(TYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-              </select>)}
+            {field(isEditing ? "Shipment type (fixed)" : "Shipment type *", <>
+              <select required value={form.shipmentType} disabled={isEditing}
+                onChange={e => set("shipmentType", e.target.value)}
+                className={inputCls} style={isEditing ? disabledStyle : inputStyle}>
+                {formTypes.map(t => <option key={t} value={t}>{TYPE_LABELS[t] ?? t}</option>)}
+              </select>
+              {isEditing ? (
+                <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                  A file stays in the book its number was cut from — to move it, open a new one.
+                </p>
+              ) : null}
+            </>)}
             {field("File number (auto)",
               <input disabled value={filePreview} className={inputCls} style={disabledStyle} />)}
             {field("HS code", <input value={form.hsCode} onChange={e => set("hsCode", e.target.value)}
@@ -594,18 +676,25 @@ function CargoContent() {
 
       <div className="mt-24 flex flex-wrap items-center justify-between gap-12">
         <p className="text-xs font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
-          {shipments.length} file{shipments.length === 1 ? "" : "s"} listed
-          {filterStage || filterType || search ? " for these filters" : ""}
+          {`${bookLabel} book — ${shipments.length} file${shipments.length === 1 ? "" : "s"} listed`}
+          {filterStage || typeFilter || search ? " for these filters" : ""}
+          {bookCount > shipments.length
+            ? ` (${bookCount} in the book; a register lists 200)` : ""}
         </p>
         <div className="flex flex-wrap items-start gap-24">
           <ExportButtons report="cargo"
-            title="Cargo files"
-            subtitle={filterStage || filterType || search
-              ? "Files matching the filters on the desk" : "Every clearing and forwarding file on the desk"}
+            title={`${bookLabel} files`}
+            subtitle={filterStage || typeFilter || search
+              ? `${bookLabel} files matching the filters on the desk`
+              : `Every ${bookLabel} file on the desk`}
             meta={[
+              { label: "Book", value: bookLabel },
               { label: "Stage", value: filterStage ? (STAGE_LABELS[filterStage] ?? filterStage) : "All" },
-              { label: "Type", value: filterType ? (TYPE_LABELS[filterType] ?? filterType) : "All" },
-              { label: "Search", value: search.trim() || "—" }
+              { label: "Type", value: typeFilter ? (TYPE_LABELS[typeFilter] ?? typeFilter) : "Both" },
+              { label: "Search", value: search.trim() || "—" },
+              // A register lists 200 files; a sheet that says 200 rows without saying the book
+              // holds 400 reads like the office finished the book.
+              { label: "Listed", value: `${shipments.length} of ${bookCount} in the book` }
             ]}
             columns={[
               { key: "file", label: "File no.", type: "text" },
@@ -713,7 +802,8 @@ function CargoContent() {
             ))}
             {loaded && shipments.length === 0 && (
               <tr><td colSpan={9} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
-                No cargo files{filterStage || filterType || search ? " match the filters" : " yet — open your first file above"}.
+                No {bookLabel.toLowerCase()} files
+                {filterStage || typeFilter || search ? " match the filters" : " yet — open your first one above"}.
               </td></tr>
             )}
             {!loaded && (

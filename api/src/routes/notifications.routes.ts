@@ -5,6 +5,7 @@ import { verifyAccessToken } from "../security/jwt.js";
 import { ApiError } from "../util/errors.js";
 import { namesMatch } from "../util/name-match.js";
 import { checkPermission } from "../security/permissions.js";
+import { bookHref } from "../cargo/books.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -289,7 +290,7 @@ async function buildAlerts(c: any, tenantId: string, userId: string): Promise<No
 
   // Cargo file ETAs arriving within 3 days
   const etaFiles = await c.query(
-    `select id, file_number, consignee_name, eta from cargo_shipments
+    `select id, file_number, consignee_name, shipment_type, eta from cargo_shipments
      where tenant_id = $1 and deleted_at is null and status = 'open'
        and eta between current_date and current_date + 3`, [tenantId]);
   for (const s of etaFiles.rows) {
@@ -299,13 +300,13 @@ async function buildAlerts(c: any, tenantId: string, userId: string): Promise<No
       type: "cargo_eta", severity: "info",
       title: `ETA ${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`}: ${s.file_number}`,
       detail: `Consignee ${s.consignee_name}`,
-      href: "/app/cfa/cargo", date: s.eta
+      href: bookHref(s.shipment_type), date: s.eta
     });
   }
 
   // Arrived cargo files still unpaid
   const unpaidFiles = await c.query(
-    `select id, file_number, consignee_name, payment_status, eta from cargo_shipments
+    `select id, file_number, consignee_name, shipment_type, payment_status, eta from cargo_shipments
      where tenant_id = $1 and deleted_at is null and status = 'open'
        and payment_status <> 'paid' and eta < current_date`, [tenantId]);
   for (const s of unpaidFiles.rows) {
@@ -314,13 +315,13 @@ async function buildAlerts(c: any, tenantId: string, userId: string): Promise<No
       type: "cargo_payment", severity: "warning",
       title: `Payment due on file ${s.file_number}`,
       detail: `${s.consignee_name} — ${s.payment_status.replace("_", " ")} since arrival`,
-      href: "/app/cfa/cargo", date: s.eta
+      href: bookHref(s.shipment_type), date: s.eta
     });
   }
 
   // Task deadlines (due today/soon) and overdue tasks
   const dueTasks = await c.query(
-    `select k.id, k.title, k.due_date, s.file_number
+    `select k.id, k.title, k.due_date, s.file_number, s.shipment_type
      from cargo_tasks k join cargo_shipments s on s.id = k.shipment_id
      where k.tenant_id = $1 and k.status = 'pending' and k.due_date is not null
        and k.due_date <= current_date + 2`, [tenantId]);
@@ -333,7 +334,7 @@ async function buildAlerts(c: any, tenantId: string, userId: string): Promise<No
         ? `Task overdue: ${t.title}`
         : `Task due ${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`}: ${t.title}`,
       detail: `File ${t.file_number}`,
-      href: "/app/cfa/cargo", date: t.due_date
+      href: bookHref(t.shipment_type), date: t.due_date
     });
   }
 

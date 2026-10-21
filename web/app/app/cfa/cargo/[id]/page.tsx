@@ -49,6 +49,8 @@ interface Shipment {
   cabinet_position: string | null;
   processing_cost: string | null; payment_amount: string | null; payment_status: string;
   stage: string; status: string; notes: string | null;
+  /** Which book the file stands in, as the register names it. Null only if the type is unknown. */
+  book: { key: string; label: string } | null;
   tasks: { id: string; title: string; assigned_to: string | null; assignee_name: string | null;
            due_date: string | null; status: string; notes: string | null }[];
   documents: { id: string; kind: string; file_name: string; mime_type: string; size_bytes: number; created_at: string }[];
@@ -177,7 +179,7 @@ export default function CargoDetailPage() {
       const res = await apiFetch(`/cargo/${id}`, { method: "DELETE" });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setError(errorText(j, "Failed to delete.")); return; }
-      window.location.href = "/app/cfa/cargo";
+      window.location.href = file?.book ? `/app/cfa/cargo?book=${file.book.key}` : "/app/cfa/cargo";
     } finally { setBusy(false); }
   }
 
@@ -271,6 +273,8 @@ export default function CargoDetailPage() {
 
   const stageIndex = STAGES.indexOf(file.stage);
   const editable = file.status !== "completed" && file.status !== "cancelled";
+  // Back to the book that holds this file, not to whichever register opens by default.
+  const filesHref = file.book ? `/app/cfa/cargo?book=${file.book.key}` : "/app/cfa/cargo";
 
   const Row = ({ label, value }: { label: string; value: React.ReactNode }) => (
     <div>
@@ -282,14 +286,16 @@ export default function CargoDetailPage() {
   return (
     <div className="mx-auto max-w-[980px] px-16 py-32">
       <div className="no-print flex flex-wrap items-center justify-between gap-12">
-        <Link href="/app/cfa/cargo" className="pane-note text-xs underline">← All cargo files</Link>
+        <Link href={filesHref} className="pane-note text-xs underline">
+          ← {file.book ? `${file.book.label} files` : "All cargo files"}
+        </Link>
         <div className="flex flex-wrap gap-8">
           <Link href={`/app/cfa/jobs?file=${id}`}
             className="on-photo-btn px-16 py-8 text-xs font-semibold">Job pipeline</Link>
           <Link href={`/app/cfa/messages?file=${id}`}
             className="on-photo-btn px-16 py-8 text-xs font-semibold">Messages</Link>
           {editable && (
-            <Link href={`/app/cfa/cargo?edit=${id}`}
+            <Link href={`${filesHref}&edit=${id}`}
               className="on-photo-btn px-16 py-8 text-xs font-semibold">Edit</Link>
           )}
           <button type="button" disabled={busy} onClick={duplicate}
@@ -370,6 +376,7 @@ export default function CargoDetailPage() {
       <section className={`${card} mt-24`} style={cardStyle}>
         <div className="grid grid-cols-2 gap-16 text-sm md:grid-cols-3">
           <Row label="Shipment type" value={file.shipment_type[0].toUpperCase() + file.shipment_type.slice(1)} />
+          <Row label="Book" value={file.book?.label ?? "—"} />
           <Row label="HS code" value={file.hs_code ?? "—"} />
           <Row label="Declaration mode" value={file.declaration_mode ?? "—"} />
           <Row label="Container" value={`${CONTAINER_LABELS[file.container_type] ?? file.container_type}${file.container_count ? ` ×${file.container_count}` : ""}`} />
