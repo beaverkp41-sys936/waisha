@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { seekerFetch } from "../../api-client";
 import { useMeter } from "../../meter";
 import {
-  errorCode, errorText, fmtDate, LICENCE_COLORS, LICENCE_LABELS, SERVES_LABELS
+  errorCode, errorText, fmtDate, hm, LICENCE_COLORS, LICENCE_LABELS, SERVES_LABELS
 } from "../../labels";
 
 type Company = {
@@ -86,7 +86,7 @@ export default function FindCompanyCardPage() {
         return;
       }
       const code = errorCode(json);
-      if (code === "NO_SEARCH_PASS" || code === "SEARCH_PASS_EXHAUSTED" || code === "FREE_SEARCH_NOT_READY") {
+      if (code === "SEARCH_PASS_EXHAUSTED" || code === "FREE_SEARCH_NOT_READY") {
         setNote(errorText(json, "That takes a search credit."));
       } else {
         setError(errorText(json, "Could not record this open."));
@@ -99,6 +99,12 @@ export default function FindCompanyCardPage() {
   }
 
   const card = "rounded-card border bg-surface p-24";
+
+  /* Recording an open goes through the same POST /directory/search the board uses, and that
+     route claims the day's free credit itself when nothing is live. So the button is only dead
+     when the meter holds neither a pass nor an unlocked free claim. */
+  const wait = Math.max(0, state?.free_wait_minutes ?? 0);
+  const canRecord = state?.found === true && (state.live_pass_id !== null || wait === 0);
 
   if (!searchId) {
     return (
@@ -157,7 +163,9 @@ export default function FindCompanyCardPage() {
 
   return (
     <div className="mx-auto max-w-[720px] px-16 py-32">
-      <Link href="/find" className="text-xs underline" style={{ color: "var(--brand)" }}>
+      {/* The page's only way back, and it stands on the photo — so it takes the pane
+          note's white rather than brand blue, which measured 4.13:1 over a bright sky. */}
+      <Link href="/find" className="pane-note text-xs underline">
         ← Back to search
       </Link>
 
@@ -170,15 +178,18 @@ export default function FindCompanyCardPage() {
               </h1>
               {company.is_verified && (
                 <span className="rounded-input px-8 py-4 text-[10px] font-bold uppercase tracking-[0.12em]"
-                  style={{ background: "color-mix(in srgb, var(--gold-green) 18%, transparent)", color: "var(--gold-green)" }}>
+                  style={{ background: "var(--pane-bg)", color: "var(--gold-green-on-photo)" }}>
                   Verified
                 </span>
               )}
             </div>
             <div className="mt-12 flex flex-wrap gap-8">
+              {/* These chips sit on the photo, not on glass, so a 16% wash of the pane's own
+                  gold only lightened the sky behind them — white on that read 4.4:1. The
+                  plate has to be the dark one, and the hue the on-photo end of the palette. */}
               {company.serves.map(s => (
                 <span key={s} className="rounded-input px-8 py-4 text-[10px] font-bold uppercase tracking-[0.1em]"
-                  style={{ background: "color-mix(in srgb, var(--gold) 16%, transparent)", color: "var(--ink)" }}>
+                  style={{ background: "var(--pane-bg)", color: "var(--gold-on-photo)" }}>
                   {SERVES_LABELS[s] ?? s}
                 </span>
               ))}
@@ -241,14 +252,18 @@ export default function FindCompanyCardPage() {
 
             <div className="mt-16">
               <button type="button" onClick={recordOpen}
-                disabled={busy || state?.live_pass_id == null}
+                disabled={busy || !canRecord}
                 className="waisha-btn w-full rounded-input px-24 py-8 text-sm font-semibold disabled:opacity-50">
                 {busy ? "Recording" : "Record this open"}
               </button>
               <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
-                {state?.live_pass_id == null
-                  ? "You have no live search pass, so this cannot be recorded right now."
-                  : "Uses one search credit and tells the company that a seeker opened their card."}
+                {state?.live_pass_id != null
+                  ? "Uses one search credit and tells the company that a seeker opened their card."
+                  : canRecord
+                    ? "This takes today's free search — nothing to claim first — and tells the "
+                      + "company that a seeker opened their card."
+                    : `Today's free search is spent and no pass is live, so this waits ${hm(wait)} `
+                      + "for the next one."}
               </p>
               {note && (
                 <p role="status" className="mt-12 px-12 py-8 text-sm"

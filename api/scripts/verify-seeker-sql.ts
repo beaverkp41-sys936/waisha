@@ -231,11 +231,14 @@ const shapeChecks: [string, string, (rows: any[]) => boolean][] = [
      select pg_get_constraintdef(oid) as def from pg_constraint
      where conrelid = 'service_groups'::regclass
        and pg_get_constraintdef(oid) ilike '%services%'`,
+    // 068 rebuilt this check around coalesce(): array_length of an empty array is NULL,
+    // and a CHECK reads NULL as satisfied, so 060's version let a bundle with no service
+    // through. The assertion follows that shape, not 060's.
     (r) => r.length >= 1 && r.some((x: any) =>
       /<@ ARRAY\['transport'/i.test(String(x.def))
       && /'cfa'/.test(String(x.def)) && /'office'/.test(String(x.def)))
-      && r.some((x: any) => /array_length\(services, 1\) >= 1/i.test(String(x.def))
-        && /array_length\(services, 1\) <= 3/i.test(String(x.def)))],
+      && r.some((x: any) => /coalesce\(array_length\(services, 1\), 0\) >= 1/i.test(String(x.def))
+        && /coalesce\(array_length\(services, 1\), 0\) <= 3/i.test(String(x.def)))],
 
   ["looking_for is only ever transporter or cfa", `
      select pg_get_constraintdef(oid) as def from pg_constraint
@@ -308,15 +311,17 @@ const shapeChecks: [string, string, (rows: any[]) => boolean][] = [
 
   // 060 granted the seeker only the two profile keys, because the directory, reveal
   // and pass keys did not exist yet. 061 created them and handed over exactly three:
-  // search, view own meter, record a payment reference. This is the guard that keeps
-  // that handover to what was promised — anything wider is a finding here.
+  // search, view own meter, record a payment reference. 070 added the pair that lets a
+  // seeker tell the platform team what is missing — the audience with no office to phone.
+  // Anything beyond those five is a finding here.
   ["the seeker holds the profile pair plus the three 061 keys, and nothing else", `
      select p.key from roles r
      join role_permissions rp on rp.role_id = r.id
      join permissions p on p.key = rp.permission_key
      where r.key = 'seeker' and r.tenant_id is null`,
     (r) => r.map((x: any) => x.key).sort().join(",") ===
-      "directory.search,seeker_pass.create,seeker_pass.view,seeker_profile.edit,seeker_profile.view"],
+      "directory.search,recommendations.view,recommendations.write,seeker_pass.create,"
+      + "seeker_pass.view,seeker_profile.edit,seeker_profile.view"],
 
   ["the seeker role holds no company-side, control or reveal key at all", `
      select p.key from roles r
@@ -324,6 +329,7 @@ const shapeChecks: [string, string, (rows: any[]) => boolean][] = [
      join permissions p on p.key = rp.permission_key
      where r.key = 'seeker' and r.tenant_id is null
        and p.key not like 'seeker_profile.%'
+       and p.key not like 'recommendations.%'
        and p.key not in ('directory.search','seeker_pass.view','seeker_pass.create')`,
     (r) => r.length === 0],
 

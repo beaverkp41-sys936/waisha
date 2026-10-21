@@ -57,7 +57,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
               </span>
             )}
             <button type="button" onClick={signOut}
-              className="rounded-input border px-12 py-6 text-[11px] font-bold uppercase tracking-[0.12em] transition-colors"
+              className="rounded-input border px-12 py-8 text-[11px] font-bold uppercase tracking-[0.12em] transition-colors"
               style={{ borderColor: "rgba(255,255,255,0.35)", color: "rgba(255,255,255,0.85)" }}>
               Sign out
             </button>

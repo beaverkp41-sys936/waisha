@@ -19,9 +19,9 @@ const NAV = [
 /**
  * The meter, in one line of the header. It reads exactly like the database decides:
  * a live pass shows what is left on it, otherwise the countdown to the next free
- * credit. When a free search is waiting the chip is only a pointer to the search
- * page — the claiming itself happens there, on the meter card, so the header never
- * offers a second action with the same words as the first.
+ * credit. When nothing is live and the day's credit is unlocked the chip points at
+ * the search page, because that is where the credit is taken — pressing Search claims
+ * and spends it in one action, so the header must not offer a claim of its own.
  */
 function MeterChip() {
   const { state } = useMeter();
@@ -48,7 +48,7 @@ function MeterChip() {
   return (
     <Link href="/find"
       className="on-photo-btn rounded-input px-12 py-4 text-[10px] font-bold uppercase tracking-[0.12em]">
-      Free search ready
+      Free search ready — go to Search
     </Link>
   );
 }
@@ -100,7 +100,7 @@ export default function FindLayout({ children }: { children: React.ReactNode }) 
                 </span>
               )}
               <button type="button" onClick={signOut}
-                className="rounded-input border px-12 py-6 text-[11px] font-bold uppercase tracking-[0.12em] transition-colors"
+                className="rounded-input border px-12 py-8 text-[11px] font-bold uppercase tracking-[0.12em] transition-colors"
                 style={{ borderColor: "rgba(255,255,255,0.35)", color: "rgba(255,255,255,0.85)" }}>
                 Sign out
               </button>

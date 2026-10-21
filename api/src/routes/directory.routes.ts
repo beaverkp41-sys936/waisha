@@ -22,6 +22,13 @@ async function requireAuth(req: any) {
 const KINDS = ["transporter", "cfa"] as const;
 const SERVES = ["transporter", "cfa"] as const;
 
+/** The meter counts down in minutes, and 1439 of them is a sentence nobody reads. */
+function hm(totalMinutes: number): string {
+  const m = Math.max(0, Math.floor(totalMinutes));
+  const h = Math.floor(m / 60);
+  return h > 0 ? `${h}h ${m % 60}m` : `${m}m`;
+}
+
 /**
  * A region id reaches two foreign keys — seeker_searches.filter_region_id and
  * directory_listing_regions.region_id — and both raise 23503 from inside a definer or
@@ -98,9 +105,9 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
       return rows;
     });
 
-  // One call, one credit, one page. Consume and read deliberately share the
-  // withTenant transaction: if the read throws, the rollback returns the credit, so a
-  // seeker never pays for a search the server failed to run.
+  // One call, one credit, one page. Claim, consume and read deliberately share the
+  // withTenant transaction: if the read throws, the rollback returns both the credit and
+  // the day's free claim, so a seeker never pays for a search the server failed to run.
   app.post("/directory/search",
     { preHandler: [requireAuth, requirePermission("directory.search")] },
     async (req: any) => {
@@ -117,23 +124,44 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
         state = st.rows[0]?.r ?? {};
         passId = state.live_pass_id ?? null;
       }
-      if (!passId) {
-        // "You have nothing" and "today's one is spent, back in N minutes" are different
-        // screens, and the meter already knows which: a free pass that exists but is used
-        // up leaves live_pass_id empty while free_wait_minutes counts down to the next
-        // claim. Without this the seeker who searched once is told to go sign up again.
+      // Pressing Search is the whole action. A seeker with nothing live whose day's free
+      // credit is not yet spent claims it here rather than being sent to find a "claim"
+      // button first — 061 anchors the 24 hours on the claim, so the credit the seeker
+      // would have pressed for is the credit this search is about to spend.
+      const claimNow = passId === null && Math.max(0, Number(state?.free_wait_minutes ?? 0)) === 0;
+      if (passId === null && !claimNow) {
+        // "Today's one is used, back in N minutes" is a countdown, not a dead end, and the
+        // meter already knows which of the two it is: a free pass that exists but is spent
+        // leaves live_pass_id empty while free_wait_minutes runs down to the next claim.
         const wait = Math.max(0, Number(state?.free_wait_minutes ?? 0));
-        if (wait > 0) {
-          throw new ApiError("SEARCH_PASS_EXHAUSTED",
-            `Today's free search is used. The next one unlocks in ${wait} minutes.`,
-            409, [{ reason: "exhausted", freeWaitMinutes: wait }]);
-        }
-        throw new ApiError("NO_SEARCH_PASS",
-          "Claim your free daily search, or record a weekly pass, before searching.",
-          409, [{ reason: "no_pass" }]);
+        throw new ApiError("SEARCH_PASS_EXHAUSTED",
+          `Today's free search is used. The next one unlocks in ${hm(wait)}.`,
+          409, [{ reason: "exhausted", freeWaitMinutes: wait }]);
       }
 
       return withTenant(req.user.tid, async (c) => {
+        let freeClaimed = false;
+        if (claimNow) {
+          const claimed = await c.query(
+            "select platform_auth.claim_free_search($1) as r", [req.user.sub]);
+          const res = claimed.rows[0]?.r ?? {};
+          const refusal = meterRefusal(res);
+          // Refused inside the same transaction that spends the credit, so a search that
+          // never got one costs nothing. 'wait' is the race this can still hit — two tabs
+          // pressing Search in the same second both read an empty meter — and it answers
+          // as the countdown it is.
+          if (refusal) throw refusal;
+          passId = res.pass_id;
+          freeClaimed = true;
+          await writeAudit(c, {
+            tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
+            requestId: req.requestId, entity: "seeker_search_passes", entityId: res.pass_id,
+            action: "seeker_pass.free_claimed",
+            after: { kind: res.kind, remaining: res.remaining,
+                     expiresAt: res.expires_at, via: "search" }
+          });
+        }
+
         const spent = await c.query(
           "select platform_auth.consume_search_credit($1,$2,$3,$4,$5,$6,$7) as r",
           [req.user.sub, passId, body.listingId ?? null, query, body.kind ?? null,
@@ -158,6 +186,7 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
           return {
             searchId: res.search_id, listingId: body.listingId,
             remaining: res.remaining, passKind: res.pass_kind, resetsAt: res.resets_at,
+            freeClaimed,
             company: card.rows[0]
           };
         }
@@ -195,6 +224,7 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
           remaining: res.remaining,
           passKind: res.pass_kind,
           resetsAt: res.resets_at,
+          freeClaimed,
           results: cards.rows
         };
       });

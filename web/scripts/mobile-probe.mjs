@@ -44,6 +44,12 @@
  *                                         page a phone user actually has to fill in
  *   ... --click 'waiting on you'          click the first control whose words begin with
  *                                         this, for the same reason one tab deep
+ *   ... --fill 'Dar es Salaam'            type into the page's first empty box before
+ *                                         --click runs, because a search board — the page
+ *                                         a seeker actually reads — does not exist until
+ *                                         somebody types a query. Verdicts carry fill[...]
+ *                                         so a run that never reached a box cannot be read
+ *                                         as a board that measured clean.
  *   ... --settle 20000                    ms a page may keep changing before it is measured
  *                                         anyway (default 12000)
  *   ... --quiet 4000                      the least time a page may be called settled
@@ -93,6 +99,10 @@ const OPEN = args.includes("--open");
 // only exists after a tap. --click names the control by the words on it, so a sweep can
 // measure the queue tab or the register rather than only whatever a page opens on.
 const CLICK = String(flag("click", "")).split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+// A search board is the same problem one step further on: it exists only after somebody
+// types. --fill writes the page's first empty box before --click runs, so the pair
+// `--fill 'Dar es Salaam' --click search` measures the results, not the empty register.
+const FILL = flag("fill", "");
 // "What is wrong" is answered by the measures; "why" needs the live boxes. Pass an
 // expression and its JSON is printed for every page alongside the verdict.
 const EVAL = flag("eval", "");
@@ -507,6 +517,12 @@ const SAMPLE_TEXT = `(async () => {
     bad: bad.slice(0, 12), badCount: bad.length, ok: ok };
 })()`;
 
+/** Where a control a phone user has to reach lives. The portal pane is `.app-main`,
+ *  the seeker and shipper panes are `.portal-shell main`, and a sweep that names only
+ *  the first reports "no create control" for a page whose form was there all along —
+ *  which reads exactly like a page with nothing wrong in it. */
+const SHELL = ".app-main, .portal-shell main";
+
 /** Open the create form a page only shows after a tap. Verbs are the ones this
  *  codebase uses for form panels, and anything that reads like a destructive act is
  *  refused, because a sweep must not be able to delete a company.
@@ -523,7 +539,7 @@ const OPEN_FORM = `(() => {
     const t = text(el);
     return shown.test(t) && t.split(/\\s+/).length <= 2 && t.length <= 12;
   };
-  const btns = [...document.querySelectorAll('.app-main button, .app-main a.waisha-btn')]
+  const btns = [...document.querySelectorAll('${SHELL} button, ${SHELL} a.waisha-btn')]
     .filter(el => !el.closest('[hidden]') && el.getBoundingClientRect().height > 0);
   const already = btns.find(dismisses);
   if (already) return 'already open (' + text(already).slice(0, 20) + ')';
@@ -541,12 +557,30 @@ const clickForm = (want) => `(() => {
   const want = ${JSON.stringify(want)};
   const danger = /delete|remove|revoke|suspend|block|wipe|reset/i;
   const text = (el) => (el.textContent || '').trim().toLowerCase();
-  const btns = [...document.querySelectorAll('.app-main button, .app-main a.waisha-btn')]
+  const btns = [...document.querySelectorAll('${SHELL} button, ${SHELL} a.waisha-btn')]
     .filter(el => !el.closest('[hidden]') && el.getBoundingClientRect().height > 0);
   const hit = btns.find(el => text(el).startsWith(want) && !danger.test(text(el)));
   if (!hit) return 'no ' + want;
   hit.click();
   return want + ' -> ' + text(hit).slice(0, 24);
+})()`;
+
+/** Type into the page's first empty text box, through the native setter so a React
+ *  controlled input actually sees it — setting `.value` alone leaves the component's
+ *  own state empty and the form submits nothing. This is the step that makes a search
+ *  results board measurable: the board is the page a seeker has to read, and it does
+ *  not exist until somebody types something. Paired with --click. */
+const fillForm = (want) => `(() => {
+  const want = ${JSON.stringify(want)};
+  const boxes = [...document.querySelectorAll('${SHELL} input, ${SHELL} textarea')]
+    .filter(el => !el.closest('[hidden]') && !/hidden|checkbox|radio|submit|button/i.test(el.type)
+      && el.getBoundingClientRect().height > 0 && !el.value);
+  const box = boxes[0];
+  if (!box) return 'no empty box';
+  const proto = box.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(proto, 'value').set.call(box, want);
+  box.dispatchEvent(new Event('input', { bubbles: true }));
+  return 'typed into ' + (box.name || box.placeholder || box.type).slice(0, 28);
 })()`;
 
 /** A page is not "here" when load fires: a client component fetches after hydration
@@ -663,8 +697,15 @@ async function main() {
     const settled = page.ms;
     let opened = "";
     let clicked = "";
+    let filled = "";
     let settledForm = 0;
     let waitingForm = "";
+    if (FILL) {
+      const hit = await cdp.send("Runtime.evaluate",
+        { expression: fillForm(String(FILL)), returnByValue: true, awaitPromise: true });
+      filled = String(hit.exceptionDetails ? "fill threw" : hit.result.value);
+      await sleep(400);
+    }
     if (OPEN) {
       const hit = await cdp.send("Runtime.evaluate",
         { expression: OPEN_FORM, returnByValue: true, awaitPromise: true });
@@ -700,16 +741,21 @@ async function main() {
     m.path = path;
     m.opened = opened;
     m.clicked = clicked;
+    m.filled = filled;
     m.settled = settled;
     m.settledForm = settledForm;
     m.waiting = waitingForm || page.waiting;
     const short = path.replace(/\/+$/, "") || "/";
+    // A page may be asked with a query (`/find/companies/x?searchId=y`) while the browser
+    // reports `location.pathname`, so the two differ by the part that never navigates.
+    // Comparing them whole made a card that rendered perfectly shout about a dead token.
+    const asked = short.split(/[?#]/)[0];
     const landed = (m.loc || "").replace(/\/+$/, "") || "/";
     // One page is a redirect on purpose: app/page.tsx is `redirect("/login")`, so the
     // root always lands on the sign-in screen whether or not the token is alive. Naming
     // it keeps the dead-token alarm working for the other 65 pages.
     const BY_DESIGN = { "/": "/login" };
-    const moved = !!m.loc && landed !== short && BY_DESIGN[short] !== landed;
+    const moved = !!m.loc && landed !== asked && BY_DESIGN[asked] !== landed;
     m.moved = moved;
     m.redirectOnly = BY_DESIGN[short] === landed;
     if (CONTRAST) {
@@ -759,7 +805,7 @@ async function main() {
         `worst=${m.contrast.worst ?? m.contrast.error ?? "?"} ` +
         `under=${String(m.contrast.under ?? 0).padStart(2)} ` : "") +
       `settle[${note(settled)}${settledForm ? "+" + note(settledForm) : ""}] ` +
-      `${m.sidebar ? `sidebar[${m.sidebar.display} ${m.sidebar.w}px]` : ""}${opened ? ` form[${opened}]` : ""}${clicked ? ` tab[${clicked}]` : ""}`
+      `${m.sidebar ? `sidebar[${m.sidebar.display} ${m.sidebar.w}px]` : ""}${filled ? ` fill[${filled}]` : ""}${opened ? ` form[${opened}]` : ""}${clicked ? ` tab[${clicked}]` : ""}`
     );
     for (const o of m.overflow.slice(0, 4)) console.log(`    past ${String(o.past).padStart(4)}px  ${o.pos.padEnd(8)} ${o.at}  ${o.text ? JSON.stringify(o.text) : ""}`);
     for (const o of m.clipped.slice(0, 3)) console.log(`    cut  ${String(o.lost).padStart(4)}px  ${o.at}`);

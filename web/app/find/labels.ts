@@ -31,10 +31,12 @@ export const SERVES_LABELS: Record<string, string> = {
   transporter: "Transporter", cfa: "Clearing & forwarding"
 };
 
+/** The three chips under the search box. "All" is the empty value because the meter in
+ *  061 takes a null filter kind, not a sentinel string. */
 export const KIND_OPTIONS = [
-  { value: "", label: "Transporter or CFA" },
-  { value: "transporter", label: "Transporters only" },
-  { value: "cfa", label: "Clearing & forwarding only" }
+  { value: "", label: "All" },
+  { value: "transporter", label: "Transporters" },
+  { value: "cfa", label: "Clearing agents" }
 ];
 
 export const LICENCE_LABELS: Record<string, string> = {
@@ -61,10 +63,12 @@ export const PAYMENT_METHODS = [
 
 export function errorText(json: any, fallback: string): string {
   const d = json?.error?.details;
-  const extra = Array.isArray(d) && d.length
-    ? ` (${d.map((x: any) => `${x.field ? `${x.field}: ` : ""}${x.message ?? ""}`).join("; ")})`
-    : "";
-  return (json?.error?.message ?? fallback) + extra;
+  // Meter refusals carry machine fields (reason, freeWaitMinutes) with no field/message
+  // pair; only validation details read as "(reference: At least 4 characters)".
+  const parts = Array.isArray(d)
+    ? d.map((x: any) => `${x.field ? `${x.field}: ` : ""}${x.message ?? ""}`).filter(Boolean)
+    : [];
+  return (json?.error?.message ?? fallback) + (parts.length ? ` (${parts.join("; ")})` : "");
 }
 
 /** Empty string when the API sent no code — the callers test membership in a Set, and

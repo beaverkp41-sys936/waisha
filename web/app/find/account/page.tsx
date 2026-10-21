@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { seekerFetch } from "../api-client";
 import { useMeter } from "../meter";
@@ -25,7 +26,7 @@ function Label({ children }: { children: React.ReactNode }) {
 }
 
 export default function FindAccountPage() {
-  const { state, claimFree, recordWeekly } = useMeter();
+  const { state, recordWeekly } = useMeter();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
@@ -78,15 +79,6 @@ export default function FindAccountPage() {
     } finally {
       setBusy(false);
     }
-  }
-
-  async function claim() {
-    setBusy(true); setMsg(null);
-    const r = await claimFree();
-    setMsg(r.ok
-      ? { kind: "ok", text: "Free search ready — one search for the next 24 hours." }
-      : { kind: "bad", text: r.message });
-    setBusy(false);
   }
 
   async function record(e: React.FormEvent) {
@@ -205,7 +197,9 @@ export default function FindAccountPage() {
                   </p>
                   <p className="mt-8 text-[10px] font-bold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
                     {p.searches_allowed} search{p.searches_allowed === 1 ? "" : "es"} ·{" "}
-                    {p.window_hours >= 24 ? `${Math.round(p.window_hours / 24)} day(s)` : `${p.window_hours}h`}
+                    {p.window_hours >= 24
+                      ? `${Math.round(p.window_hours / 24)} day${Math.round(p.window_hours / 24) === 1 ? "" : "s"}`
+                      : `${p.window_hours}h`}
                   </p>
                 </div>
               ))}
@@ -222,10 +216,13 @@ export default function FindAccountPage() {
                   Next free search unlocks in <strong>{hm(state.free_wait_minutes)}</strong>.
                 </p>
               ) : (
-                <button type="button" onClick={claim} disabled={busy}
-                  className="waisha-btn rounded-input px-24 py-8 text-sm font-semibold disabled:opacity-50">
-                  Claim today&apos;s free search
-                </button>
+                /* There is no claim to press. The free credit is taken by the search that
+                   needs it, and 061 anchors the 24 hours on that instant — a button here
+                   would let a seeker spend their day by pressing it and then not searching. */
+                <Link href="/find"
+                  className="on-photo-btn is-on rounded-input px-24 py-8 text-sm font-semibold">
+                  Search — today&apos;s free credit is taken by the search
+                </Link>
               )}
               {state.awaiting_count > 0 && (
                 <span className="rounded-input px-12 py-4 text-[10px] font-bold uppercase tracking-[0.12em]"

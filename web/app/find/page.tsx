@@ -10,14 +10,13 @@ import {
 
 const PAGE = 12;
 
-/** Every code that means "the meter, not the network, stopped you". Each one gets the
- *  same panel with its own sentence and its own way out, because a seeker who is told
- *  only "search failed" has no idea whether to wait, to pay or to sign in again. */
+/** Every code that means "the meter, not the network, stopped you". A search now claims
+ *  today's free credit itself, so the only way to be blocked is to have already used it
+ *  — which is a countdown with a way out, not a dead end. */
 const BLOCKED_CODES = new Set([
-  "NO_SEARCH_PASS", "SEARCH_PASS_EXHAUSTED", "FREE_SEARCH_NOT_READY", "SEARCH_PASS_EXISTS",
-  "PENDING_VERIFICATION", "SEARCH_PASS_EXPIRED", "SEARCH_PASS_NOT_USABLE",
-  "SEARCH_PASS_NOT_OFFERED", "SEARCH_EXPIRED", "PASS_ALREADY_RECORDED",
-  "PASS_AWAITING_VERIFICATION"
+  "SEARCH_PASS_EXHAUSTED", "FREE_SEARCH_NOT_READY", "PENDING_VERIFICATION",
+  "SEARCH_PASS_EXPIRED", "SEARCH_PASS_NOT_USABLE", "SEARCH_PASS_NOT_OFFERED",
+  "SEARCH_EXPIRED"
 ]);
 
 type Card = {
@@ -32,13 +31,14 @@ type Applied = { kind: string | null; regionId: number | null; query: string | n
 
 type Board = {
   searchId: string; found: number; remaining: number | null; passKind: string | null;
-  resetsAt: string | null; results: Card[]; applied: Applied; offset: number;
+  resetsAt: string | null; freeClaimed: boolean; results: Card[]; applied: Applied;
+  offset: number;
 };
 
 type Region = { region_id: number; region_name: string; companies: number };
 
 export default function FindSearchPage() {
-  const { state, ready: meterReady, failed: meterFailed, refresh, claimFree } = useMeter();
+  const { state, ready: meterReady, failed: meterFailed, refresh } = useMeter();
   const [regions, setRegions] = useState<Region[]>([]);
   const [kind, setKind] = useState("");
   const [regionId, setRegionId] = useState("");
@@ -47,12 +47,11 @@ export default function FindSearchPage() {
   const [blocked, setBlocked] = useState<{ message: string; waitMinutes: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [claimed, setClaimed] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    // Counts of live listings per region cost no credit — this is what the filter
-    // dropdown is built from, and it must not spend a search just to draw a form.
+    // Counts of live listings per region cost no credit — this is what the region chips
+    // are built from, and it must not spend a search just to draw the form.
     seekerFetch("/directory/regions")
       .then(async res => (res.ok ? res.json() : []))
       .then(rows => { if (!cancelled && Array.isArray(rows)) setRegions(rows); })
@@ -60,12 +59,12 @@ export default function FindSearchPage() {
     return () => { cancelled = true; };
   }, []);
 
-  async function postSearch(overrides?: Partial<Applied>) {
-    setBusy(true); setError(null); setBlocked(null); setClaimed(null);
+  async function postSearch() {
+    setBusy(true); setError(null); setBlocked(null);
     const applied: Applied = {
-      kind: overrides?.kind ?? (kind || null),
-      regionId: overrides?.regionId ?? (regionId ? Number(regionId) : null),
-      query: overrides?.query ?? (query.trim() || null)
+      kind: kind || null,
+      regionId: regionId ? Number(regionId) : null,
+      query: query.trim() || null
     };
     try {
       const res = await seekerFetch("/directory/search", {
@@ -77,7 +76,8 @@ export default function FindSearchPage() {
         setBoard({
           searchId: json.searchId, found: json.found ?? 0, remaining: json.remaining ?? null,
           passKind: json.passKind ?? null, resetsAt: json.resetsAt ?? null,
-          results: json.results ?? [], applied, offset: 0
+          freeClaimed: json.freeClaimed === true, results: json.results ?? [],
+          applied, offset: 0
         });
         await refresh();
         return;
@@ -85,7 +85,7 @@ export default function FindSearchPage() {
       if (BLOCKED_CODES.has(errorCode(json))) {
         setBoard(null);
         setBlocked({
-          message: errorText(json, "You cannot search yet."),
+          message: errorText(json, "You cannot search right now."),
           waitMinutes: Number(errorDetail(json).freeWaitMinutes ?? state?.free_wait_minutes ?? 0)
         });
         return;
@@ -99,60 +99,69 @@ export default function FindSearchPage() {
     }
   }
 
-  /** Paging a search that was already paid for is free for five minutes — that is the
-   *  whole point of the claim check, and why the pager uses the GET. */
-  async function goTo(offset: number) {
+  /**
+   * Narrowing a board that is already open reads the same claim check the search paid
+   * for, so it costs nothing for the five minutes the claim lives. Paging uses the same
+   * door. When the claim has turned, the answer is the timeout panel, not a silent
+   * re-search that would spend a credit the seeker did not ask for.
+   */
+  async function reread(next: Applied, offset: number) {
     if (!board) return;
     setBusy(true); setError(null); setBlocked(null);
     try {
       const qs = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
-      if (board.applied.kind) qs.set("kind", board.applied.kind);
-      if (board.applied.regionId) qs.set("regionId", String(board.applied.regionId));
-      if (board.applied.query) qs.set("query", board.applied.query);
+      if (next.kind) qs.set("kind", next.kind);
+      if (next.regionId) qs.set("regionId", String(next.regionId));
+      if (next.query) qs.set("query", next.query);
       const res = await seekerFetch(`/directory/search/${board.searchId}?${qs.toString()}`);
       const json = await res.json().catch(() => ({}));
       if (res.ok) {
-        setBoard({ ...board, results: json.results ?? [], found: json.found ?? board.found, offset });
-        window.scrollTo({ top: 0, behavior: "smooth" });
+        setBoard({ ...board, applied: next, offset, found: json.found ?? 0,
+                   results: json.results ?? [] });
+        if (offset !== board.offset) window.scrollTo({ top: 0, behavior: "smooth" });
         return;
       }
       if (res.status === 410 || errorCode(json) === "SEARCH_EXPIRED") {
-        setBoard(null);
-        setBlocked({ message: errorText(json, "This search has timed out."), waitMinutes: state?.free_wait_minutes ?? 0 });
+        setBlocked({
+          message: errorText(json, "This search closed after five minutes."),
+          waitMinutes: state?.free_wait_minutes ?? 0
+        });
         return;
       }
-      setError(errorText(json, "Could not load that page."));
+      setError(errorText(json, "Could not narrow this result."));
     } catch (e: any) {
-      if (e?.message !== "session ended") setError("Could not load that page.");
+      if (e?.message !== "session ended") setError("Could not narrow this result.");
     } finally {
       setBusy(false);
     }
   }
 
-  async function claim() {
-    setBusy(true); setError(null); setBlocked(null); setClaimed(null);
-    try {
-      const r = await claimFree();
-      if (r.ok) {
-        setClaimed(`Free search ready — ${r.json.remaining ?? 1} search for 24 hours.`);
-        return;
-      }
-      if (BLOCKED_CODES.has(r.code)) setBlocked({ message: r.message, waitMinutes: state?.free_wait_minutes ?? 0 });
-      else setError(r.message);
-    } finally {
-      setBusy(false);
-    }
+  /** A chip or the region picker changes one field of the filters; the typed words always
+   *  come from the box, because that is what the seeker is reading as they choose. */
+  function narrow(patch: Partial<Applied>) {
+    const next: Applied = {
+      kind: patch.kind !== undefined ? patch.kind : (kind || null),
+      regionId: patch.regionId !== undefined ? patch.regionId
+        : (regionId ? Number(regionId) : null),
+      query: query.trim() || null
+    };
+    if (board) void reread(next, 0);
   }
 
   const live = state?.live_pass_id != null;
+  const weekly = state?.live_kind === "weekly";
   const wait = state?.free_wait_minutes ?? 0;
   const pages = board ? Math.max(1, Math.ceil((board.found ?? 0) / PAGE)) : 1;
   const page = board ? Math.floor(board.offset / PAGE) + 1 : 1;
+  const regionName = (id: number | null) =>
+    regions.find(r => r.region_id === id)?.region_name ?? null;
 
   const inputCls = "rounded-input border px-12 py-8 text-sm";
   const inputStyle = { borderColor: "var(--line)", background: "var(--milk)" };
   const card = "rounded-card border bg-surface p-24";
   const cardStyle = { borderColor: "var(--line)" };
+  const chip = (on: boolean) =>
+    `on-photo-btn rounded-input px-12 py-8 text-xs font-semibold${on ? " is-on" : ""}`;
 
   return (
     <div className="mx-auto max-w-[900px] px-16 py-32">
@@ -160,81 +169,47 @@ export default function FindSearchPage() {
         Find a transporter or a clearing agent
       </h1>
       <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
-        Companies publish a profile of their own accord: what they carry, where they base, which
-        licences they declare. WAISHA does not verify their fleet — it verifies that they signed up.
+        Type a company, a corridor, a city or a service and press Search. Your first search
+        of the day is free.
       </p>
 
-      {/* ---------- the meter ---------- */}
-      <section className={`${card} mt-24`} style={cardStyle}>
-        <div className="flex flex-wrap items-center justify-between gap-12">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
-              Your search credits
-            </p>
-            {!meterReady ? (
-              <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>Reading your meter…</p>
-            ) : meterFailed ? (
-              <p className="mt-8 text-sm" style={{ color: "var(--danger)" }}>{meterFailed}</p>
-            ) : live ? (
-              <p className="mt-8 text-sm" style={{ color: "var(--ink)" }}>
-                <strong>{state?.live_kind === "weekly" ? "Weekly pass" : "Free search"}</strong>{" "}
-                — {state?.live_remaining ?? 0} search{state?.live_remaining === 1 ? "" : "es"} left
-                {state?.live_expires_at ? `, until ${fmtDate(state.live_expires_at)}` : ""}.
-              </p>
-            ) : wait > 0 ? (
-              <p className="mt-8 text-sm" style={{ color: "var(--ink)" }}>
-                Today&apos;s free search is used. The next one unlocks in <strong>{hm(wait)}</strong>.
-              </p>
-            ) : (
-              <p className="mt-8 text-sm" style={{ color: "var(--ink)" }}>
-                You have one free search waiting — it costs nothing and lasts 24 hours.
-              </p>
-            )}
-            {state && state.awaiting_count > 0 && (
-              <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
-                {state.awaiting_count} recorded payment{state.awaiting_count === 1 ? "" : "s"} with the office,
-                awaiting confirmation. Your free search works meanwhile.
-              </p>
-            )}
-          </div>
-          {!live && wait === 0 && (
-            <button type="button" onClick={claim} disabled={busy}
-              className="waisha-btn rounded-input px-24 py-8 text-sm font-semibold disabled:opacity-50">
-              Claim free search
-            </button>
-          )}
-          {!live && wait > 0 && (
-            <Link href="/find/account" className="on-photo-btn rounded-input px-16 py-8 text-xs font-semibold">
-              Or record a weekly pass
-            </Link>
-          )}
-        </div>
-        {state && state.verified === false && (
-          <p className="mt-16 text-sm" style={{ color: "var(--warning)" }}>
-            Your account is not confirmed yet. Sign out and enter the code we emailed you.
-          </p>
-        )}
-        {claimed && (
-          <p role="status" className="mt-16 px-12 py-8 text-sm"
-            style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>
-            {claimed}
-          </p>
-        )}
-      </section>
-
-      {/* ---------- the form ---------- */}
+      {/* ---------- the one action on this page ---------- */}
       <form className={`${card} mt-24`} style={cardStyle}
         onSubmit={e => { e.preventDefault(); void postSearch(); }}>
-        <p className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
-          Who are you looking for?
-        </p>
-        <div className="mt-12 flex flex-wrap gap-12">
-          <select value={kind} onChange={e => setKind(e.target.value)} className={inputCls} style={inputStyle}
-            aria-label="Type of company">
-            {KIND_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-          <select value={regionId} onChange={e => setRegionId(e.target.value)} className={inputCls}
-            style={inputStyle} aria-label="Region">
+        <div className="flex flex-wrap gap-8">
+          <input value={query} onChange={e => setQuery(e.target.value)}
+            placeholder="Dar es Salaam, Nakonde corridor, bonded clearing…"
+            aria-label="Search the directory"
+            className={`${inputCls} min-w-[220px] flex-1 text-base`} style={inputStyle} />
+          <button type="submit" disabled={busy}
+            className="waisha-btn rounded-input px-32 py-8 text-sm font-semibold disabled:opacity-50">
+            {busy ? "Searching" : board ? "New search" : "Search"}
+          </button>
+        </div>
+
+        <div className="mt-16 flex flex-wrap items-center gap-8">
+          <span className="mr-4 text-[10px] font-bold uppercase tracking-[0.14em]"
+            style={{ color: "var(--ink-soft)" }}>
+            Look for
+          </span>
+          {KIND_OPTIONS.map(o => {
+            const on = kind === o.value;
+            return (
+              <button key={o.value || "all"} type="button" aria-pressed={on}
+                onClick={() => { setKind(o.value); narrow({ kind: o.value || null }); }}
+                className={chip(on)}>
+                {o.label}
+              </button>
+            );
+          })}
+          <span className="ml-8 mr-4 text-[10px] font-bold uppercase tracking-[0.14em]"
+            style={{ color: "var(--ink-soft)" }}>
+            Around
+          </span>
+          <select value={regionId}
+            onChange={e => { setRegionId(e.target.value);
+              narrow({ regionId: e.target.value ? Number(e.target.value) : null }); }}
+            aria-label="Region" className={inputCls} style={inputStyle}>
             <option value="">Anywhere in Tanzania</option>
             {regions.map(r => (
               <option key={r.region_id} value={r.region_id}>
@@ -242,18 +217,37 @@ export default function FindSearchPage() {
               </option>
             ))}
           </select>
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Corridor, city, service…"
-            className={`${inputCls} min-w-[200px] flex-1`} style={inputStyle} aria-label="Search words" />
-          <button type="submit" disabled={busy}
-            className="waisha-btn rounded-input px-24 py-8 text-sm font-semibold disabled:opacity-50">
-            {busy ? "Searching" : "Search"}
-          </button>
         </div>
-        <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
-          {live
-            ? "One search spends one credit. Paging through the results you got costs nothing for the next few minutes."
-            : "Searching spends one credit. Read the meter above before you run it."}
+
+        {/* The meter, in the one place a seeker looks at before pressing the button. It
+            says what the next search costs, never how to go and claim something first. */}
+        <p className="mt-16 text-sm" style={{ color: "var(--ink)" }}>
+          {!meterReady ? <span style={{ color: "var(--ink-soft)" }}>Reading your credits…</span>
+            : meterFailed ? <span style={{ color: "var(--danger)" }}>{meterFailed}</span>
+            : live ? (weekly
+              ? <span><strong>Weekly pass</strong> — {state?.live_remaining ?? 0} search
+                  {state?.live_remaining === 1 ? "" : "es"} left, until
+                  {state?.live_expires_at ? ` ${fmtDate(state.live_expires_at)}` : " its week ends"}.
+                  Each search takes one.</span>
+              : <span><strong>Free search</strong> — {state?.live_remaining ?? 0} left on
+                  today&apos;s credit. Each search takes one.</span>)
+            : wait > 0
+              ? <span>Today&apos;s free search is used. The next one unlocks in{" "}
+                  <strong>{hm(wait)}</strong>.</span>
+              : <span>Your free search for today is waiting — press Search and it is spent
+                  on this one.</span>}
         </p>
+        {state && state.awaiting_count > 0 && (
+          <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+            {state.awaiting_count} recorded payment{state.awaiting_count === 1 ? "" : "s"} with the
+            office, awaiting confirmation. Your free search works meanwhile.
+          </p>
+        )}
+        {state && state.verified === false && (
+          <p className="mt-16 text-sm" style={{ color: "var(--warning)" }}>
+            Your account is not confirmed yet. Sign out and enter the code we emailed you.
+          </p>
+        )}
       </form>
 
       {error && (
@@ -267,13 +261,14 @@ export default function FindSearchPage() {
         <div role="alert" className="mt-24 rounded-card border p-24"
           style={{ borderColor: "var(--warning)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
           <p className="text-sm font-semibold" style={{ color: "var(--ink)" }}>{blocked.message}</p>
+          <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+            {blocked.waitMinutes > 0
+              ? <>The next free search unlocks in <strong>{hm(blocked.waitMinutes)}</strong>.
+                  A weekly pass is 30 searches for TSh 3,000 and starts the day the office
+                  confirms the money.</>
+              : <>Press Search again — today&apos;s free credit is taken by the search itself.</>}
+          </p>
           <div className="mt-16 flex flex-wrap gap-12">
-            {!live && wait === 0 && (
-              <button type="button" onClick={claim} disabled={busy}
-                className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold disabled:opacity-50">
-                Claim today&apos;s free search
-              </button>
-            )}
             <Link href="/find/account" className="on-photo-btn rounded-input px-16 py-8 text-xs font-semibold">
               Record a weekly pass — TSh 3,000
             </Link>
@@ -284,17 +279,20 @@ export default function FindSearchPage() {
         </div>
       )}
 
-      {/* ---------- results ---------- */}
+      {/* ---------- results, directly under the box that produced them ---------- */}
       {board && (
         <section className="mt-24">
           <div className="mb-16 flex flex-wrap items-baseline justify-between gap-12">
             <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
               {board.found} compan{board.found === 1 ? "y" : "ies"}
               {board.applied.kind ? ` · ${SERVES_LABELS[board.applied.kind]}` : ""}
+              {regionName(board.applied.regionId) ? ` · ${regionName(board.applied.regionId)}` : ""}
               {board.applied.query ? ` · “${board.applied.query}”` : ""}
             </h2>
             <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
-              {board.remaining !== null ? `${board.remaining} left on this pass` : "Free search"}
+              {board.freeClaimed
+                ? "Today's free search"
+                : board.remaining !== null ? `${board.remaining} left on this pass` : "—"}
               {" · page "}{page}/{pages}
             </p>
           </div>
@@ -303,15 +301,15 @@ export default function FindSearchPage() {
             <div className={card} style={cardStyle}>
               <p className="text-sm" style={{ color: "var(--ink)" }}>Nothing matches this search.</p>
               <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
-                Try a wider region, or search by corridor instead of city. A new search costs one credit,
-                so read the meter above before running it again.
+                Clear the chips above and pick a wider region, or type a corridor instead of a city.
+                Narrowing what is already on the screen costs nothing; a new search costs one credit.
               </p>
             </div>
           ) : (
             <div className="grid gap-12 md:grid-cols-2">
               {board.results.map(c => (
                 <Link key={c.id} href={`/find/companies/${c.id}?searchId=${board.searchId}`}
-                  className="rounded-card border bg-surface p-20 transition-transform hover:-translate-y-[2px]"
+                  className="rounded-card border bg-surface p-24 transition-transform hover:-translate-y-[2px]"
                   style={cardStyle}>
                   <div className="flex items-start justify-between gap-12">
                     <h3 className="text-sm font-bold leading-snug" style={{ color: "var(--ink)" }}>
@@ -349,15 +347,16 @@ export default function FindSearchPage() {
           {board.found > PAGE && (
             <div className="mt-16 flex items-center justify-between">
               <button type="button" disabled={busy || board.offset === 0}
-                onClick={() => goTo(Math.max(0, board.offset - PAGE))}
+                onClick={() => void reread(board.applied, Math.max(0, board.offset - PAGE))}
                 className="on-photo-btn rounded-input px-16 py-8 text-xs font-semibold disabled:opacity-40">
                 Previous
               </button>
               <span className="text-xs" style={{ color: "var(--ink-soft)" }}>
                 {Math.min(board.offset + 1, board.found)}–{Math.min(board.offset + PAGE, board.found)} of {board.found}
+                {" · narrowing and paging this search is free"}
               </span>
               <button type="button" disabled={busy || board.offset + PAGE >= board.found}
-                onClick={() => goTo(board.offset + PAGE)}
+                onClick={() => void reread(board.applied, board.offset + PAGE)}
                 className="on-photo-btn rounded-input px-16 py-8 text-xs font-semibold disabled:opacity-40">
                 Next
               </button>
@@ -368,7 +367,7 @@ export default function FindSearchPage() {
 
       {!board && !blocked && meterReady && (
         <p className="mt-24 text-sm" style={{ color: "var(--ink-soft)" }}>
-          Your results will appear here. Opening a company shows the contact WAISHA published for it.
+          Results open right here. A company card shows the contact it chose to publish.
         </p>
       )}
     </div>

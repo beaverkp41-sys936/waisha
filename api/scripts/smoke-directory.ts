@@ -2,13 +2,15 @@
  * Directory and search-pass smoke — the metered marketplace walked for real.
  *
  * Drives the routes added for #100 against a running API (port 4000): a seeker signs
- * up, verifies by email, claims the free credit, searches an empty board, then a
- * transporter publishes its listing and the same seeker searches again. It checks the
- * four things the design in 061 actually depends on:
+ * up, verifies by email, then searches an empty board — and the search claims the day's
+ * free credit itself, in the transaction that spends it. A transporter publishes its
+ * listing and the same seeker searches again. It checks the four things the design in
+ * 061 actually depends on:
  *
- *  - the meter cannot be skipped or padded (no claim → no read, one credit per claim,
- *    paging a live claim stays free, and a card that is not on the board refunds the
- *    credit because consume and read share one transaction);
+ *  - the meter cannot be skipped or padded (one search makes one claim and spends it,
+ *    a spent credit answers with the countdown rather than a second claim, paging a
+ *    live claim stays free, and a card that is not on the board refunds the credit
+ *    because claim, consume and read share one transaction);
  *  - the disclosure is the PUBLISHED COPY, so a card carries no tenant id, no TIN, no
  *    BRLA, no licence number and no sealed phone — asserted by comparing the key set of
  *    a result row against directory_card's own columns;
@@ -198,6 +200,7 @@ async function main() {
   let listingA = "";
   let listingP = "";
   let searchId = "";
+  let freePass = "";
 
   try {
     // ---------------- the seeker arrives ----------------
@@ -239,46 +242,42 @@ async function main() {
         p.window_hours === 168 && p.searches_allowed === 30),
       { s: passes.status, products: pstate?.products });
 
+    // Pressing Search is the whole action now. With nothing live and the day's credit
+    // unspent, the search claims the credit itself inside the same transaction that
+    // spends it — there is no "claim" step left for a seeker to find.
     const early = await call("/directory/search", seekerTok, {
-      method: "POST", body: JSON.stringify({})
+      method: "POST", body: JSON.stringify({ query: "Carrier" })
     });
-    check("searching with no pass → 409 NO_SEARCH_PASS, no credit invented",
-      early.status === 409 && early.json?.error?.code === "NO_SEARCH_PASS",
-      { s: early.status, code: early.json?.error?.code });
+    searchId = early.json?.searchId ?? "";
+    check("the first search claims its own free credit and answers the empty board",
+      early.status === 200 && early.json?.freeClaimed === true && early.json?.found === 0 &&
+      early.json?.remaining === 0 && (early.json?.results ?? []).length === 0,
+      { s: early.status, code: early.json?.error?.code, b: early.json });
     // The seeker's own tenant, not the carrier's — signup opened a shell whose id the
     // signup response deliberately does not echo, and it is the tenant every pass,
     // search and listing row hangs off, so the teardown has to sweep it too.
     seekerTenantId = (await oi(
       `select tenant_id from seekers where user_id = $1`, [userId])).rows[0]?.tenant_id ?? "";
-    const passRowsBefore = (await oi(
-      `select count(*)::int as n from seeker_search_passes where tenant_id = $1`,
-      [seekerTenantId])).rows[0]?.n;
-    check("a refused search created no pass: the meter only answers, it never grants",
-      passRowsBefore === 0, { seekerTenantId, passRowsBefore });
+    const passRows = (await oi(
+      `select id, kind, status, searches_allowed, searches_used
+         from seeker_search_passes where tenant_id = $1 order by created_at`,
+      [seekerTenantId])).rows;
+    freePass = passRows[0]?.id ?? "";
+    check("one search made exactly one pass and spent it in the same breath",
+      passRows.length === 1 && passRows[0]?.kind === "free" &&
+      passRows[0]?.status === "live" && Number(passRows[0]?.searches_allowed) === 1 &&
+      Number(passRows[0]?.searches_used) === 1, { seekerTenantId, passRows });
 
     const claim = await call("/seeker/passes/free", seekerTok, { method: "POST" });
-    check("claiming the free credit → 201 with one search",
-      claim.status === 201 && claim.json?.remaining === 1 && !!claim.json?.passId,
-      { s: claim.status, b: claim.json });
-    const freePass = claim.json?.passId;
-
-    const claimAgain = await call("/seeker/passes/free", seekerTok, { method: "POST" });
-    // 061 anchors the free credit on the CLAIM, so a second attempt the same day is the
-    // "wait" branch — it names the hour the credit unlocks rather than stacking credits.
-    check("a second claim the same day is refused, not stacked",
-      claimAgain.status === 409 && claimAgain.json?.error?.code === "FREE_SEARCH_NOT_READY" &&
-      !!claimAgain.json?.error?.details?.[0]?.resetsAt,
-      { s: claimAgain.status, code: claimAgain.json?.error?.code, d: claimAgain.json?.error?.details });
+    // 061 anchors the free credit on the CLAIM, and this claim happened with the search,
+    // so a second attempt the same day is the "wait" branch — it names the hour the
+    // credit unlocks rather than stacking credits.
+    check("a credit the search already claimed cannot be claimed again the same day",
+      claim.status === 409 && claim.json?.error?.code === "FREE_SEARCH_NOT_READY" &&
+      !!claim.json?.error?.details?.[0]?.resetsAt,
+      { s: claim.status, code: claim.json?.error?.code, d: claim.json?.error?.details });
 
     await clearBuckets("directory-search:");
-    const empty = await call("/directory/search", seekerTok, {
-      method: "POST", body: JSON.stringify({ query: "Carrier" })
-    });
-    searchId = empty.json?.searchId ?? "";
-    check("searching an empty board costs the credit and answers found 0",
-      empty.status === 200 && empty.json?.found === 0 && empty.json?.remaining === 0 &&
-      (empty.json?.results ?? []).length === 0, { s: empty.status, b: empty.json });
-
     const spent = await call("/directory/search", seekerTok, {
       method: "POST", body: JSON.stringify({})
     });
@@ -384,9 +383,6 @@ async function main() {
     await oi(`update seeker_search_passes set created_at = created_at - interval '25 hours'
               where tenant_id = (select tenant_id from seekers where user_id = $1) and kind = 'free'`,
       [userId]);
-    const claim2 = await call("/seeker/passes/free", seekerTok, { method: "POST" });
-    check("the free credit unlocks again once the 24 hours have passed",
-      claim2.status === 201 && claim2.json?.remaining === 1, { s: claim2.status, b: claim2.json });
 
     await clearBuckets("directory-search:");
     const found = await call("/directory/search", seekerTok, {
@@ -394,6 +390,11 @@ async function main() {
     });
     searchId = found.json?.searchId ?? "";
     const card = (found.json?.results ?? [])[0] ?? {};
+    // Nobody pressed "claim": the credit the 061 clock unlocked was taken by the search
+    // that needed it, which is the whole point of the direct path.
+    check("once the 24 hours turn, the next search claims the unlocked credit itself",
+      found.status === 200 && found.json?.freeClaimed === true &&
+      found.json?.remaining === 0, { s: found.status, b: found.json });
     check("the live listing is found, verified badge off, licence state derived",
       found.status === 200 && found.json?.found === 1 && card.company_name === CARRIER &&
       card.is_verified === false && card.licence_state === "valid" &&
@@ -413,9 +414,12 @@ async function main() {
       `select count(*)::int as n from seeker_searches where tenant_id =
          (select tenant_id from seekers where user_id = $1)`, [userId])).rows[0].n;
     const passNow = (await oi(
-      `select searches_used from seeker_search_passes where id = $1`, [freePass ?? "00000000-0000-0000-0000-000000000000"])).rows[0];
+      `select id, searches_used from seeker_search_passes
+        where tenant_id = (select tenant_id from seekers where user_id = $1)
+          and kind = 'free' order by created_at desc limit 1`, [userId])).rows[0];
     check("one credit, one log row — the page did not spend a second",
-      searchesNow === 2 && passNow?.searches_used === 1, { searchesNow, used: passNow?.searches_used });
+      searchesNow === 2 && passNow?.searches_used === 1 && passNow?.id !== freePass,
+      { searchesNow, used: passNow?.searches_used, first: freePass, latest: passNow?.id });
 
     const opened = await call(`/directory/companies/${listingA}?searchId=${searchId}`, seekerTok);
     check("opening a card off a paid claim reveals the card",

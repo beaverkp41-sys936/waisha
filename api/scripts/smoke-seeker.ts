@@ -627,37 +627,38 @@ async function main() {
       nameSync?.last_name === "Juma" && (nameSync?.looking_for ?? []).length === 2,
       { s: renamed.status, row: nameSync });
 
-    const emptySearch = await call("/directory/search", seekerToken, {
-      method: "POST", body: JSON.stringify({})
-    });
-    check("searching with nothing to spend → 409 NO_SEARCH_PASS",
-      emptySearch.status === 409 && emptySearch.json?.error?.code === "NO_SEARCH_PASS",
-      { s: emptySearch.status, code: emptySearch.json?.error?.code });
-
-    const claimed = await call("/seeker/passes/free", seekerToken, { method: "POST" });
-    check("claiming today's free search → 201 with exactly one credit",
-      claimed.status === 201 && claimed.json?.kind === "free" && claimed.json?.remaining === 1,
-      { s: claimed.status, b: claimed.json });
-
-    const claimAgain = await call("/seeker/passes/free", seekerToken, { method: "POST" });
-    check("a second claim before the 24 hours turn → 409 FREE_SEARCH_NOT_READY",
-      claimAgain.status === 409 && claimAgain.json?.error?.code === "FREE_SEARCH_NOT_READY",
-      { s: claimAgain.status, code: claimAgain.json?.error?.code });
-
-    const paid = await call("/directory/search", seekerToken, {
+    // The direct path: a seeker with nothing live presses Search and gets a board. The
+    // day's free credit is claimed by the search itself, in the transaction that spends
+    // it, so there is no claim step to find and no refusal to read past.
+    const firstSearch = await call("/directory/search", seekerToken, {
       method: "POST", body: JSON.stringify({ kind: "transporter", limit: 5 })
     });
-    check("the one free credit buys a real page → 200 with a claim check",
-      paid.status === 200 && !!paid.json?.searchId && paid.json?.remaining === 0 &&
-      Array.isArray(paid.json?.results) && typeof paid.json?.found === "number",
-      { s: paid.status, b: paid.json && { id: paid.json.searchId, found: paid.json.found } });
+    check("the first search claims its own free credit and answers with a page",
+      firstSearch.status === 200 && firstSearch.json?.freeClaimed === true &&
+      !!firstSearch.json?.searchId && firstSearch.json?.remaining === 0 &&
+      Array.isArray(firstSearch.json?.results) && typeof firstSearch.json?.found === "number",
+      { s: firstSearch.status, code: firstSearch.json?.error?.code,
+        b: firstSearch.json && { id: firstSearch.json.searchId, found: firstSearch.json.found } });
 
-    const paged = await call(`/directory/search/${paid.json?.searchId}?limit=5&offset=0&kind=transporter`,
+    const claimedRow = (await oi(
+      `select kind, status, searches_allowed, searches_used from seeker_search_passes
+        where user_id = $1 order by created_at desc limit 1`, [userId])).rows[0];
+    check("the credit it claimed is one free pass, already spent by that same search",
+      claimedRow?.kind === "free" && claimedRow?.status === "live" &&
+      Number(claimedRow?.searches_allowed) === 1 && Number(claimedRow?.searches_used) === 1,
+      claimedRow);
+
+    const paged = await call(`/directory/search/${firstSearch.json?.searchId}?limit=5&offset=0&kind=transporter`,
       seekerToken);
     check("paging the search just paid for costs nothing → 200 with the same total",
       paged.status === 200 && Array.isArray(paged.json?.results) &&
-      paged.json?.found === paid.json?.found,
+      paged.json?.found === firstSearch.json?.found,
       { s: paged.status, f: paged.json?.found });
+
+    const claimAgain = await call("/seeker/passes/free", seekerToken, { method: "POST" });
+    check("a credit the search already claimed cannot be claimed again the same day",
+      claimAgain.status === 409 && claimAgain.json?.error?.code === "FREE_SEARCH_NOT_READY",
+      { s: claimAgain.status, code: claimAgain.json?.error?.code });
 
     const spent = await call("/directory/search", seekerToken, {
       method: "POST", body: JSON.stringify({})

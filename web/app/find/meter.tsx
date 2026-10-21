@@ -32,16 +32,15 @@ type MeterValue = {
   ready: boolean;
   failed: string | null;
   refresh: () => Promise<PassState | null>;
-  claimFree: () => Promise<MeterAction>;
   recordWeekly: (reference: string, method: string) => Promise<MeterAction>;
 };
 
 const Ctx = createContext<MeterValue | null>(null);
 
-async function call(path: string, body?: any): Promise<MeterAction> {
-  const res = await seekerFetch(path, body
-    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
-    : { method: "POST" });
+async function call(path: string, body: any): Promise<MeterAction> {
+  const res = await seekerFetch(path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
   const json = await res.json().catch(() => ({}));
   if (res.ok) return { ok: true, json, state: null };
   return {
@@ -89,7 +88,9 @@ export function MeterProvider({ children }: { children: React.ReactNode }) {
     ready,
     failed,
     refresh,
-    claimFree: () => withState(call("/seeker/passes/free")),
+    // There is no claim action here on purpose: POST /directory/search takes the day's free
+    // credit itself, in the transaction that spends it, so no page can offer a claim that
+    // leaves the seeker holding a credit they never used.
     recordWeekly: (reference, method) => withState(call("/seeker/passes/weekly", { reference, method }))
   };
 

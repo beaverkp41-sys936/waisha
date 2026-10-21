@@ -227,15 +227,41 @@ body {
   border-bottom: 3px solid var(--gold);
   box-shadow: 0 10px 24px rgba(4, 16, 26, 0.28);
 }
+/* The photo layer is a positioned sibling of the content column inside this pane,
+   so it paints in the positioned layer — above every bare block on the page. Glass
+   cards escaped only because their backdrop-filter gives them a stacking context of
+   their own; a page title had no such shield and simply never appeared, while the DOM,
+   getComputedStyle and a pixel-behind-text contrast sampler all insisted it was there
+   in white at 5.4:1. Same lift `.app-main` carries. */
+.portal-shell > main {
+  position: relative;
+  z-index: 1;
+}
 .portal-shell main {
   --ink: #ffffff;
   --ink-soft: var(--on-photo-soft);
   --brand: #9ecdf1;
+  /* The hues travel with the ink. `.app-main` lifts these two ways and this pane
+     copied only the ink half, so a status sentence on the photo or a price on a
+     card was reading the wrong end of the palette: brand gold (#c9a84c, chosen for
+     the dark chrome) measured 1.5:1 on the light glass of the pass cards. */
+  --gold: var(--gold-on-photo);
+  --gold-green: var(--gold-green-on-photo);
+  --success: var(--success-on-photo);
+  --warning: var(--warning-on-photo);
+  --danger: var(--danger-on-photo);
 }
 .portal-shell main :is(.bg-surface, input, select, textarea) {
   --ink: #123249;
   --ink-soft: #3d5a72;
   --brand: var(--navy);
+  /* Back to the light-glass palette on the card. These are the theme-tracking
+     snapshots, so the dark block below only has to restate the inks. */
+  --gold: var(--glass-gold);
+  --gold-green: var(--glass-gold-green);
+  --success: var(--glass-success);
+  --warning: var(--glass-warning);
+  --danger: var(--glass-danger);
 }
 /* Bare-on-photo text wears the same shadow as the shell's pane text. */
 .portal-shell main :is(h1, p, [role="status"], [role="alert"]):not(.bg-surface *, .bg-surface) {
@@ -915,9 +941,13 @@ body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 44px) + 4px)
 /* Brand gold is drawn for the dark chrome; on the light glass it washes out, which
    is what the glass scope above now handles. The elements that were designed for
    brand gold on their own dark fill (the buttons here, the empty-state tile, the
-   licence banner, the on-photo button) still name it directly, so they keep it. */
-.app-content .waisha-btn { background: #c9a84c; }
-.app-content .waisha-btn:hover { background: #b8963d; }
+   licence banner, the on-photo button) still name it directly, so they keep it.
+   The seeker/shipper pane carries the same two-scope contract, so its buttons need
+   the same pin: navy ink on the darkened card gold measured 1.8:1. */
+.app-content .waisha-btn,
+.portal-shell .waisha-btn { background: #c9a84c; }
+.app-content .waisha-btn:hover,
+.portal-shell .waisha-btn:hover { background: #b8963d; }
 
 /* Every card in the portal is bg-surface + a 1px border, so the glass lives on
    the utility itself rather than in 30 call sites. */
@@ -1633,11 +1663,14 @@ select.auth-field option { color: var(--ink); }
    that act as buttons already carry .waisha-btn. Boxes are left alone too — a checkbox
    with a 38px box is a broken checkbox. */
 @media (pointer: coarse) {
-  .app-main :is(button, select, .waisha-btn, .on-photo-btn, .tab):not([type="checkbox"]):not([type="radio"]) {
+  /* Both photo panes, not just the portal. The shipper and seeker shells copied the
+     pane's palette half by half, and this layer is the other half: their `py-8` buttons
+     measured 34px and a way-back link 15px, because every rule here named `.app-main`. */
+  :is(.app-main, .portal-shell main) :is(button, select, .waisha-btn, .on-photo-btn, .tab):not([type="checkbox"]):not([type="radio"]) {
     min-height: 38px;
     min-width: 30px;
   }
-  .app-main :is(.waisha-btn, .on-photo-btn) {
+  :is(.app-main, .portal-shell main) :is(.waisha-btn, .on-photo-btn) {
     display: inline-flex;
     align-items: center;
   }
@@ -1645,7 +1678,7 @@ select.auth-field option { color: var(--ink); }
      a 30px input, and the keyboard lands on whatever the finger found. Range sliders,
      colour pickers and image buttons are left alone because their box IS the control
      and growing it changes what it draws. */
-  .app-main :is(input, textarea):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="image"]) {
+  :is(.app-main, .portal-shell main) :is(input, textarea):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="image"]) {
     min-height: 38px;
   }
   .tab { padding: 10px 13px; }
@@ -1688,7 +1721,8 @@ select.auth-field option { color: var(--ink); }
      second selector is the same link written with Tailwind instead of .pane-note, minus the
      two button classes the rule above this block already sizes. */
   .app-main a.pane-note,
-  .app-main a.inline-block:not(.waisha-btn):not(.on-photo-btn) { padding-top: 11px; padding-bottom: 11px; }
+  .app-main a.inline-block:not(.waisha-btn):not(.on-photo-btn),
+  .portal-shell main a.pane-note:not(.waisha-btn):not(.on-photo-btn) { padding-top: 11px; padding-bottom: 11px; }
   /* And the same inside a register: a trip's short code is the only route from its row to the
      sheet, and it sat 18px tall in a row three times that high. Padding an inline box grows
      what a thumb can hit without moving the row, because the line box is what sets the row's

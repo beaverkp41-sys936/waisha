@@ -595,11 +595,17 @@ const shapeChecks: Check[] = [
     (rows) => rows.length === 12 && rows.every((r) =>
       r.anon_x === false && r.auth_x === false && r.public_x === false && r.svc_x === false)],
 
-  ["the trigger function is not callable by a session at all", `
+  // 096 pinned this one deliberately: the guard is owner-only in 061, and app_runtime is
+  // the role that creates the trigger, so without the grant the function is unreachable to
+  // the only role that may own it. No session role may call it.
+  ["the trigger function is callable by the api role and by no session", `
      select has_function_privilege('anon','directory_listing_tenant_guard()','execute') as anon_x,
+            has_function_privilege('authenticated','directory_listing_tenant_guard()','execute') as auth_x,
             has_function_privilege('public','directory_listing_tenant_guard()','execute') as public_x,
+            has_function_privilege('service_role','directory_listing_tenant_guard()','execute') as svc_x,
             has_function_privilege('app_runtime','directory_listing_tenant_guard()','execute') as ar_x`,
-    (rows) => rows[0].anon_x === false && rows[0].public_x === false && rows[0].ar_x === false],
+    (rows) => rows[0].anon_x === false && rows[0].auth_x === false
+      && rows[0].public_x === false && rows[0].svc_x === false && rows[0].ar_x === true],
 
   ["no browser role holds a table privilege on any of the five", `
      select grantee, table_name, privilege_type from information_schema.role_table_grants
@@ -613,11 +619,15 @@ const shapeChecks: Check[] = [
     (rows) => rows.map((r) => r.key).join(",") ===
       "directory.manage,directory.search,directory.view,seeker_pass.create,seeker_pass.view"],
 
+  // 060/061 gave the seeker the meter and the search; 070 added the recommendation pair so
+  // a seeker can tell the platform team what is missing. The directory's own read/manage
+  // keys must never appear here — that is what the next check guards.
   ["the seeker role holds exactly what 060 deferred — search and its own meter", `
      select rp.permission_key from role_permissions rp join roles r on r.id = rp.role_id
       where r.key = 'seeker' and r.tenant_id is null order by 1`,
     (rows) => rows.map((r) => r.permission_key).join(",") ===
-      "directory.search,seeker_pass.create,seeker_pass.view,seeker_profile.edit,seeker_profile.view"],
+      "directory.search,recommendations.view,recommendations.write,seeker_pass.create,"
+      + "seeker_pass.view,seeker_profile.edit,seeker_profile.view"],
 
   ["the seeker role holds none of the company-side keys", `
      select rp.permission_key from role_permissions rp join roles r on r.id = rp.role_id

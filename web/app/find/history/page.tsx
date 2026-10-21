@@ -84,8 +84,8 @@ export default function FindHistoryPage() {
         <div className={`${card} mt-24`} style={cardStyle}>
           <p className="text-sm" style={{ color: "var(--ink)" }}>No searches yet.</p>
           <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
-            Claim today&apos;s free search and look for a transporter or a clearing agent — the results
-            you got will be listed here.
+            Look for a transporter or a clearing agent on the search page — your first search of the
+            day is free, and the results you got will be listed here.
           </p>
           <Link href="/find" className="waisha-btn mt-16 inline-block rounded-input px-16 py-8 text-sm font-semibold">
             Search the directory
