@@ -286,9 +286,10 @@ body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 44px) + 4px)
   text-shadow: 0 1px 6px rgba(4, 16, 26, 0.5);
 }
 
-/* Everything the bar carries is held on one centred line: the contact words own
-   the middle and the forecast reads beside them. Wrapping is allowed so a long
-   phone pair never overlaps the cluster at a narrow desktop width. */
+/* Everything the bar carries is held on one centred line: the mark, then the contact words,
+   then the forecast reading beside them. Wrapping is allowed so a long phone pair never
+   overlaps the cluster at a narrow desktop width — a line that breaks is a bar that has run
+   out of room, not a bar with a second row of its own. */
 .footer-line {
   display: flex;
   flex-wrap: wrap;
@@ -605,33 +606,14 @@ body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 44px) + 4px)
 .crumb b { color: #fff; font-weight: 700; }
 .topbar-right { display: flex; align-items: center; gap: 18px; }
 
-/* The mark, opening the footer bar. It was moved up under the notification bar when the
-   office wanted it where a person already looks; it is back at the foot of the page, and it
-   keeps the small size and the alternating colours that made it readable there.
-   The colour alternates between two values that are both readable on the pane — gold on
-   photo and the shell's own white — with steps() so it changes rather than fades.
-   prefers-reduced-motion stops it on the near-phrase, and an empty content block removes
-   the row entirely rather than leaving a band of glass. */
+/* The mark, on the bar's own line. It is the same size and weight as the contact words beside
+   it — the only thing that sets it apart is the gold, which is what says the platform is
+   speaking rather than another detail to ring. The capitals are in the words the desk typed
+   ("powered by T ENGO AEGIS"), not forced over the whole line by the sheet, and nothing about
+   it moves. An empty content block removes the mark from the line entirely. */
 .footer-brand {
-  display: block;
-  margin: 0 auto 6px;
-  padding: 0 16px 3px;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  text-align: center;
+  color: var(--gold-on-photo);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  animation: brand-alternate 6s steps(1, end) infinite;
-}
-@keyframes brand-alternate {
-  0%, 49.9% { color: var(--gold-on-photo); }
-  50%, 100% { color: #eaf6ff; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .footer-brand { animation: none; color: var(--gold-on-photo); }
 }
 
 /* Announcement ticker — admin-posted notices scrolling mid-header on every

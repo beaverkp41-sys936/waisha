@@ -107,10 +107,11 @@ export function FooterBar({ content, weather = true }:
 
   return (
     <footer className="app-footer w-full py-12 text-[13px] tracking-[0.04em] text-white">
-      {/* The mark opens the bar, small and on its own line, in two alternating colours so it is
-          read as the platform speaking rather than as part of the contact sentence below it. */}
-      {brand && <p className="footer-brand">{brand}</p>}
+      {/* One line, and the mark opens it: the office asked for the bar to read as a single
+          sentence rather than a heading over it. Gold is the only difference from the contact
+          words beside it, and the capitals are the desk's own typing, not a sheet transform. */}
       <div className="footer-line">
+        {brand && <span className="footer-brand">{brand}</span>}
         <span className="footer-words">
           {words.map((w, i) => (
             <span key={i}>
