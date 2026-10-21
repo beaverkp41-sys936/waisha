@@ -288,13 +288,20 @@ body:has(.auth-shell) > main,
 body:has(.portal-shell) > main,
 body:has(.page-shell) > main { display: flex; flex-direction: column; }
 
-/* Those three pages are scrolled by the body while the marketing bar sticks to the bottom of
+/* Those pages are scrolled by the body while the marketing bar sticks to the bottom of
    the viewport, so the bar floats over whatever page content reaches that edge — the sign-in
    button on the phone sweep was 17px inside it. Same measured reserve the portal pane keeps
-   for its own copy of the bar; these pages have no `.app-content` of their own to carry it. */
-body:has(.auth-shell) > main,
-body:has(.portal-shell) > main,
-body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 44px) + 4px); }
+   for its own copy of the bar; these pages have no `.app-content` of their own to carry it.
+
+   The login carries it on `main` because its own background is the fixed `.auth-bg` layer,
+   which covers the viewport whatever the box does. The other two carry it themselves: laid on
+   `main` the reserve sits *outside* the pane's box, so the strip between the pane and the bar
+   was painted by the body — a 64px pale band under the dark admin layout, and an untinted slice
+   of sunset under the seeker and shipper panes. Inside the pane the same pixels get the pane's
+   own fill, and the translucent bar finally has the backdrop it was measured against. */
+body:has(.auth-shell) > main { padding-bottom: calc(var(--footer-h, 44px) + 4px); }
+.portal-shell,
+.page-shell { padding-bottom: calc(var(--footer-h, 44px) + 4px); }
 
 /* Semi-transparent bar: the photo stays faintly visible behind it while the
    text reads clearly. Sticky to the bottom of whichever scroller owns it —
@@ -1316,6 +1323,24 @@ body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 44px) + 4px)
   inset: 0;
   background: linear-gradient(180deg, rgba(8, 28, 44, 0.5), rgba(8, 28, 44, 0.45));
 }
+/* The control sign-in carries its own photograph, and it has to be a fixed layer for the
+   same reason `.auth-bg` is: laid out as `absolute inset-0` inside the shell it could only
+   ever cover the shell's box, which stops short of the footer reserve. The picture hung
+   above the bottom of the screen instead of covering it. */
+.control-auth-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: #05080c url("/bg/office.jpg") center / cover no-repeat;
+}
+.control-auth-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(5, 8, 12, 0.85) 0%, rgba(5, 8, 12, 0.72) 100%);
+}
+
 .auth-shell { position: relative; z-index: 1; }
 
 /* The card is a navy face over the lake photo. The alpha is set by the
@@ -1520,8 +1545,8 @@ select.auth-field option { color: var(--ink); }
      indicator has to land on padding, not on the last row of a list. */
   .app-content { padding-bottom: calc(var(--footer-h, 44px) + 4px + env(safe-area-inset-bottom)); }
   body:has(.auth-shell) > main,
-  body:has(.portal-shell) > main,
-  body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 44px) + 4px + env(safe-area-inset-bottom)); }
+  .portal-shell,
+  .page-shell { padding-bottom: calc(var(--footer-h, 44px) + 4px + env(safe-area-inset-bottom)); }
   .profile-cover {
     min-height: 172px;
     grid-template-columns: minmax(0, 1fr);
@@ -1649,8 +1674,8 @@ select.auth-field option { color: var(--ink); }
      profile tab strip and of the sign-in button under the bar. */
   .app-content { padding-bottom: calc(var(--footer-h, 131px) + 4px + env(safe-area-inset-bottom)); }
   body:has(.auth-shell) > main,
-  body:has(.portal-shell) > main,
-  body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 131px) + 4px + env(safe-area-inset-bottom)); }
+  .portal-shell,
+  .page-shell { padding-bottom: calc(var(--footer-h, 131px) + 4px + env(safe-area-inset-bottom)); }
 }
 
 /* Tap targets. This one keys on the input device, not the width: a thumb needs the

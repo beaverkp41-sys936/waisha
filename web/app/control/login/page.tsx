@@ -72,10 +72,7 @@ export default function ControlLoginPage() {
 
   return (
     <div className="control-shell page-shell relative flex flex-1 items-center justify-center px-16 py-32">
-      <div aria-hidden className="absolute inset-0"
-        style={{ backgroundImage: "url(/bg/office.jpg)", backgroundSize: "cover", backgroundPosition: "center" }} />
-      <div aria-hidden className="absolute inset-0"
-        style={{ background: "linear-gradient(180deg, rgba(5, 8, 12, 0.85) 0%, rgba(5, 8, 12, 0.72) 100%)" }} />
+      <div aria-hidden className="control-auth-bg" />
 
       <div className="relative w-full max-w-[440px]">
         <div className="control-card sheet-in relative overflow-hidden rounded-card">
