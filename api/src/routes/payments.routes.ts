@@ -1,3 +1,5 @@
+import { Readable } from "node:stream";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { pool, withTenant } from "../db/pool.js";
@@ -8,7 +10,7 @@ import { verifyAccessToken } from "../security/jwt.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
 import { writeAudit } from "../audit/audit.js";
 import { computeAmounts, detectProvider, type Cycle } from "../payments/amounts.js";
-import { getProvider } from "../payments/provider.js";
+import { getProvider, loadActiveGateway, type ActiveGateway } from "../payments/registry.js";
 import { env } from "../env.js";
 import { requirePermission } from "../security/permissions.js";
 
@@ -100,10 +102,35 @@ export async function paymentsRoutes(app: FastifyInstance, _opts: unknown) {
       });
     });
 
-    await getProvider().push({
-      intentReference, amount: amounts.total, currency: "TZS",
-      phone: body.payerPhone, description: `WAISHA ${p.name} licence`
-    });
+    // The push leaves the building after the charge is written, so a network that refuses it
+    // must not leave a row that reads "pending" forever: the customer was never prompted, and a
+    // countdown on their screen would be a lie. The payment is closed as failed and the reason
+    // is named — the same way every other outbound call in this API now reports itself.
+    try {
+      await (await getProvider()).push({
+        intentReference, amount: amounts.total, currency: "TZS",
+        phone: body.payerPhone, description: `WAISHA ${p.name} licence`
+      });
+    } catch (e) {
+      const detail = e instanceof ApiError ? e.code : "GATEWAY_PUSH_REFUSED";
+      const reason = String((e as Error)?.message ?? e).slice(0, 300);
+      // The third argument of `complete_payment` is the network's transaction id, and there was
+      // no transaction — so it stays null and the reason goes to `raw_response`, which is where
+      // an answer from the network belongs. A failure string in the txn column reads as a
+      // settlement reference to everybody who looks at the register afterwards.
+      await pool.query("select platform_auth.complete_payment($1,'failed',null) from payments "
+        + "where intent_reference = $1 and tenant_id = $2 and status = 'pending'",
+        [intentReference, req.user.tid]);
+      await pool.query(
+        `update payments set raw_response = $2::jsonb
+          where intent_reference = $1 and tenant_id = $3`,
+        [intentReference, JSON.stringify({ push_refused: detail, reason, at: new Date().toISOString() }),
+         req.user.tid]);
+      throw new ApiError(detail,
+        "The payment network did not accept this charge, so nothing is on its way to your phone. "
+        + "Your company is not being billed for it — try again, or tell the platform office if "
+        + "it happens twice.", 502);
+    }
 
     return reply.status(201).send({
       intentReference, provider: providerName,
@@ -138,7 +165,13 @@ export async function paymentsRoutes(app: FastifyInstance, _opts: unknown) {
 
   // ---------- SANDBOX ONLY: operator simulates the customer's approval ----------
   app.post("/payments/mock/complete", async (req: any, reply) => {
-    if (env.PAYMENT_PROVIDER !== "mock") throw new ApiError("NOT_FOUND", "Not found", 404);
+    // The door is shut by the register, not by an environment variable: the moment a real rail
+    // is switched on at the desk, this route stops answering, because a way to mark a payment
+    // paid without paying is not a thing that may exist alongside a live gateway.
+    const live = await loadActiveGateway();
+    if (live || env.PAYMENT_PROVIDER !== "mock") {
+      throw new ApiError("NOT_FOUND", "Not found", 404);
+    }
     if (!env.PAYMENT_MOCK_KEY || req.headers["x-mock-key"] !== env.PAYMENT_MOCK_KEY) {
       throw new ApiError("FORBIDDEN", "Invalid mock key", 403);
     }
@@ -159,13 +192,117 @@ export async function paymentsRoutes(app: FastifyInstance, _opts: unknown) {
     return reply.send(res);
   });
 
-  // ---------- AzamPay webhook (dormant until PAYMENT_PROVIDER=azampay) ----------
-  app.post("/payments/webhook", async (req: any, reply) => {
-    if (env.PAYMENT_PROVIDER !== "azampay") throw new ApiError("NOT_FOUND", "Not found", 404);
-    // VERIFY-ON-INTEGRATION: exact signature header + scheme per AzamPay docs.
-    // Planned: HMAC-SHA256 over raw body with AZAMPAY_WEBHOOK_SECRET, replay
-    // nonce stored in payment_webhooks.replay_nonce (unique), then
-    // platform_auth.complete_payment(...) — the handler is wired and waiting.
-    throw new ApiError("NOT_IMPLEMENTED", "Webhook activates with AzamPay credentials.", 501);
+  // ---------- The provider's answer, whenever it arrives ----------
+  //
+  // This is the half that makes "activate it and the system works" true. A push only starts a
+  // payment: the customer stands at their phone for ten seconds, or cancels, or the network
+  // drops it, and only the provider knows which. Without a door that can close a charge, an
+  // activated gateway would leave every company stuck on `pending` until the ten-minute lazy
+  // expiry timed it out — money collected and a licence still locked.
+  //
+  // **The signature is HMAC-SHA256 over the raw bytes of the body**, sent as
+  // `x-waisha-signature: sha256=<hex>`, keyed by the webhook secret filed for whichever rail is
+  // live. Raw bytes rather than the re-serialised object because that is the only thing both
+  // sides can agree on — a JSON round-trip reorders keys and changes number formatting, and a
+  // verification that fails for that reason looks exactly like an attack. `preParsing` below is
+  // what keeps those bytes: Fastify hands routes a parsed object and throws the body away.
+  //
+  // A real network will very likely sign differently — its own header, sometimes a different
+  // scheme — and that is an adapter change, not a redesign. What is fixed here is the three
+  // things that must not be negotiable: an unsigned call completes nothing, a repeated call
+  // completes nothing twice, and every attempt is written down whether or not it was accepted.
+  app.post("/payments/webhook", {
+    preParsing: async (req: any, _reply, payload) => {
+      const chunks: Buffer[] = [];
+      for await (const c of payload) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c)));
+      req.rawBody = Buffer.concat(chunks);
+      // Capped before it is ever parsed: this door is open to the internet by design, and the
+      // body is held in memory twice — once as bytes, once as an object.
+      if (req.rawBody.length > 64 * 1024) {
+        throw new ApiError("VALIDATION_FAILED", "Payload too large", 413);
+      }
+      return Readable.from([req.rawBody]);
+    }
+  }, async (req: any, reply) => {
+    await enforceRateLimit(`webhook:ip:${req.ip}`, 120, 60);
+    const gateway = await loadActiveGateway();
+    // No rail, no secret: nothing could verify a call, so nothing is listening. 404 rather than
+    // 401 because a closed door should not advertise that knocking harder is allowed.
+    if (!gateway?.webhookSecret) throw new ApiError("NOT_FOUND", "Not found", 404);
+
+    const raw: Buffer = req.rawBody ?? Buffer.alloc(0);
+    const header = String(req.headers["x-waisha-signature"] ?? "");
+    const expected = "sha256=" + createHmac("sha256", gateway.webhookSecret).update(raw).digest("hex");
+    const signatureValid = header.length === expected.length
+      && timingSafeEqual(Buffer.from(header), Buffer.from(expected));
+
+    const parsed = z.object({
+      reference: z.string().min(6).max(64),
+      outcome: z.enum(["approved", "failed", "timed_out", "cancelled"]),
+      nonce: z.string().min(6).max(128).optional(),
+      event: z.string().max(48).optional()
+    }).safeParse(req.body);
+
+    // One writer for the ledger, and it is called on every path out of this route — including
+    // the two refusals. A provider that keeps retrying a payload the platform cannot read is a
+    // support conversation, and this table is the only place that conversation can be had. The
+    // insert is the last statement rather than the first because the ledger has no UPDATE
+    // policy: the row is written once, with the outcome in it.
+    const record = async (eventType: string, payload: unknown, nonce: string | null,
+                          error: string | null, processed: boolean) => {
+      await pool.query(
+        `insert into payment_webhooks (provider, event_type, signature_valid, replay_nonce,
+             payload, processed_at, processing_error)
+         values ($1,$2,$3,$4,$5::jsonb, case when $6 then now() else null end, $7)
+         on conflict (replay_nonce) do nothing`,
+        [gateway.providerKey, eventType, signatureValid, nonce, JSON.stringify(payload),
+         processed, error]);
+    };
+
+    if (!signatureValid) {
+      await record("rejected", { reason: "signature does not match" }, null, "signature rejected", false);
+      throw new ApiError("WEBHOOK_SIGNATURE", "Signature does not match this gateway.", 401);
+    }
+    if (!parsed.success) {
+      await record("unparsed", { unreadable: true }, null, "payload unreadable", false);
+      throw new ApiError("VALIDATION_FAILED", "Payload does not describe a payment outcome.", 400);
+    }
+
+    const { reference, outcome } = parsed.data;
+    // Replay, checked before anything is touched. `payment_webhooks.replay_nonce` is unique, so
+    // this read is not the guard — it is the fast path. Two deliveries of one nonce arriving
+    // together both get through here, and the definer below is what makes the second one cost
+    // nothing: `complete_payment` answers `already_final` for a payment it has already closed.
+    if (parsed.data.nonce) {
+      const seen = await pool.query("select 1 from payment_webhooks where replay_nonce = $1",
+        [parsed.data.nonce]);
+      if (seen.rowCount) return reply.send({ status: "duplicate" });
+    }
+
+    let result: any = null;
+    let failure: string | null = null;
+    try {
+      const r = await pool.query("select platform_auth.complete_payment($1,$2,null) as r",
+        [reference, outcome]);
+      result = r.rows[0].r;
+      if (result?.status === "ok" && result.payment_status === "approved") {
+        await pool.query(
+          `insert into audit_logs (id, tenant_id, entity, entity_id, action, after)
+           select $1, p.tenant_id, 'payments', p.id, 'payment.approved.webhook', $2::jsonb
+             from payments p where p.intent_reference = $3`,
+          [uuidv7(), JSON.stringify({ via: "webhook", provider: gateway.providerKey, reference }), reference]);
+      }
+    } catch (e) {
+      failure = String((e as Error)?.message ?? e).slice(0, 300);
+    }
+
+    await record(parsed.data.event ?? outcome, parsed.data, parsed.data.nonce ?? null, failure, !failure);
+
+    if (failure) {
+      throw new ApiError("WEBHOOK_PROCESSING_FAILED",
+        "The outcome was received but the charge could not be closed. The platform office has "
+        + "been told.", 500);
+    }
+    return reply.send({ status: "processed", result });
   });
 }

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Activity, Banknote, Boxes, Bug, Building2, Globe, Headphones, Languages, Lightbulb, LogOut,
+  Activity, Banknote, Boxes, Bug, Building2, CreditCard, Globe, Headphones, Languages, Lightbulb, LogOut,
   Megaphone, ScrollText, Settings2, Tag, TrendingUp, UserCog, Users, type LucideIcon
 } from "lucide-react";
 
@@ -31,6 +31,11 @@ const SCREENS: Screen[] = [
   { href: "/control/subscriptions", label: "Customers", icon: Users,
     keys: ["control.subscriptions.view", "control.analytics.view"] },
   { href: "/control/payments", label: "Money", icon: Banknote, keys: ["control.subscriptions.view"] },
+  // Which network the platform takes money through. Read wider than it is written, exactly as
+  // the routes enforce it — a support seat that cannot see which rail is live cannot answer
+  // "my customer paid and nothing happened".
+  { href: "/control/gateway", label: "Gateway", icon: CreditCard,
+    keys: ["control.gateway.view", "control.gateway.manage"] },
   { href: "/control/tenants", label: "Tenants", icon: Building2, roles: LICENCE, keys: ["control.tenants.manage"] },
   { href: "/control/directory", label: "Directory", icon: Globe, roles: LICENCE },
   { href: "/control/recommendations", label: "Inbox", icon: Lightbulb,

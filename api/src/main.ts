@@ -25,6 +25,7 @@ import { controlErrorRoutes } from "./routes/control-errors.routes.js";
 import { controlDepartmentRoutes } from "./routes/control-departments.routes.js";
 import { controlContentRoutes } from "./routes/control-content.routes.js";
 import { controlTicketRoutes } from "./routes/control-tickets.routes.js";
+import { controlGatewayRoutes } from "./routes/control-gateway.routes.js";
 import { errorIntakeRoutes } from "./routes/errors.routes.js";
 import { recommendationRoutes } from "./routes/recommendations.routes.js";
 import { announcementsRoutes } from "./routes/announcements.routes.js";
@@ -148,6 +149,7 @@ async function main() {
   await app.register(controlDepartmentRoutes, { prefix: "/api/v1" });
   await app.register(controlContentRoutes, { prefix: "/api/v1" });
   await app.register(controlTicketRoutes, { prefix: "/api/v1" });
+  await app.register(controlGatewayRoutes, { prefix: "/api/v1" });
   await app.register(errorIntakeRoutes, { prefix: "/api/v1" });
   await app.register(recommendationRoutes, { prefix: "/api/v1" });
   await app.register(announcementsRoutes, { prefix: "/api/v1" });
