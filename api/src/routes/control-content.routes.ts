@@ -196,7 +196,7 @@ export async function controlContentRoutes(app: FastifyInstance, _opts: unknown)
         throw new ApiError("VALIDATION_FAILED", problems[0].message, 400, problems);
       }
       if (!planned.length) {
-        return { changed: 0, unchanged: true, ...(await loadDesk(c, tenantId)) };
+        return { changed: 0, unchanged: true, can_manage: true, ...(await loadDesk(c, tenantId)) };
       }
 
       const after: Record<string, Record<string, string>> = {};
@@ -214,7 +214,7 @@ export async function controlContentRoutes(app: FastifyInstance, _opts: unknown)
       });
 
       return { changed: planned.length, lines: planned.map((p) => `${p.key} (${p.locale})`),
-        ...(await loadDesk(c, tenantId)) };
+        can_manage: true, ...(await loadDesk(c, tenantId)) };
     });
   });
 }

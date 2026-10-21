@@ -70,6 +70,14 @@ function seedOf(d: Desk): Draft {
   return out;
 }
 
+/** Tell Next that the footer it rendered on the server is no longer the current one.
+ *  Best-effort on purpose: the desk's own preview, the sign-in card and the portal bar all
+ *  re-read per visitor already, so a failed call costs a marketing page wearing yesterday's
+ *  bar for one cache window — never a lost write, which the desk reports on its own. */
+function revalidateFooter() {
+  return fetch("/api/content/footer/revalidate", { method: "POST" }).catch(() => {});
+}
+
 /** The API's rules, run before the request so a bad address is pointed at the box it was typed
  *  into instead of arriving as one 400 that names a field out of twelve. */
 function problems(f: DeskField, cell: Cell): string[] {
@@ -161,13 +169,17 @@ export default function ControlContentPage() {
     setArmed(false); setNotice(null); setSaveError(null);
   };
 
-  async function save() {
-    if (!changed.length || blocked.length || note.trim().length < 4) return;
-    if (!armed) { setArmed(true); return; }   // this changes what every public page says
+  /** One PUT for whatever is handed to it: the whole staged set, or a single line of it.
+   *  The server judges each key by its own rule and refuses the request before writing
+   *  anything if one value does not fit — so while a half-typed footer link is sitting on the
+   *  desk, the answering hours can still be published on their own instead of waiting for the
+   *  link to be finished. That is what `publish(changed)` could not do. */
+  async function publish(targets: { field: DeskField; locale: string; cell: Cell }[], label: string) {
+    if (!targets.length || busy) return;
     setBusy(true); setSaveError(null);
     try {
       const values: Record<string, Record<string, unknown>> = {};
-      for (const c of changed) (values[c.field.key] ??= {})[c.locale] = c.cell;
+      for (const c of targets) (values[c.field.key] ??= {})[c.locale] = c.cell;
       const res = await fetch(`${API}/api/v1/control/content`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
         credentials: "include", body: JSON.stringify({ values, note: note.trim() })
@@ -185,17 +197,62 @@ export default function ControlContentPage() {
         locales: j.locales ?? desk?.locales ?? ["en"],
         groups: j.groups ?? []
       };
-      setDesk(next); setDraft(seedOf(next)); setNote(""); setArmed(false);
-      setNotice(`${j.changed} line(s) published${(j.lines ?? []).length ? `: ${(j.lines ?? []).join(", ")}` : ""}. `
-        + "A caller loading the page now sees them; the marketing shell's cached copy clears within minutes.");
+      setDesk(next); setNote(""); setArmed(false);
+      // Only the lines this save published are re-seeded from the read-back. Seeding the whole
+      // desk would throw away every other line the clerk is still typing — publishing the
+      // answering hours must not cost them half a paragraph of the sign-up body.
+      setDraft(d => {
+        const merged = { ...d };
+        for (const c of targets) {
+          const f = next.groups.flatMap((g) => g.fields).find((x) => x.key === c.field.key);
+          merged[c.field.key] = {
+            ...(merged[c.field.key] ?? {}),
+            [c.locale]: (f?.values[c.locale] ?? (isList(c.field.kind) ? [] : "")) as Cell
+          };
+        }
+        return merged;
+      });
+      const lines: string[] = j.lines ?? [];
+      if (!j.changed) {
+        // Not a failure: the desk and the register already agree, so nothing moved and the
+        // audit trail stays clean. Saying "published" here would be a lie about a write.
+        setNotice(`${label} already says exactly that — nothing was written.`);
+        return;
+      }
+      void revalidateFooter();
+      setNotice(`${label} published${lines.length ? `: ${lines.join(", ")}` : ""}. `
+        + "The bar a caller reads now carries it — the desk's own preview, the sign-in card, "
+        + "the portal bar and the cached marketing footer were all told to re-read.");
     } finally { setBusy(false); }
   }
+
+  async function save() {
+    if (!changed.length || blocked.length || note.trim().length < 4) return;
+    if (!armed) { setArmed(true); return; }   // this changes what every public page says
+    await publish(changed, `${changed.length} line(s)`);
+  }
+
+  /** A line the clerk can act on where it is written, rather than only from the staged panel.
+   *  `cell` is what to store — an empty cell is the desk's own word for "retire this line". */
+  const publishOne = (f: DeskField, l: string, cell: Cell) =>
+    publish([{ field: f, locale: l, cell }], `${f.label} (${LOCALE_LABEL[l] ?? l})`);
+
+  const revertOne = (f: DeskField, l: string) => {
+    setDraft(d => ({ ...d, [f.key]: { ...(d[f.key] ?? {}), [l]: (f.values[l] ?? (isList(f.kind) ? [] : "")) as Cell } }));
+    setArmed(false); setNotice(null); setSaveError(null);
+  };
 
   // The bar as it would read with what is typed now, in the locale being previewed.
   const footerDraft = useMemo<FooterContent>(() => {
     const raw: Record<string, unknown> = {};
     for (const g of desk?.groups ?? []) {
-      if (g.group !== "footer") continue;
+      if (g.group !== "footer") {
+        // The mark is one block (`login.brand`) that the bar and the sign-in card both read,
+        // so the preview has to show it in both places or the desk would lie about one of them.
+        const brand = g.fields.find((x) => x.wire === "loginBrand");
+        if (brand) raw.brand = cellOf(brand, locale);
+        continue;
+      }
       for (const f of g.fields) raw[f.wire] = cellOf(f, locale);
     }
     return normalizeFooter(raw);
@@ -436,7 +493,8 @@ export default function ControlContentPage() {
         {/* ---------- the registry ---------- */}
         {!loading && footerGroup && (
           <FieldGroup title="The footer" locales={locales} draft={draft}
-            canManage={canManage}
+            canManage={canManage} busy={busy} canWrite={note.trim().length >= 4}
+            onPublish={publishOne} onRevert={revertOne}
             blurb="Everything the bar at the bottom of every page says, in both languages. A line
               left empty is a line the bar stops showing — that is how a sentence is retired, and it
               is not an error."
@@ -444,7 +502,8 @@ export default function ControlContentPage() {
         )}
         {!loading && signinGroup && (
           <FieldGroup title="Sign-in and sign-up" locales={locales} draft={draft}
-            canManage={canManage}
+            canManage={canManage} busy={busy} canWrite={note.trim().length >= 4}
+            onPublish={publishOne} onRevert={revertOne}
             blurb="The card a person stands in front of before they have an account. Every word of
               it is read from this table, so this desk is the only place to change them — the page
               keeps its own wording only while the service cannot be reached."
@@ -462,9 +521,13 @@ export default function ControlContentPage() {
   );
 }
 
-function FieldGroup({ title, blurb, group, locales, draft, canManage, onChange }: {
+function FieldGroup({ title, blurb, group, locales, draft, canManage, busy, canWrite,
+  onPublish, onRevert, onChange }: {
   title: string; blurb: string; group: DeskGroup; locales: string[]; draft: Draft;
-  canManage: boolean; onChange: (key: string, locale: string, cell: Cell) => void;
+  canManage: boolean; busy: boolean; canWrite: boolean;
+  onPublish: (f: DeskField, l: string, cell: Cell) => void;
+  onRevert: (f: DeskField, l: string) => void;
+  onChange: (key: string, locale: string, cell: Cell) => void;
 }) {
   return (
     <section className="mt-28">
@@ -474,17 +537,22 @@ function FieldGroup({ title, blurb, group, locales, draft, canManage, onChange }
         style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(440px, 100%), 1fr))" }}>
         {group.fields.map((f) => (
           <FieldCard key={f.key} f={f} locales={locales} draft={draft}
-            canManage={canManage} onChange={onChange} />
+            canManage={canManage} busy={busy} canWrite={canWrite}
+            onPublish={onPublish} onRevert={onRevert} onChange={onChange} />
         ))}
       </div>
     </section>
   );
 }
 
-/** One registry entry, both locales side by side, each with its own rule and its own
- *  last-written caption — &quot;who changed the phone number&quot; is answered on the line. */
-function FieldCard({ f, locales, draft, canManage, onChange }: {
+/** One registry entry, both locales side by side, each with its own rule, its own act
+ *  buttons and its own last-written caption — &quot;who changed the phone number&quot; is
+ *  answered on the line, and so is the change itself. */
+function FieldCard({ f, locales, draft, canManage, busy, canWrite, onPublish, onRevert, onChange }: {
   f: DeskField; locales: string[]; draft: Draft; canManage: boolean;
+  busy: boolean; canWrite: boolean;
+  onPublish: (f: DeskField, l: string, cell: Cell) => void;
+  onRevert: (f: DeskField, l: string) => void;
   onChange: (key: string, locale: string, cell: Cell) => void;
 }) {
   const dirty = locales.filter((l) =>
@@ -519,6 +587,13 @@ function FieldCard({ f, locales, draft, canManage, onChange }: {
           const bad = problems(f, cell);
           const edit = f.edited[l];
           const written = when(edit?.at ?? null);
+          const isDirty = dirty.includes(l);
+          const stored = isList(f.kind)
+            ? asRows(f.values[l] as Cell).length > 0
+            : asText(f.values[l] as Cell).trim() !== "";
+          const typed = isList(f.kind)
+            ? asRows(cell).length > 0
+            : asText(cell).trim() !== "";
           return (
             <div key={l} className="rounded-input border p-12" style={{ borderColor: "var(--line)" }}>
               <div className="flex flex-wrap items-center justify-between gap-6">
@@ -541,6 +616,54 @@ function FieldCard({ f, locales, draft, canManage, onChange }: {
                     <li key={i} className="text-[11px]" style={{ color: "var(--danger)" }}>{p}</li>
                   ))}
                 </ul>
+              )}
+
+              {/* The line acts where it is written. One PUT carries only this key and this
+                  language, so a half-typed link elsewhere on the desk cannot hold it back —
+                  and the audit reason the whole-desk publish demands is demanded here too,
+                  through the button's disabled state. */}
+              {canManage && (isDirty || stored) && (
+                <div className="mt-10 flex flex-wrap items-center gap-8">
+                  {isDirty && (
+                    <button type="button" disabled={busy || bad.length > 0 || !canWrite}
+                      onClick={() => onPublish(f, l, cell)}
+                      aria-label={`Publish ${f.label} in ${LOCALE_LABEL[l] ?? l}`}
+                      title={bad.length ? "This line has a problem to fix first"
+                        : !canWrite ? "Say why in the reason box above first"
+                          : "Write just this line, now"}
+                      className="min-h-[34px] rounded-input px-12 py-5 text-[11px] font-semibold"
+                      style={{
+                        background: "var(--adm-accent)", color: "#05262a",
+                        border: "1px solid var(--adm-accent)", opacity: busy || bad.length || !canWrite ? 0.45 : 1
+                      }}>
+                      {busy ? "Publishing…" : "Update"}
+                    </button>
+                  )}
+                  {isDirty && (
+                    <button type="button" disabled={busy} onClick={() => onRevert(f, l)}
+                      aria-label={`Discard my typing in ${f.label}, ${LOCALE_LABEL[l] ?? l}`}
+                      title="Put back what is on the bar now, without writing anything"
+                      className="min-h-[34px] rounded-input border px-12 py-5 text-[11px] font-semibold"
+                      style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+                      Revert
+                    </button>
+                  )}
+                  {stored && typed && (
+                    <button type="button" disabled={busy || !canWrite}
+                      onClick={() => onPublish(f, l, isList(f.kind) ? [] : "")}
+                      aria-label={`Retire ${f.label} in ${LOCALE_LABEL[l] ?? l}`}
+                      title={canWrite
+                        ? "Publish this line empty — the bar stops showing it. The row stays, so it can be said again."
+                        : "Say why in the reason box above first"}
+                      className="min-h-[34px] rounded-input border px-12 py-5 text-[11px] font-semibold"
+                      style={{
+                        borderColor: "var(--danger)", color: "var(--danger)",
+                        opacity: busy || !canWrite ? 0.45 : 1
+                      }}>
+                      Retire
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           );

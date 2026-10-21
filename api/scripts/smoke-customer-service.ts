@@ -624,6 +624,20 @@ async function main() {
     check("saving two lines reports the two lines it moved",
       wrote.status === 200 && wrote.json?.changed === 2 &&
       (wrote.json?.lines ?? []).length === 2, { s: wrote.status, c: wrote.json?.changed });
+    const twice = await call("/control/content", {
+      ck: ck("cs"), method: "PUT", body: {
+        values: { [COPYRIGHT]: { en: `© ${STAMP} written by the smoke` } },
+        note: "The same line sent again by the same seat, so nothing should move."
+      }
+    });
+    // The desk builds its own writability from this answer. A PUT that answers without it turns
+    // a seat that has just published into a reader, and its Update buttons vanish until reload.
+    // The no-op branch is the one that was missing it.
+    check("…and the answer still says the seat may keep writing",
+      wrote.json?.can_manage === true && twice.json?.can_manage === true &&
+      twice.json?.changed === 0,
+      { first: wrote.json?.can_manage, second: twice.json?.can_manage,
+        changed: twice.json?.changed });
     const pubAfter = await call("/content/footer");
     check("the public footer prints the new sentence straight away",
       pubAfter.json?.copyright === `© ${STAMP} written by the smoke`, pubAfter.json?.copyright);
@@ -690,6 +704,86 @@ async function main() {
       "select value from content_blocks where key = 'footer.hours' and locale = 'en'");
     check("the hours line is exactly as the office left it",
       stillOurs.rows[0]?.value === hoursBefore);
+
+    // ---- the copy desk's per-line buttons (#287) ----
+    // Each Update / Retire on the desk PUTs one locale of one key, so a half-typed line sitting
+    // elsewhere on the desk cannot hold it hostage. The server was always able to do that; these
+    // are the shape the buttons actually send, checked as the desk sends them.
+    const auditLines = () => oi(
+      `select after->>'lines' as n from audit_logs
+        where tenant_id = $1 and entity = 'content_blocks' order by ts`, [TC]);
+    const auditBefore = (await auditLines()).rows.length;
+
+    const twoTongues = await call("/control/content", {
+      ck: ck("cs"), method: "PUT", body: {
+        values: { [COPYRIGHT]: { en: `© ${STAMP} english line`, sw: `© ${STAMP} mstari wa kiswahili` } },
+        note: "Both tongues of one line, so a one-tongue save has something to leave alone."
+      }
+    });
+    check("a line written in both tongues counts as the two tongues it moved",
+      twoTongues.status === 200 && twoTongues.json?.changed === 2,
+      { s: twoTongues.status, c: twoTongues.json?.changed });
+
+    const oneTongue = await call("/control/content", {
+      ck: ck("cs"), method: "PUT", body: {
+        values: { [COPYRIGHT]: { en: `© ${STAMP} english line, rewritten on its own` } },
+        note: "What the Update button on one column of one line sends."
+      }
+    });
+    check("a save of one tongue reports exactly the one line it moved",
+      oneTongue.status === 200 && oneTongue.json?.changed === 1 &&
+      (oneTongue.json?.lines ?? []).join("|") === "footer.copyright (en)",
+      { s: oneTongue.status, c: oneTongue.json?.changed, l: oneTongue.json?.lines });
+    check("…it rewords the language it was sent in",
+      (await call("/content/footer")).json?.copyright === `© ${STAMP} english line, rewritten on its own`);
+    check("…and leaves the other language's sentence standing",
+      (await call("/content/footer?lang=sw")).json?.copyright === `© ${STAMP} mstari wa kiswahili`);
+
+    const retireEn = await call("/control/content", {
+      ck: ck("cs"), method: "PUT", body: {
+        values: { [COPYRIGHT]: { en: "" } }, note: "What Retire on one column sends."
+      }
+    });
+    check("retiring one language hides that language only",
+      retireEn.status === 200 && retireEn.json?.changed === 1 &&
+      (await call("/content/footer")).json?.copyright === "" &&
+      (await call("/content/footer?lang=sw")).json?.copyright === `© ${STAMP} mstari wa kiswahili`,
+      { s: retireEn.status, c: retireEn.json?.changed });
+
+    const others = (oneTongue.json?.groups ?? []).flatMap((g: any) => g.fields)
+      .filter((f: any) => f.key !== COPYRIGHT);
+    const pristine = new Set((desk.json?.groups ?? []).flatMap((g: any) => g.fields)
+      .filter((f: any) => f.key !== COPYRIGHT).map((f: any) =>
+        `${f.key}|${JSON.stringify(f.values)}`));
+    check("…and the rest of the register came back from that save exactly as it was read",
+      others.length > 0 && others.every((f: any) =>
+        pristine.has(`${f.key}|${JSON.stringify(f.values)}`)),
+      { checked: others.length, moved: others.filter((f: any) =>
+        !pristine.has(`${f.key}|${JSON.stringify(f.values)}`)).map((f: any) => f.key) });
+
+    const tail = (await auditLines()).rows.slice(auditBefore);
+    check("each of those per-line saves is audited with the count it claimed",
+      tail.map((r: any) => r.n).join(",") === "2,1,1", tail.map((r: any) => r.n));
+
+    // The desk keeps the reason box empty until the operator says why, and the button is
+    // disabled rather than the request being thrown away — so an absent note must still work,
+    // and a note over the ceiling must be refused before anything is written.
+    const noNote = await call("/control/content", {
+      ck: ck("cs"), method: "PUT", body: { values: { [COPYRIGHT]: { en: `© ${STAMP} no note given` } } }
+    });
+    check("a line can be published without a note; the audit just carries none",
+      noNote.status === 200 && noNote.json?.changed === 1, { s: noNote.status });
+    const longNote = await call("/control/content", {
+      ck: ck("cs"), method: "PUT", body: {
+        values: { [COPYRIGHT]: { en: `© ${STAMP} should not have landed` },
+          note: "x".repeat(301)
+        }
+      }
+    });
+    check("a note past the ceiling is refused before the line is written",
+      longNote.status === 400 &&
+      (await call("/content/footer")).json?.copyright === `© ${STAMP} no note given`,
+      { s: longNote.status, v: (await call("/content/footer")).json?.copyright });
 
     // ---------------- the live register was not touched ----------------
     phase("the real office's register is untouched");
