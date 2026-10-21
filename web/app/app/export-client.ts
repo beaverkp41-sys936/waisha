@@ -130,6 +130,34 @@ export async function downloadCargoBatch(ids: string[]): Promise<string> {
 }
 
 /**
+ * One cargo file, printed whole: every register the platform holds on it, as a
+ * workbook or as a page.
+ *
+ * The server reads the rows — the desk never sends them — so this carries the registers
+ * that no screen lists: the invoice lines, the debit note lines, the step checks. The
+ * batch ZIP is still what carries the documents themselves; this is what carries the
+ * facts about them.
+ */
+export async function downloadCargoFile(shipmentId: string, format: ExportFormat): Promise<string> {
+  const res = await authFetch("/exports/cargo-file", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: shipmentId, format })
+  }, () => { window.location.href = "/login"; });
+
+  if (!res.ok) throw new Error(await failure(res));
+
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const named = /filename="?([^";]+)"?/i.exec(disposition);
+  const name = named?.[1] ?? `cargo-file-${shipmentId.slice(0, 8)}-${officeDay()}.${format}`;
+
+  const blob = await res.blob();
+  if (!blob.size) throw new Error("The export came back empty.");
+  saveBlob(blob, name);
+  return name;
+}
+
+/**
  * The master document bundle for one cargo file: the signed cover sheet as a printed
  * page, the three papers it names as they are stored, and a README that says which
  * of them were found.

@@ -2,13 +2,17 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
 import { asText, type Cell, type ExportColumn, type PreparedTable } from "./table.js";
 
 /**
- * A printed page for a report table.
+ * A printed page for a report table — or a whole document of them.
  *
  * pdf-lib and the Helvetica that ships inside the file, not a headless browser: the
  * alternative is a Chromium on the API box that renders the web page, which is slow,
  * memory-hungry on a Render instance, and quietly breaks whenever a stylesheet changes.
  * This writes a paginated register with the header row repeated on every sheet and a
  * page count in the footer, which is what a report is handed over as.
+ *
+ * `buildPdfBook` lays several registers into one file, each starting on its own page and
+ * each allowed its own orientation: that is what a cargo file needs, because a file is
+ * not one table and an operator who asks for the file asks for all of it.
  *
  * The two standard fonts are WinAnsi-encoded, so anything outside that alphabet is
  * substituted or dropped before it reaches the page — one em dash in a consignee's name
@@ -51,6 +55,9 @@ function printable(text: string): string {
   return out.replace(/\s+/g, " ").trim();
 }
 
+/** A value no wider than this is printed whole; longer text may end in an ellipsis. */
+const WHOLE_UP_TO = 92;
+
 /**
  * What a column would like to be, measured in points with the page's own font.
  *
@@ -92,8 +99,16 @@ function naturalWidths(columns: ExportColumn[], cells: Cell[][], body: PDFFont,
       floor: Math.max(header, room(68)) };
     if (c.type === "bool") return { width: Math.max(header, room(34)), flexible: false,
       floor: Math.max(header, room(34)) };
+    // A short value is never cut. `ZIP-53972...` is not a clipped name — it is a file
+    // number that no longer matches the one the clerk typed, and the page then contradicts
+    // the desk it was printed from. So a column whose widest value fits inside a short
+    // measure takes a floor of that value, not of its own header; a long one (a consignee,
+    // a cargo description) still gives way, because an ellipsis there loses a sentence and
+    // not an identity. Widening floors costs pages, not words: `partsOf` splits the
+    // register around them.
+    const whole = content <= WHOLE_UP_TO;
     return { width: Math.max(header, Math.min(260, Math.max(84, room(content)))),
-      flexible: true, floor: header };
+      flexible: true, floor: whole ? Math.max(header, room(content)) : header };
   });
 }
 
@@ -139,19 +154,85 @@ function clip(text: string, max: number, font: PDFFont, size: number): string {
   return `${cut}...`;
 }
 
-export async function buildPdf(table: PreparedTable): Promise<Buffer> {
-  const doc = await PDFDocument.create();
-  const regular = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+type Fonts = { regular: PDFFont; bold: PDFFont };
 
+/** The smallest type the printer will use. Below this a register is a grey smear. */
+const MIN_SIZE = 5.8;
+
+/** Which columns add up, and what they add up to. A clipped total is the one figure
+ *  on a page that somebody signs for, so the sum takes part in the measuring. */
+function totalsOf(table: PreparedTable): { numeric: boolean[]; sums: Cell[] } {
   const numeric = table.columns.map((c) => c.type === "money" || c.type === "number");
+  const sums: Cell[] = table.columns.map((c, i) => !numeric[i] ? null
+    : Number(table.cells.reduce((acc, row) => acc + (typeof row[i] === "number"
+      ? (row[i] as number) : 0), 0).toFixed(2)));
+  return { numeric, sums };
+}
+
+/**
+ * A register too wide for one page is printed as several pages of columns, not as one
+ * page of clipped text.
+ *
+ * The alternative is what the layout used to do: take the last pass and squeeze every
+ * column, which on a 26-column cargo record cuts the file number to `ZIP-5...` and drops
+ * a billed figure off the end of the line. A page that prints a different number from
+ * the one in the system is worse than no page, so the columns are grouped instead — the
+ * first column repeated on every part, because a page of row three is only readable if
+ * it says which row it is holding.
+ */
+function partsOf(table: PreparedTable, fonts: Fonts): PreparedTable[] {
+  // The budget is the *narrow* page. A part is measured again when it is drawn, and a
+  // part wide enough to need landscape is then given landscape — but a part grouped
+  // against the landscape width would arrive on a portrait page already overflowing,
+  // which is the last-pass squeeze that cut a file number to `ZIP-5...`. Splitting on
+  // the width both pages certainly have costs a page or two; it buys the guarantee.
+  const avail = A4.short - 2 * MARGIN;
+  const { sums } = totalsOf(table);
+  const floors = naturalWidths(table.columns, [...table.cells, sums],
+    fonts.regular, fonts.bold, MIN_SIZE).map((s) => s.floor);
+  if (floors.reduce((a, b) => a + b, 0) <= avail) return [table];
+
+  const groups: number[][] = [];
+  let current: number[] = [];
+  let used = 0;
+  floors.forEach((w, i) => {
+    if (current.length && used + w > avail) {
+      groups.push(current);
+      current = [0];
+      used = floors[0];
+    }
+    current.push(i);
+    used += w;
+  });
+  groups.push(current);
+  if (groups.length < 2) return [table];
+
+  return groups.map((idx, n) => ({
+    ...table,
+    title: `${table.title} (part ${n + 1} of ${groups.length})`,
+    columns: idx.map((i) => table.columns[i]),
+    cells: table.cells.map((row) => idx.map((i) => row[i]))
+  }));
+}
+
+/**
+ * One register, laid out and drawn onto the document, starting on a fresh page — and on
+ * as many fresh pages as its columns need.
+ */
+async function drawRegister(doc: PDFDocument, fonts: Fonts, table: PreparedTable): Promise<void> {
+  for (const part of partsOf(table, fonts)) await drawPart(doc, fonts, part);
+}
+
+async function drawPart(
+  doc: PDFDocument, fonts: Fonts, table: PreparedTable
+): Promise<void> {
+  const { regular, bold } = fonts;
+
+  const { numeric, sums } = totalsOf(table);
   let body = 8.5;
   // The totals line is drawn into the same columns, so it takes part in the measuring:
   // a sum is always wider than any row it adds up, and a clipped total is the one
   // figure on the page that somebody signs for.
-  const sums: Cell[] = table.columns.map((c, i) => !numeric[i] ? null
-    : Number(table.cells.reduce((acc, row) => acc + (typeof row[i] === "number"
-      ? (row[i] as number) : 0), 0).toFixed(2)));
   const measure = (size: number) =>
     naturalWidths(table.columns, [...table.cells, sums], regular, bold, size);
   // Landscape is not a preference: a fourteen-column payroll register does not fit
@@ -166,7 +247,7 @@ export async function buildPdf(table: PreparedTable): Promise<Buffer> {
   // only other lever a wide register has. Step it down until the floors fit: 6.5pt of
   // Helvetica on a printed page is small but whole, and a duty figure that arrives in
   // full is worth more than a large one with its tail on the cutting mat.
-  for (const size of [7.5, 6.5, 5.8]) {
+  for (const size of [7.5, 6.5, MIN_SIZE]) {
     if (specs.reduce((a, s) => a + s.floor, 0) <= avail) break;
     specs = measure(size);
     body = size;
@@ -259,20 +340,108 @@ export async function buildPdf(table: PreparedTable): Promise<Buffer> {
     const totals: Cell[] = table.columns.map((c, i) => numeric[i] ? sums[i]
       : i === (labelAt < 0 ? 0 : labelAt) ? `Total - ${table.cells.length} rows` : "");
     drawRow(totals, "total");
-    y -= ROW_H;
   }
+}
+
+/**
+ * The page a reader meets first when a document holds more than one register: what is
+ * in it, how long each part is, and which of them were cut short. Without it a printed
+ * bundle is a stack of sheets with no way to tell whether the part you wanted is there.
+ */
+function drawContents(doc: PDFDocument, fonts: Fonts, tables: PreparedTable[],
+  title: string, subtitle: string, actor: string, at: Date): void {
+  const { regular, bold } = fonts;
+  const pageW = A4.short;
+  const pageH = A4.long;
+  const page = doc.addPage([pageW, pageH]);
+  const avail = pageW - 2 * MARGIN;
+  let line = pageH - MARGIN - 18;
+
+  page.drawText(printable(title).slice(0, 92), { x: MARGIN, y: line, size: 18, font: bold, color: INK });
+  line -= 16;
+  page.drawText(clip(printable(subtitle), avail, regular, 10), {
+    x: MARGIN, y: line, size: 10, font: regular, color: SOFT
+  });
+  line -= 13;
+  page.drawText(`Generated ${at.toISOString().slice(0, 10)} at ${at.toISOString().slice(11, 16)}Z`
+    + ` by ${printable(actor)} · ${tables.length} registers`, {
+    x: MARGIN, y: line, size: 8.5, font: regular, color: SOFT
+  });
+  line -= 12;
+  page.drawLine({ start: { x: MARGIN, y: line }, end: { x: pageW - MARGIN, y: line },
+    thickness: 1, color: BAND });
+  line -= 22;
+
+  // The counts are a column of their own on the right; what is left of the page is the
+  // register's caption, and a caption that does not fit is cut rather than wrapped into
+  // the next row's line.
+  const countW = 74;
+  const nameW = 150;
+  const captionW = avail - nameW - countW;
+  for (const table of tables) {
+    if (line < MARGIN + 30) break;   // a file with more registers than one page still says so
+    const note = table.meta.find((m) => /note/i.test(m.label))?.value;
+    page.drawText(clip(printable(table.title), nameW, bold, 9.5), {
+      x: MARGIN, y: line, size: 9.5, font: bold, color: INK
+    });
+    page.drawText(clip(`${printable(table.subtitle ?? "")}${note ? ` — ${printable(note)}` : ""}`,
+      captionW, regular, 8.5), {
+      x: MARGIN + nameW, y: line, size: 8.5, font: regular, color: SOFT
+    });
+    const rows = `${table.cells.length} row${table.cells.length === 1 ? "" : "s"}`;
+    page.drawText(rows, {
+      x: pageW - MARGIN - regular.widthOfTextAtSize(rows, 9), y: line,
+      size: 9, font: regular, color: INK
+    });
+    line -= 15;
+  }
+  if (tables.length * 15 > pageH - MARGIN * 2 - 80) {
+    page.drawText("The list is longer than one page: the registers after the last line above"
+      + " follow it in this document.", {
+      x: MARGIN, y: MARGIN + 12, size: 8.5, font: regular, color: SOFT
+    });
+  }
+}
+
+export async function buildPdf(table: PreparedTable): Promise<Buffer> {
+  return buildPdfBook([table]);
+}
+
+/**
+ * Several registers as one printed document — what a cargo file asks for, because the
+ * file is not one table: it is the shipment line, its jobs, its documents, its costs,
+ * its proformas, the invoices they became and the papers attached to all of them.
+ *
+ * The first page lists them when there is more than one, every register then starts on
+ * its own page with its own layout, and the "Page i of N" footer counts the whole book.
+ */
+export async function buildPdfBook(tables: PreparedTable[],
+  cover?: { title: string; subtitle: string }): Promise<Buffer> {
+  if (!tables.length) throw new Error("buildPdfBook needs at least one table.");
+  const doc = await PDFDocument.create();
+  const fonts: Fonts = {
+    regular: await doc.embedFont(StandardFonts.Helvetica),
+    bold: await doc.embedFont(StandardFonts.HelveticaBold)
+  };
+
+  const first = tables[0];
+  if (tables.length > 1) {
+    drawContents(doc, fonts, tables, cover?.title ?? first.title,
+      cover?.subtitle ?? first.subtitle ?? "", first.actor, first.generatedAt);
+  }
+  for (const table of tables) await drawRegister(doc, fonts, table);
 
   const pages = doc.getPageCount();
-  doc.getPages().forEach((p, i) => {
+  doc.getPages().forEach((page, i) => {
     const label = `Page ${i + 1} of ${pages}`;
-    p.drawText(label, {
-      x: pageW - MARGIN - regular.widthOfTextAtSize(label, 8), y: MARGIN / 2,
-      size: 8, font: regular, color: SOFT
+    page.drawText(label, {
+      x: page.getWidth() - MARGIN - fonts.regular.widthOfTextAtSize(label, 8), y: MARGIN / 2,
+      size: 8, font: fonts.regular, color: SOFT
     });
   });
 
-  doc.setTitle(printable(table.title));
+  doc.setTitle(printable(cover?.title ?? first.title));
   doc.setCreator("Waisha");
-  doc.setCreationDate(table.generatedAt);
+  doc.setCreationDate(first.generatedAt);
   return Buffer.from(await doc.save());
 }

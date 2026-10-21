@@ -9,7 +9,7 @@ import { ApiError } from "../util/errors.js";
 import { checkPermission, checkPermissions } from "../security/permissions.js";
 import { writeAudit } from "../audit/audit.js";
 import { exportTableSchema, fileName, officeDay, prepareTable, type PreparedTable } from "../export/table.js";
-import { buildPdf } from "../export/pdf.js";
+import { buildPdf, buildPdfBook } from "../export/pdf.js";
 import { buildWorkbook, buildXlsx } from "../export/xlsx.js";
 import { bundleDocumentSizes, bundleReadme, bundleRecord, bundleTables,
   loadBundleCatalog, readCargoBundle } from "../export/cargo.js";
@@ -147,6 +147,88 @@ export async function exportRoutes(app: FastifyInstance, _opts: unknown) {
     reply.header("Cache-Control", "no-store");
     reply.type(pdf
       ? "application/pdf"
+      : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return bytes;
+  });
+
+  /**
+   * One cargo file, printed or tabulated in full.
+   *
+   * The desk for a file shows four of its registers; the file itself holds dozens — the
+   * master sheet, the scanned pages it was typed from, the invoices its proformas became,
+   * the lines and payments under those, the debit notes raised against them. So this reads
+   * the file from the database the way the batch archive does, under the same duty, and
+   * hands back one workbook of sheets or one printed book of them.
+   *
+   * It packs nothing: no document bytes are fetched, because a clerk asking for the
+   * register of one file asked for a register. The ZIP is still the export that carries
+   * the papers themselves, and the Documents sheet says so on its own caption.
+   */
+  app.post("/exports/cargo-file", { preHandler: [requireAuth] }, async (req: any, reply) => {
+    const input = z.object({
+      id: z.string().uuid(),
+      format: z.enum(["xlsx", "pdf"])
+    }).parse(req.body);
+    const duty = REPORTS.cargo;
+
+    const gate = await withTenant(req.user.tid, async (c) => {
+      if (!await checkPermission(c, req.user.sub, duty)) return { allowed: false as const };
+      // Written, not inherited: this connection holds BYPASSRLS, so the tenant belongs in
+      // the SQL and a foreign file id has to come back as "not on your desk".
+      const one = await c.query(
+        "select file_number from cargo_shipments where id = $1 and tenant_id = $2" +
+        " and deleted_at is null", [input.id, req.user.tid]);
+      const who = await c.query(
+        "select full_name from users where id = $1 and tenant_id = $2",
+        [req.user.sub, req.user.tid]);
+      return {
+        allowed: true as const, found: one.rowCount === 1,
+        fileNumber: String(one.rows[0]?.file_number ?? input.id),
+        actor: who.rows[0]?.full_name ?? req.user.sub
+      };
+    });
+    if (!gate.allowed) {
+      throw new ApiError("FORBIDDEN", `Your role does not allow exporting cargo files (${duty}).`, 403);
+    }
+    if (!gate.found) {
+      throw new ApiError("NOT_FOUND", "This cargo file is not on your desk.", 404);
+    }
+
+    const generatedAt = new Date();
+    const bundle = await withTenant(req.user.tid, async (c) => {
+      const read = await readCargoBundle(c, await loadBundleCatalog(c), input.id);
+      return read;
+    });
+    if (!bundle) throw new ApiError("NOT_FOUND", "This cargo file is not on your desk.", 404);
+
+    const tables = bundleTables(bundle, generatedAt, gate.actor, false);
+    const pdf = input.format === "pdf";
+    const title = `Cargo file ${bundle.fileNumber}`;
+    const bytes = pdf
+      ? await buildPdfBook(tables, {
+        title,
+        subtitle: "Every register this platform holds on one clearing and forwarding file"
+      })
+      : await buildWorkbook(tables);
+
+    await withTenant(req.user.tid, (c) => writeAudit(c, {
+      tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
+      userAgent: req.headers["user-agent"] ?? null, requestId: req.requestId,
+      // The file is a row, so unlike a report export this one may name it.
+      entity: "cargo_shipments", entityId: input.id,
+      action: pdf ? "export.file.pdf" : "export.file.xlsx",
+      after: { report: "cargo-file", file_number: bundle.fileNumber,
+        registers: tables.length, rows: bundle.rowCount, documents: bundle.documents.length,
+        truncated: bundle.truncated.length, bytes: bytes.length }
+    }));
+
+    // A download name a browser will accept, built the same way the single-register
+    // writer builds its own: the file number is typed by a clerk, not minted here.
+    const stem = `cargo-file-${bundle.fileNumber}`.toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "cargo-file";
+    reply.header("Content-Disposition", `attachment; filename="${stem}-${officeDay(generatedAt)}.${input.format}"`);
+    reply.header("Cache-Control", "no-store");
+    reply.type(pdf ? "application/pdf"
       : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     return bytes;
   });
@@ -294,9 +376,15 @@ export async function exportRoutes(app: FastifyInstance, _opts: unknown) {
         await put(`${bundle.folder}/README.txt`, Buffer.from(bundleReadme(bundle, actor, generatedAt), "utf8"));
         await put(`${bundle.folder}/record.json`, Buffer.from(bundleRecord(bundle, actor, generatedAt), "utf8"));
 
-        // Written last, so its Documents sheet can carry the checksums of what it points at.
-        const workbook = await buildWorkbook(bundleTables(bundle, generatedAt, actor));
-        await put(`${bundle.folder}/cargo-file.xlsx`, workbook);
+        // Written last, so the sheets that name documents can carry the checksums of the
+        // bytes that went in before them — in both formats, because an operator who files
+        // the workbook and a superior who reads the printed book must see the same thing.
+        const tables = bundleTables(bundle, generatedAt, actor);
+        await put(`${bundle.folder}/cargo-file.xlsx`, await buildWorkbook(tables));
+        await put(`${bundle.folder}/cargo-file.pdf`, await buildPdfBook(tables, {
+          title: `Cargo file ${bundle.fileNumber}`,
+          subtitle: "Every register this platform holds on one clearing and forwarding file"
+        }));
         packed.push({
           file: bundle.fileNumber, folder: bundle.folder,
           registers: bundle.registers.length + (bundle.documents.length ? 1 : 0),
@@ -341,7 +429,7 @@ function batchRegister(
   return {
     report: "cargo-batch",
     title: "Cargo batch",
-    subtitle: "One folder per file: record.json, cargo-file.xlsx and documents/",
+    subtitle: "One folder per file: record.json, cargo-file.xlsx, cargo-file.pdf and documents/",
     meta: [{ label: "Files", value: String(packed.length) }],
     columns: [
       { key: "file", label: "File number", type: "text", width: 160 },
@@ -369,6 +457,7 @@ function rootReadme(actor: string, generatedAt: Date,
     `${packed.length} of ${requested} requested file(s) are in this archive. Each folder holds:`,
     "  record.json       every register of that file as data",
     "  cargo-file.xlsx   the same registers, one sheet each, with totals",
+    "  cargo-file.pdf    the same registers, printed, one section per register",
     "  documents/        the stored documents, exactly as uploaded",
     "",
     "Files:",

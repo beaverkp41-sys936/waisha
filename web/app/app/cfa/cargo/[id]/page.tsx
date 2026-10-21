@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { apiFetch, seatPermissions } from "../../../api-client";
 import { ImportMaster } from "@/components/ImportMaster";
+import { CargoFileExportButtons } from "@/components/CargoFileExportButtons";
 
 function errorText(json: any, fallback: string): string {
   const d = json?.error?.details;
@@ -311,6 +312,7 @@ export default function CargoDetailPage() {
           )}
           <button type="button" onClick={() => window.print()}
             className="on-photo-btn px-16 py-8 text-xs font-semibold">Print</button>
+          <CargoFileExportButtons shipmentId={id} fileNumber={file.file_number} />
           {editable && (
             <button type="button" disabled={busy} onClick={remove}
               className="on-photo-btn px-16 py-8 text-xs font-semibold" style={{ color: "#ff9d94" }}>Delete</button>

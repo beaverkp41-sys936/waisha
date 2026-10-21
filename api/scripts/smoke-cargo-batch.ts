@@ -13,9 +13,10 @@
  * SHA256SUMS.txt inside it. Nothing here parses the ZIP format: every assertion below is
  * made against a tree an independent program extracted.
  *
- * The fixture is planted by SQL as the migration owner and torn down by the ids it minted,
- * but the documents go through the real upload endpoint, because an archive of cargo is
- * only worth checking if its bytes came out of Supabase Storage.
+ * The fixture plants its own two companies and its own director seat, then plants the
+ * registers by SQL as the migration owner and tears them down by the ids it minted. The
+ * documents go through the real upload endpoint, because an archive of cargo is only
+ * worth checking if its bytes came out of Supabase Storage.
  *
  * Run: npx tsx scripts/smoke-cargo-batch.ts   (with the API booted)
  */
@@ -24,6 +25,7 @@ import pg from "pg";
 import { SignJWT } from "jose";
 import { Workbook } from "exceljs";
 import { spawnSync } from "node:child_process";
+import { extractTextLines } from "../src/billing/pdf.js";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -35,6 +37,8 @@ const ARCHIVE = path.join(TMP, "batch.zip");
 const OUT = path.join(TMP, "out");
 
 const STAMP = Date.now().toString().slice(-8);
+const COMPANY = `Batch Smoke ${STAMP}`;
+const STRANGER = `Batch Stranger ${STAMP}`;
 const FILE_A = `ZIP-${STAMP}`;
 const FILE_B = `ZIP-${STAMP}-B`;
 const CONSIGNEE = `Batch Smoke Consignee ${STAMP}`;
@@ -76,7 +80,7 @@ const sourceTableOf = (sheet: Sheet): string => {
 };
 
 async function main() {
-  const startedAt = Date.now();
+  const startedAt = new Date();
   fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
 
@@ -85,28 +89,76 @@ async function main() {
   await owner.connect();
   const oi = (sql: string, p: unknown[] = []) => owner.query(sql, p as any[]);
 
-  const who = await oi(
-    "select u.id, u.tenant_id, u.full_name from users u" +
-    " join user_roles ur on ur.user_id = u.id join roles r on r.id = ur.role_id" +
-    " where r.key = 'director' and u.deleted_at is null" +
-    " and u.tenant_id = (select tenant_id from cargo_shipments where deleted_at is null" +
-    "   order by created_at desc limit 1) limit 1");
-  if (!who.rowCount) throw new Error("no director seat on hand — seed the sweep fixture first");
-  const { id: userId, tenant_id: tid, full_name: fullName } = who.rows[0];
+  // The fixture brings its own two companies and its own seat. An export gate can only be
+  // proved against a role that certainly holds the duty, and a smoke that hunts for a live
+  // cargo file stops testing the moment the desk it was written on is cleared.
+  const tid = randomUUID();
+  const otherTenant = randomUUID();
 
-  const mint = (sub: string, role: string) => new SignJWT({ tid, sid: randomUUID(), typ: role, roles: [role] })
-    .setProtectedHeader({ alg: "HS256" }).setSubject(sub)
-    .setIssuedAt().setExpirationTime("20m").sign(key);
+  /** Every row a company of this run's shape could hold, then the company itself. */
+  async function sweep(at: string) {
+    for (const sql of [
+      "delete from documents where tenant_id = $1",
+      "delete from job_documents where tenant_id = $1",
+      "delete from quotation_items where tenant_id = $1",
+      "delete from quotations where tenant_id = $1",
+      "delete from office_costs where tenant_id = $1",
+      "delete from messages where tenant_id = $1",
+      "delete from message_reads where tenant_id = $1",
+      "delete from job_handovers where tenant_id = $1",
+      "delete from job_activity where tenant_id = $1",
+      "delete from cargo_tasks where tenant_id = $1",
+      "delete from job_stages where tenant_id = $1",
+      "delete from jobs where tenant_id = $1",
+      "delete from cargo_shipments where tenant_id = $1",
+      "delete from user_roles where user_id in (select id from users where tenant_id = $1)",
+      "delete from sessions where user_id in (select id from users where tenant_id = $1)",
+      "delete from roles where tenant_id = $1",
+      "delete from users where tenant_id = $1",
+      "delete from tenants where id = $1"
+    ]) {
+      await oi(sql, [at]).catch((e: any) => console.log(`teardown note: ${String(e.message).slice(0, 90)}`));
+    }
+  }
+
+  // A run killed mid-flight leaves its two companies behind, and they carry no id this run
+  // knows, so they are found by the name the run stamped on them.
+  const orphans = await oi("select id from tenants where name ~ '^Batch (Smoke|Stranger) [0-9]{8}$'");
+  if (orphans.rowCount) {
+    console.log(`sweeping ${orphans.rowCount} company(ies) left by an earlier run`);
+    for (const r of orphans.rows) await sweep(r.id as string);
+  }
+
+  const directorRole = (await oi("select id from roles where key = 'director' and tenant_id is null"))
+    .rows[0]?.id as string | undefined;
+  if (!directorRole) throw new Error("no global director role — the seed is missing");
+  for (const [id, name] of [[tid, COMPANY], [otherTenant, STRANGER]] as [string, string][]) {
+    await oi("insert into tenants (id, type, name, status) values ($1,'transporter',$2,'active')", [id, name]);
+  }
+  const seat = async (at: string, name: string) => {
+    const u = await oi("insert into users (tenant_id, user_type, email, status, full_name)" +
+      " values ($1,'staff',$2,'active',$3) returning id", [at, `dir.bz.${STAMP}@${at.slice(0, 8)}.example.org`, name]);
+    const id = u.rows[0].id as string;
+    await oi("insert into user_roles (user_id, role_id) values ($1,$2)", [id, directorRole]);
+    return id;
+  };
+  const userId = await seat(tid, "Batch Smoke Director");
+  const strangerUser = await seat(otherTenant, "Batch Stranger Director");
+  const fullName = "Batch Smoke Director";
+
+  const mint = (sub: string, role: string, at = tid) =>
+    new SignJWT({ tid: at, sid: randomUUID(), typ: role, roles: [role] })
+      .setProtectedHeader({ alg: "HS256" }).setSubject(sub)
+      .setIssuedAt().setExpirationTime("20m").sign(key);
   const token = await mint(userId, "director");
   const auth = (tok: string | null): Record<string, string> =>
     tok ? { Authorization: `Bearer ${tok}` } : {};
   console.log(`seat ${fullName} tenant ${tid} files ${FILE_A} + ${FILE_B}`);
 
-  // Another company's file: the batch must not be able to reach it. Planted rather than
-  // hunted for, because a database holding only one cargo tenant still has to prove this.
-  const otherTenant = (await oi("select id from tenants where id <> $1 limit 1", [tid]))
-    .rows[0]?.id as string | undefined;
-  const foreignId = otherTenant ? randomUUID() : undefined;
+  // Another company's file, in the other planted company: the batch must not be able to
+  // reach it, and the row is planted rather than hunted for so the gate always has
+  // something real to refuse.
+  const foreignId = randomUUID();
 
   // --- plant ------------------------------------------------------------------------------
   const F = { a: randomUUID(), b: randomUUID(), task1: randomUUID(), task2: randomUUID(),
@@ -126,12 +178,10 @@ async function main() {
     "Batch Smoke Consignor", "Bagged cement", ETA, null, null, "second file of the batch", userId]);
   // The other company's own file, in its own tenant, planted so the gate has something
   // real to refuse.
-  if (otherTenant) {
-    await oi(SHIPMENT, [foreignId, otherTenant, `ZIP-FOREIGN-${STAMP}`, seq + 2, 2026,
-      "Another Company Consignee", "Another Company Consignor", "A file that is not ours",
-      ETA, null, null, `planted by smoke-cargo-batch ${STAMP} to prove the gate`, userId]);
-  }
-  const planted = [F.a, F.b, foreignId].filter(Boolean) as string[];
+  await oi(SHIPMENT, [foreignId, otherTenant, `ZIP-FOREIGN-${STAMP}`, seq + 2, 2026,
+    "Another Company Consignee", "Another Company Consignor", "A file that is not ours",
+    ETA, null, null, `planted by smoke-cargo-batch ${STAMP} to prove the gate`, strangerUser]);
+  const planted = [F.a, F.b, foreignId];
 
   await oi("insert into jobs (id, tenant_id, shipment_id, notes, created_by, updated_by) " +
     "values ($1,$2,$3,$4,$5,$5)", [F.job, tid, F.a, `job opened for ${FILE_A}`, userId]);
@@ -272,8 +322,8 @@ async function main() {
   const dirA = path.join(OUT, folderA);
   const dirB = path.join(OUT, folderB);
   const readText = (p: string) => fs.readFileSync(p, "utf8");
-  check("each file gets a folder of its own, with a readme, a record and a workbook",
-    [dirA, dirB].every((d) => ["README.txt", "record.json", "cargo-file.xlsx"]
+  check("each file gets a folder of its own, with a readme, a record, a workbook and a printed file",
+    [dirA, dirB].every((d) => ["README.txt", "record.json", "cargo-file.xlsx", "cargo-file.pdf"]
       .every((n) => fs.existsSync(path.join(d, n))))
     && fs.existsSync(path.join(OUT, "README.txt"))
     && fs.existsSync(path.join(OUT, "batch-register.xlsx")), fs.readdirSync(OUT));
@@ -438,6 +488,41 @@ async function main() {
   }
   check("no sheet of any workbook in the archive carries the planted PII", wbLeaks.length === 0, wbLeaks);
 
+  // --- the printed file ---------------------------------------------------------------------
+  // Each folder now carries a PDF of every register next to the workbook. It is opened here
+  // by pdfjs, a reader that has never met this writer: a file only counts as printed if the
+  // register names, the file number and the billed figure come back out of the page.
+  const pdfBytes = fs.readFileSync(path.join(dirA, "cargo-file.pdf"));
+  check("the printed file is a pdf, not an error page saved under a .pdf name",
+    pdfBytes.subarray(0, 5).toString("latin1") === "%PDF-",
+    pdfBytes.subarray(0, 16).toString("latin1"));
+  const printed = await extractTextLines(pdfBytes);
+  // Spaces are squeezed out of both sides: pdfjs pads between the cells of a row, and the
+  // promise is that the letters arrive in order, not that they arrive adjacent.
+  const page = printed.lines.join("").replace(/\s+/g, "");
+  const sheetNames = [...wbA.keys()];
+  check("the printed file lists every register the workbook holds",
+    sheetNames.every((n) => page.includes(n.replace(/\s+/g, ""))),
+    sheetNames.filter((n) => !page.includes(n.replace(/\s+/g, ""))));
+  check("it prints the file number on the cover",
+    page.includes(FILE_A), printed.lines.slice(0, 4));
+  check("a money column is printed as money", page.includes("512,345.67"),
+    printed.lines.filter((l) => l.includes("512")).slice(0, 2));
+  check("the book is longer than the single sheet it used to be",
+    printed.pageCount >= sheetNames.length, { pageCount: printed.pageCount, sheets: sheetNames.length });
+  check("every page says where it stands in the book",
+    printed.lines.some((l) => /^Page 1 of \d+$/.test(l)) && /Page \d+ of \d+/.test(printed.lines.at(-1) ?? ""),
+    printed.lines.slice(0, 2).concat(printed.lines.slice(-2)));
+  check("the printed page holds no planted PII",
+    !printed.lines.some((l) => l.includes(PII)), printed.lines.filter((l) => l.includes(PII)));
+  // A file with no documents must still print, and must not print a documents sheet it
+  // has no rows for.
+  const emptyPdf = await extractTextLines(fs.readFileSync(path.join(dirB, "cargo-file.pdf")));
+  check("the second file prints its own registers and no documents list",
+    emptyPdf.lines.join("").replace(/\s+/g, "").includes(FILE_B)
+    && !emptyPdf.lines.some((l) => l.startsWith("Path in archive")),
+    emptyPdf.lines.slice(0, 6));
+
   const rootReadme = readText(path.join(OUT, "README.txt"));
   check("the root readme counts the files it holds after the duplicate id was dropped",
     /2 of 2 requested file\(s\)/.test(rootReadme) && rootReadme.includes(FILE_A)
@@ -459,22 +544,22 @@ async function main() {
   check("a seat without the export duty is refused before a byte exists", denied.status === 403,
     { status: denied.status, body: (await denied.text()).slice(0, 160) });
 
-  if (foreignId) {
-    const stranger = await call({ ids: [foreignId] });
-    const said = (await stranger.text()).slice(0, 160);
-    check("another company's file is not on this desk, so nothing is exported",
-      stranger.status === 404 && !said.includes(FILE_A), { status: stranger.status, said });
-    const mixed = await call({ ids: [F.a, foreignId] });
-    const mixedBytes = Buffer.from(await mixed.arrayBuffer());
-    // One foreign id in a selection of otherwise-legal files must stop the whole batch:
-    // a partial archive would read as a complete one to whoever opened it.
-    check("a foreign id in a legal batch is refused before a byte is written",
-      mixed.status === 404 && mixedBytes.subarray(0, 2).toString("latin1") !== "PK",
-      { status: mixed.status, head: mixedBytes.subarray(0, 4).toString("hex"),
-        body: mixedBytes.toString("utf8").slice(0, 120) });
-  } else {
-    check("a second company was planted for the cross-tenant gate", false, { otherTenant });
-  }
+  const stranger = await call({ ids: [foreignId] });
+  const said = (await stranger.text()).slice(0, 160);
+  check("another company's file is not on this desk, so nothing is exported",
+    stranger.status === 404 && !said.includes(FILE_A), { status: stranger.status, said });
+  const mixed = await call({ ids: [F.a, foreignId] });
+  const mixedBytes = Buffer.from(await mixed.arrayBuffer());
+  // One foreign id in a selection of otherwise-legal files must stop the whole batch:
+  // a partial archive would read as a complete one to whoever opened it.
+  check("a foreign id in a legal batch is refused before a byte is written",
+    mixed.status === 404 && mixedBytes.subarray(0, 2).toString("latin1") !== "PK",
+    { status: mixed.status, head: mixedBytes.subarray(0, 4).toString("hex"),
+      body: mixedBytes.toString("utf8").slice(0, 120) });
+  // The other way round: the stranger's own seat may not pull our file into its archive.
+  const outsider = await call({ ids: [F.a] }, await mint(strangerUser, "director", otherTenant));
+  check("the neighbouring company gets the same answer for our file",
+    outsider.status === 404 && (await outsider.text()).length < 200, outsider.status);
 
   const tooMany = await call({ ids: Array.from({ length: 26 }, () => F.a) });
   check("26 files in one batch are refused", tooMany.status === 400,
@@ -487,7 +572,8 @@ async function main() {
   // --- the audit trail ------------------------------------------------------------------------
   const audit = await oi(
     "select action, entity, entity_id, after from audit_logs where tenant_id = $1" +
-    " and entity = 'report_exports' and action = 'export.zip' order by ts desc limit 1", [tid]);
+    " and entity = 'report_exports' and action = 'export.zip' and ts >= $2 order by ts desc limit 1",
+    [tid, startedAt]);
   const a: any = audit.rows[0]?.after ?? {};
   check("the packed archive is on the record", audit.rowCount === 1, audit.rowCount);
   check("the audit row names the batch, not its contents",
@@ -524,15 +610,20 @@ async function main() {
     const r = await oi(sql, p);
     console.log(`tore down ${name}: ${r.rowCount} row(s)`);
   }
+  // The companies came with the fixture, so they go with it: everything either seat
+  // touched is deleted by tenant id, and the two rows that were minted for the run are
+  // the last things standing.
+  for (const at of [tid, otherTenant]) await sweep(at);
   const residue = await oi(
     "select (select count(*) from cargo_shipments where id = any($1::uuid[]))::int as files," +
     " (select count(*) from jobs where id = $2)::int as jobs," +
     " (select count(*) from quotations where id = $3)::int as quotations," +
-    " (select count(*) from cargo_shipments where tenant_id = $4 and created_at > $5)::int as new_files," +
-    " (select count(*) from cargo_shipments where tenant_id = $6 and created_at > $5)::int as foreign_files",
-    [planted, F.job, F.quotation, tid, new Date(startedAt), otherTenant]);
-  check("the fixture left no business row behind",
-    Object.values(residue.rows[0]).every((n) => Number(n) === 0), residue.rows[0]);
+    " (select count(*) from documents where tenant_id = any($4::uuid[]))::int as docs," +
+    " (select count(*) from users where tenant_id = any($4::uuid[]))::int as seats," +
+    " (select count(*) from tenants where id = any($4::uuid[]))::int as companies",
+    [planted, F.job, F.quotation, [tid, otherTenant]]);
+  check("the fixture left no business row, seat or company behind",
+    Object.values(residue.rows[0]).every((v) => Number(v) === 0), residue.rows[0]);
 
   await owner.end();
   console.log(`\narchive ${bytes.length} bytes, ${listed.length} entries, extracted to ${OUT}`);

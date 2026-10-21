@@ -49,33 +49,79 @@ const q = (ident: string): string => `"${ident.replace(/"/g, '""')}"`;
  */
 const TENANT = "(nullif(current_setting('app.tenant_id', true), '')::uuid)";
 
-/** The file's own story, in the order an operator reads it. */
-const REGISTERS: {
+/** One step of a chain back to the file: a table, and the column on it that points one
+ *  step further back. The last step names the file itself. */
+type Hop = { table: string; on: string };
+
+type RegisterLink = {
   sheet: string;
   table: string;
   /** The column that points at the shipment, or at a row of another register. */
   on: string;
-  through?: { table: string; to: string };
+  /**
+   * The parents walked back to the file, nearest first. Each step is read as
+   * `this table.on in (select the next table.id where the next table is in this file)`,
+   * so a register two or three desks away — an invoice line, a debit note's charge
+   * lines, a checklist tick — is still the file's own. A register whose chain names a
+   * column the database does not have is skipped rather than guessed at.
+   */
+  via?: Hop[];
   caption: string;
-}[] = [
+};
+
+/** The file's own story, in the order an operator reads it. */
+const REGISTERS: RegisterLink[] = [
+  { sheet: "Intake drafts", table: "cargo_intake_drafts", on: "committed_shipment_id",
+    caption: "The scanned pages this file was typed from" },
   { sheet: "Tasks", table: "cargo_tasks", on: "shipment_id", caption: "Clearing jobs on this file" },
   { sheet: "Stages", table: "job_stages", on: "shipment_id", caption: "The pipeline steps of the file's job" },
   { sheet: "Job", table: "jobs", on: "shipment_id", caption: "The internal job opened for this file" },
   { sheet: "Activity", table: "job_activity", on: "shipment_id", caption: "Who did what to the file, and when" },
   { sheet: "Handovers", table: "job_handovers", on: "shipment_id", caption: "Physical handovers of the file or its originals" },
   { sheet: "File documents", table: "job_documents", on: "shipment_id", caption: "The document register: expected, received, verified" },
+  { sheet: "Import masters", table: "cargo_import_masters", on: "shipment_id",
+    caption: "The signed master sheets: invoice, packing list and bill of lading in one declaration" },
   { sheet: "Messages", table: "messages", on: "shipment_id", caption: "The thread on this file" },
   { sheet: "Read states", table: "message_reads", on: "shipment_id", caption: "Who has read the thread up to where" },
   { sheet: "Office tasks", table: "office_tasks", on: "shipment_id", caption: "Office work raised against this file" },
-  { sheet: "Task steps", table: "office_task_steps", on: "office_task_id", through: { table: "office_tasks", to: "id" }, caption: "The steps recorded against those office tasks" },
+  { sheet: "Task steps", table: "office_task_steps", on: "office_task_id",
+    via: [{ table: "office_tasks", on: "shipment_id" }],
+    caption: "The steps recorded against those office tasks" },
+  { sheet: "Step checks", table: "office_task_step_checks", on: "step_id",
+    via: [{ table: "office_task_steps", on: "office_task_id" }, { table: "office_tasks", on: "shipment_id" }],
+    caption: "The checklist ticks against those steps, and who put them there" },
   { sheet: "Office costs", table: "office_costs", on: "shipment_id", caption: "Money the office spent on this file" },
   { sheet: "Quotations", table: "quotations", on: "shipment_id", caption: "Proformas raised for this file" },
-  { sheet: "Quotation lines", table: "quotation_items", on: "quotation_id", through: { table: "quotations", to: "id" }, caption: "The charge lines of those proformas" },
-  { sheet: "Billing docs", table: "billing_documents", on: "quotation_id", through: { table: "quotations", to: "id" }, caption: "Invoices and receipts issued from those proformas" },
+  { sheet: "Quotation lines", table: "quotation_items", on: "quotation_id",
+    via: [{ table: "quotations", on: "shipment_id" }],
+    caption: "The charge lines of those proformas" },
+  { sheet: "Billing docs", table: "billing_documents", on: "quotation_id",
+    via: [{ table: "quotations", on: "shipment_id" }],
+    caption: "Invoices and receipts issued from those proformas" },
+  { sheet: "Freight invoices", table: "freight_invoices", on: "source_quotation_id",
+    via: [{ table: "quotations", on: "shipment_id" }],
+    caption: "The final invoices those proformas were converted into" },
+  { sheet: "Invoice lines", table: "freight_invoice_items", on: "invoice_id",
+    via: [{ table: "freight_invoices", on: "source_quotation_id" }, { table: "quotations", on: "shipment_id" }],
+    caption: "Every charge line billed on those invoices" },
+  { sheet: "Invoice payments", table: "freight_invoice_payments", on: "invoice_id",
+    via: [{ table: "freight_invoices", on: "source_quotation_id" }, { table: "quotations", on: "shipment_id" }],
+    caption: "What has been received against those invoices" },
+  { sheet: "Debit notes", table: "debit_notes", on: "related_invoice_id",
+    via: [{ table: "freight_invoices", on: "source_quotation_id" }, { table: "quotations", on: "shipment_id" }],
+    caption: "Debit notes raised against those invoices" },
+  { sheet: "Debit note lines", table: "debit_note_items", on: "debit_note_id",
+    via: [{ table: "debit_notes", on: "related_invoice_id" },
+      { table: "freight_invoices", on: "source_quotation_id" }, { table: "quotations", on: "shipment_id" }],
+    caption: "The charge lines of those debit notes" },
   { sheet: "Manifests", table: "consolidations", on: "shipment_id", caption: "Consolidation manifests carrying this file" },
-  { sheet: "Parcels", table: "consolidation_parcels", on: "manifest_id", through: { table: "consolidations", to: "id" }, caption: "The parcels on those manifests" },
+  { sheet: "Parcels", table: "consolidation_parcels", on: "manifest_id",
+    via: [{ table: "consolidations", on: "shipment_id" }],
+    caption: "The parcels on those manifests" },
   { sheet: "Requests", table: "transport_requests", on: "shipment_id", caption: "Publishes of this cargo to the notice board" },
-  { sheet: "Bookings", table: "transport_bookings", on: "request_id", through: { table: "transport_requests", to: "id" }, caption: "Bookings accepted against those requests" },
+  { sheet: "Bookings", table: "transport_bookings", on: "request_id",
+    via: [{ table: "transport_requests", on: "shipment_id" }],
+    caption: "Bookings accepted against those requests" },
   { sheet: "Shipper shares", table: "shipper_file_shares", on: "shipment_id", caption: "Visibility granted to a shipper's own account" }
 ];
 
@@ -142,7 +188,13 @@ export type BundleCatalog = {
   labels: Map<string, { parent: string; parentKey: string; label: string; scoped: boolean }>;
 };
 
-const BUNDLE_TABLES = ["cargo_shipments", ...REGISTERS.map((r) => r.table)];
+/** Every table the bundle reads: the registers, the file, and every parent a chain walks
+ *  through — because a hop's columns are checked against this same catalog, not tried. */
+const BUNDLE_TABLES = [...new Set([
+  "cargo_shipments",
+  ...REGISTERS.map((r) => r.table),
+  ...REGISTERS.flatMap((r) => r.via?.map((h) => h.table) ?? [])
+])];
 
 export async function loadBundleCatalog(c: PoolClient): Promise<BundleCatalog> {
   const columns = await c.query(`
@@ -263,8 +315,58 @@ type Register = {
   withheld: string[];
 };
 
+/**
+ * `t.deleted_at is null`, for the tables that have one. A row the desk can no longer open
+ * is not an entity of this file, and an export that printed a cancelled invoice as though
+ * it were current would state something the screen never said.
+ */
+function alive(catalog: BundleCatalog, table: string, prefix: string): string {
+  return catalog.projections.get(table)?.has.has("deleted_at")
+    ? ` and ${prefix}deleted_at is null` : "";
+}
+
+/**
+ * The predicate that keeps one register inside this file.
+ *
+ * Answered from the catalog rather than tried, because a chain is read as one statement:
+ * a hop naming a column that was renamed by a later migration would abort the transaction
+ * every other register of this bundle is being read inside. A register whose chain cannot
+ * be honoured is left out of the file, which the bundle's own sheet count makes visible.
+ */
+function chainWhere(catalog: BundleCatalog, link: RegisterLink): string | null {
+  const usable = (table: string, column: string): boolean => {
+    const entry = catalog.projections.get(table);
+    return SAFE_IDENT.test(table) && SAFE_IDENT.test(column)
+      && entry?.has.has(column) === true;
+  };
+  const hops = link.via ?? [];
+  if (!usable(link.table, link.on)) return null;
+  for (const hop of hops) {
+    const columns = catalog.projections.get(hop.table)?.has;
+    if (!usable(hop.table, hop.on) || !columns?.has("id") || !columns.has("tenant_id")) {
+      return null;
+    }
+  }
+  if (!hops.length) return q(link.on) + " = $1";
+
+  // Built from the file inward: the last hop is the one that names the file, and each
+  // hop before it is kept by the column that points at the hop after it.
+  const predicates = new Array<string>(hops.length);
+  for (let i = hops.length - 1; i >= 0; i--) {
+    const hop = hops[i];
+    const tq = q(hop.table);
+    const base = `${tq}.tenant_id = ${TENANT}${alive(catalog, hop.table, `${tq}.`)}`;
+    predicates[i] = i === hops.length - 1
+      ? `${base} and ${q(hop.on)} = $1`
+      : `${base} and ${q(hop.on)} in (select ${q(hops[i + 1].table)}.id`
+        + ` from ${q(hops[i + 1].table)} where ${predicates[i + 1]})`;
+  }
+  return `${q(link.on)} in (select ${q(hops[0].table)}.id from ${q(hops[0].table)}`
+    + ` where ${predicates[0]})`;
+}
+
 async function readRegister(
-  c: PoolClient, catalog: BundleCatalog, link: typeof REGISTERS[number], shipmentId: string
+  c: PoolClient, catalog: BundleCatalog, link: RegisterLink, shipmentId: string
 ): Promise<Register | null> {
   const entry = catalog.projections.get(link.table);
   if (!entry?.projected.length) return null;
@@ -272,16 +374,14 @@ async function readRegister(
   // A register with no tenant column of its own cannot be scoped here, so it is not
   // exported at all rather than exported for every company.
   if (!has.has("tenant_id")) return null;
+  const where = chainWhere(catalog, link);
+  if (!where) return null;
   const first = projected[0].name;
   const orderColumn = has.has("created_at") ? "created_at" : has.has("id") ? "id" : first;
   const scoped = `tenant_id = ${TENANT}`;
-  const where = link.through
-    ? `${q(link.on)} in (select ${q(link.through.to)} from ${q(link.through.table)}`
-      + ` where shipment_id = $1 and ${scoped})`
-    : `${q(link.on)} = $1`;
   const sql = `select ${projected.map((p) => p.expression).join(", ")}
                  from ${q(link.table)}
-                where ${where} and ${scoped}
+                where ${where} and ${scoped}${alive(catalog, link.table, "")}
                 order by ${q(orderColumn)} nulls last
                 limit $2`;
   const found = await c.query(sql, [shipmentId, ROW_CAP + 1]);
@@ -337,33 +437,45 @@ function tableOf(reg: Register, generatedAt: Date, actor: string): PreparedTable
   };
 }
 
-function documentsRegister(bundle: CargoBundle): Register {
+function documentsRegister(bundle: CargoBundle, packed: boolean): Register {
   return {
     table: "documents",
     sheet: "Documents",
-    caption: "Every document stored against this file, in the folder of the same name",
-    columns: [
-      { key: "entry", label: "Path in archive", type: "text" },
-      { key: "kind", label: "Kind", type: "text" },
-      { key: "entity", label: "Attached to", type: "text" },
-      { key: "file_name", label: "File name", type: "text" },
-      { key: "mime_type", label: "MIME type", type: "text" },
-      { key: "size_bytes", label: "Bytes", type: "number" },
-      { key: "uploaded_at", label: "Uploaded (UTC)", type: "text" },
-      { key: "in_archive", label: "In this archive", type: "bool" },
-      { key: "sha256", label: "SHA-256", type: "text" }
-    ],
-    rows: bundle.documents.map((d) => ({
-      entry: d.entryName,
-      kind: d.kind,
-      entity: `${d.entityType} ${d.id.slice(0, 8)}`,
-      file_name: d.fileName,
-      mime_type: d.mimeType,
-      size_bytes: d.sizeBytes,
-      uploaded_at: d.uploadedAt,
-      in_archive: d.missing === null,
-      sha256: d.sha256
-    })),
+    caption: packed
+      ? "Every document stored against this file, in the folder of the same name"
+      : "Every document stored against this file — this is a register, not an archive. "
+        + "The ZIP export is what carries the files themselves.",
+    columns: packed
+      ? [
+        { key: "entry", label: "Path in archive", type: "text" },
+        { key: "kind", label: "Kind", type: "text" },
+        { key: "entity", label: "Attached to", type: "text" },
+        { key: "file_name", label: "File name", type: "text" },
+        { key: "mime_type", label: "MIME type", type: "text" },
+        { key: "size_bytes", label: "Bytes", type: "number" },
+        { key: "uploaded_at", label: "Uploaded (UTC)", type: "text" },
+        { key: "in_archive", label: "In this archive", type: "bool" },
+        { key: "sha256", label: "SHA-256", type: "text" }
+      ]
+      : [
+        { key: "kind", label: "Kind", type: "text" },
+        { key: "entity", label: "Attached to", type: "text" },
+        { key: "file_name", label: "File name", type: "text" },
+        { key: "mime_type", label: "MIME type", type: "text" },
+        { key: "size_bytes", label: "Bytes", type: "number" },
+        { key: "uploaded_at", label: "Uploaded (UTC)", type: "text" }
+      ],
+    rows: bundle.documents.map((d): Record<string, Cell> => packed
+      ? {
+        entry: d.entryName, kind: d.kind, entity: `${d.entityType} ${d.id.slice(0, 8)}`,
+        file_name: d.fileName, mime_type: d.mimeType, size_bytes: d.sizeBytes,
+        uploaded_at: d.uploadedAt, in_archive: d.missing === null, sha256: d.sha256
+      }
+      : {
+        kind: d.kind, entity: `${d.entityType} ${d.id.slice(0, 8)}`,
+        file_name: d.fileName, mime_type: d.mimeType, size_bytes: d.sizeBytes,
+        uploaded_at: d.uploadedAt
+      }),
     truncated: false,
     withheld: []
   };
@@ -372,11 +484,14 @@ function documentsRegister(bundle: CargoBundle): Register {
 /**
  * The workbook sheets for one file, built only once the document bytes have been
  * hashed — the archive writes this sheet last so its checksum column is a fact rather
- * than a promise.
+ * than a promise. A register that packs nothing passes `packed: false`, and the sheet
+ * then lists the documents without claiming to hold them.
  */
-export function bundleTables(bundle: CargoBundle, generatedAt: Date, actor: string): PreparedTable[] {
+export function bundleTables(
+  bundle: CargoBundle, generatedAt: Date, actor: string, packed = true
+): PreparedTable[] {
   const registers = bundle.documents.length
-    ? [...bundle.registers, documentsRegister(bundle)]
+    ? [...bundle.registers, documentsRegister(bundle, packed)]
     : bundle.registers;
   return registers.map((reg) => tableOf(reg, generatedAt, actor));
 }
@@ -494,7 +609,8 @@ export function bundleRecord(bundle: CargoBundle, actor: string, generatedAt: Da
     shipment_id: bundle.shipmentId,
     note: "Timestamps are UTC (…Z), a plain date is a calendar day. Encrypted columns and "
       + "their search hashes are not selected — see withheld_columns. Each *_name column "
-      + "is the row the id in the column beside it points at.",
+      + "is the row the id in the column beside it points at. A row deleted from its own "
+      + "register is not here, because the desk no longer shows it.",
     withheld_columns: bundle.withheld,
     truncated_registers: bundle.truncated,
     documents: bundle.documents.map((d) => ({
@@ -517,6 +633,7 @@ export function bundleReadme(bundle: CargoBundle, actor: string, generatedAt: Da
     "Contents:",
     `  ${bundle.folder}/record.json          every register below, as data`,
     `  ${bundle.folder}/cargo-file.xlsx      one sheet per register, with totals`,
+    `  ${bundle.folder}/cargo-file.pdf       one printed section per register`,
     `  ${bundle.folder}/documents/           ${inside.length} stored file(s), exactly as uploaded`,
     "",
     "Registers:",
