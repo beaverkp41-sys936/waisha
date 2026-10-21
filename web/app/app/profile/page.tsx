@@ -308,11 +308,14 @@ export default function ProfilePage() {
               </p>
             )}
           </div>
-        </div>
 
-        <span className="profile-avatar">
-          {logoUrl ? <img src={logoUrl} alt="Company logo" /> : <Building2 aria-hidden strokeWidth={1.6} />}
-        </span>
+          {/* Inside the cover, not beside it: the plate is positioned from the cover's bottom
+              edge so it straddles the seam onto the card body. As a sibling it resolved
+              against the whole card and hung off the end of the page instead. */}
+          <span className="profile-avatar">
+            {logoUrl ? <img src={logoUrl} alt="Company logo" /> : <Building2 aria-hidden strokeWidth={1.6} />}
+          </span>
+        </div>
 
         <div className="profile-body">
           <div className="tabs" role="tablist" aria-label="Company profile sections">

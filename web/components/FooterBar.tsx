@@ -3,6 +3,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { WeatherStrip } from "@/components/WeatherStrip";
+import { FooterReserve } from "@/components/FooterReserve";
 
 /* One composition for both footers: the marketing shell renders this from the
    server Footer, the portal scroll container from the client ShellFooter. Keeping
@@ -146,6 +147,7 @@ export function FooterBar({ content, weather = true }:
       )}
 
       {copyright && <p className="footer-rights">{copyright}</p>}
+      <FooterReserve />
     </footer>
   );
 }

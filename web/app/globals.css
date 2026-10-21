@@ -12,8 +12,11 @@
   --olive: #8a9a3a;
   /* Gold/green tuned for text and icons on the light glass (see .app-content
      scope below); the brand gold above is for the dark chrome. */
-  --gold-ink: #6d540d;
-  --gold-green-ink: #52601a;
+  --gold-ink: #5b4509;
+  /* The step is small and it is entirely measured: at #52601a the 11px "Step 1"
+     caption on a glass card read 4.49:1 against rgb(205,209,212), so the hue had to
+     lose enough light to clear the floor with room for the darker glass. */
+  --gold-green-ink: #4a5717;
   /* Gold for text that sits on the photo-backed dark glass (the auth card).
      The brand gold is too dim there — this is the same hue, lifted. */
   --gold-on-photo: #f2d795;
@@ -22,15 +25,18 @@
      can move without rewriting 30 screens of inline var() calls. */
   --ink: #123249;
   /* Soft ink is tuned for the 80% white glass cards: any lighter and it washes
-     out against the pane behind them. Same for the status hues when they are
-     used as text. */
-  --ink-soft: #35526a;
+     out against the pane behind them. The glass is not one grey — the sweep
+     measured it from rgb(215) down to rgb(162) depending on how bright the sky
+     is under a given card — so the floor is set by the darkest glass a sentence
+     actually lands on, and at #294358 an 11px caption on rgb(162,170,175) read
+     4.36:1. Same for the status hues when they are used as text. */
+  --ink-soft: #203a4d;
   --brand: var(--navy);
   --brand-deep: var(--navy-deep);
   --gold-green: var(--olive);
   --gold-green-dark: #6f7d2c;
-  --success: #1f6344;
-  --warning: #7d5508;
+  --success: #17553a;
+  --warning: #6b4a06;
   --danger: #94332f;
 
   /* Surfaces. --surface is the frosted card fill; --line stays neutral enough
@@ -57,9 +63,29 @@
      In this theme those fills are dark, so the text is white; the dark theme
      flips both and this token carries the readable tone there. */
   --on-solid: #ffffff;
-  /* Success green tuned for text on the photo/pane rather than dark chrome —
-     the brand green is too dark against the pane in this theme. */
+  /* The on-photo set: what each hue has to become to read on the pane. The pane
+     is a navy wash over a bright sky, so the light-glass tints (success, warning,
+     danger, gold-green, brand) are all too dark to survive there and every one of
+     them needs a lifted twin. The glass scope below hands these back the light
+     palette, so a call site that names an on-photo token still reads correctly
+     when the copy lands on a card instead of on the photo. */
   --success-on-photo: #a5ecc4;
+  --danger-on-photo: #ffb4ad;
+  --warning-on-photo: #ffd9a0;
+  --gold-green-on-photo: #b8cc5e;
+  --brand-on-photo: #9ecdf1;
+  /* A snapshot of the theme's light-glass palette, taken at :root so the two
+     scopes can hand text back to it without repeating every value per theme.
+     Custom-property substitution happens on the element that declares it, so
+     these always read the winning :root values — light theme or dark. */
+  --glass-ink: var(--ink);
+  --glass-ink-soft: var(--ink-soft);
+  --glass-brand: var(--brand);
+  --glass-gold: var(--gold-ink);
+  --glass-gold-green: var(--gold-green-ink);
+  --glass-success: var(--success);
+  --glass-warning: var(--warning);
+  --glass-danger: var(--danger);
 
   /* Shell metrics */
   --sidebar-w: 272px;
@@ -68,11 +94,16 @@
 
   /* The right-hand pane is a partially transparent sheet over the photo so the
      records on it read clearly while the background stays visible. The alpha is
-     set by the brightest part of the photos: below this, white pane text drops
-     under 4.5:1 where the sky shows through. */
-  --pane-bg: rgba(6, 24, 38, 0.58);
+     set by the brightest part of the photos: at the previous 0.58 the sky still
+     pushed through at rgb(112) where the photos are near-white, and the smallest
+     pane copy — 12.5px notes at 0.92 white — measured 3.7:1 there. This is the
+     floor that puts it back over 4.5:1 without hiding the photo. */
+  --pane-bg: rgba(6, 24, 38, 0.66);
   --topbar-bg: rgba(8, 28, 44, 0.6);
-  --footer-bg: rgba(8, 28, 44, 0.58);
+  /* The bar carries 11px white copy and sits inside the pane, so it needs its
+     own wash on top: at 0.58 over the pane the brightest sky still reached
+     rgb(124) and the weather readings measured 4.2:1. */
+  --footer-bg: rgba(8, 28, 44, 0.8);
 
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   color-scheme: light;
@@ -101,9 +132,13 @@
     --side-bottom: rgba(3, 13, 21, 0.48);
     --on-solid: #061a29;
     --success-on-photo: #5fce93;
+    --danger-on-photo: #ef8a86;
+    --warning-on-photo: #e2b45f;
+    --gold-green-on-photo: #b8cc5e;
+    --brand-on-photo: #7fb2d8;
     --pane-bg: rgba(3, 13, 21, 0.56);
     --topbar-bg: rgba(2, 10, 17, 0.72);
-    --footer-bg: rgba(2, 10, 17, 0.72);
+    --footer-bg: rgba(2, 10, 17, 0.78);
     color-scheme: dark;
   }
 }
@@ -227,6 +262,14 @@ body:has(.auth-shell) > main,
 body:has(.portal-shell) > main,
 body:has(.page-shell) > main { display: flex; flex-direction: column; }
 
+/* Those three pages are scrolled by the body while the marketing bar sticks to the bottom of
+   the viewport, so the bar floats over whatever page content reaches that edge — the sign-in
+   button on the phone sweep was 17px inside it. Same measured reserve the portal pane keeps
+   for its own copy of the bar; these pages have no `.app-content` of their own to carry it. */
+body:has(.auth-shell) > main,
+body:has(.portal-shell) > main,
+body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 44px) + 4px); }
+
 /* Semi-transparent bar: the photo stays faintly visible behind it while the
    text reads clearly. Sticky to the bottom of whichever scroller owns it —
    short pages (the office hub) pin it to the viewport edge instead of letting
@@ -339,12 +382,15 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 }
 .weather-locate {
   border: 1px solid rgba(255, 255, 255, 0.45);
-  background: rgba(255, 255, 255, 0.14);
+  /* The pill used to be a white wash, which is the one thing that cannot sit
+     under white text: it lifted the footer's own backdrop to rgb(124) and the
+     11px location read 4.2:1. A navy plate keeps the outline and loses the glare. */
+  background: rgba(6, 24, 38, 0.5);
   color: #fff;
   cursor: pointer;
   text-shadow: inherit;
 }
-.weather-locate:hover { background: rgba(255, 255, 255, 0.24); }
+.weather-locate:hover { background: rgba(6, 24, 38, 0.66); }
 .weather-locate:disabled { opacity: 0.65; cursor: progress; }
 .weather-note { color: rgba(255, 255, 255, 0.85); }
 
@@ -423,8 +469,11 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   border: 1px solid rgba(255, 255, 255, 0.16);
 }
 .workspace-switch a {
-  flex: 1 1 0;
-  padding: 7px 4px;
+  /* An equal third of the plate is 74px at a 272px sidebar and "TRANSPORTER" needs
+     93, so basis 0 cut the word to "TRANSP…" on every desktop page. Basis auto lets
+     each chip hold its own text; the tidy thirds are worth less than a readable label. */
+  flex: 0 1 auto;
+  padding: 7px 9px;
   border-radius: 9px;
   font-size: 11px;
   font-weight: 700;
@@ -784,8 +833,16 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 
 /* --------------------------------------------------------- page furniture */
 /* Grows to fill the pane so the footer below it lands on the viewport edge
-   even when a page is one card tall. */
-.app-content { flex: 1 0 auto; padding-bottom: 48px; }
+   even when a page is one card tall.
+ *
+ * The bar is `position: sticky; bottom: 0`, so the tail of the scroll has to keep its
+ * height clear or the last line of a long page lives under it. That height is not knowable
+ * from CSS: every word the bar carries comes off the command center desk, so an address
+ * line, an hours line or a row of links can appear without anybody touching a stylesheet.
+ * `--footer-h` is written by FooterReserve from the bar's own box as soon as it mounts;
+ * the default here is what the bar measured when this reserve was first written, and the
+ * 4px is the gap that keeps the last row off the hairline. */
+.app-content { flex: 1 0 auto; padding-bottom: calc(var(--footer-h, 44px) + 4px); }
 
 /* Page headings sit on the photo, not on glass. The pages set their colour
    inline, so the override has to win the cascade. */
@@ -818,11 +875,79 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   text-shadow: 0 1px 8px rgba(4, 18, 28, 0.5);
 }
 
-/* Brand gold is drawn for the dark chrome; on the light glass it washes out.
-   Inside the pane, gold text and icons resolve to the readable tone while the
-   elements that were designed for brand gold on their own dark fill (buttons,
-   the empty-state tile, the licence banner, the on-photo button) keep it. */
-.app-content { --gold: var(--gold-ink); --gold-green: var(--gold-green-ink); }
+/* ------------------------------------------- the pane and its glass, two scopes */
+/* The portal pane is a navy wash over a photo, and every card on it is a sheet of
+   white glass. That is two backgrounds wearing one shell, and copy is written
+   against whichever the author happened to be looking at — so whichever palette
+   :root carries is wrong for the other half. Thousands of call sites set
+   `var(--ink-soft)` inline, so the fix cannot be per sentence: it is a scope rule.
+
+   The pane itself flips to the on-photo set. Every light host inside it — the glass
+   utility, the tiles that own a fill of their own, the native controls, and the
+   ~190 panels that carry `var(--milk)` or `var(--surface)` in their style
+   attribute — flips back to the theme's glass palette by reading the :root
+   snapshot. Both directions are measured, so a note that moves from the photo onto
+   a card fails the sweep just as loudly as ink left on the photo does.
+
+   The on-photo aliases are re-declared on the glass hosts too, because rules like
+   `.pane-note` and the bare status banner rule name them directly (some with
+   `!important`): flipping the token reaches that copy without touching the rule.
+   Colour and shadow are re-stated as well — `color: var(--ink)` resolves on the
+   element that declares it, so descendants inherit text from the nearest scope
+   rather than from `body`'s already-substituted value. */
+.app-main {
+  --ink: var(--on-photo);
+  --ink-soft: var(--on-photo-soft);
+  --brand: var(--brand-on-photo);
+  --gold: var(--gold-on-photo);
+  --gold-green: var(--gold-green-on-photo);
+  --success: var(--success-on-photo);
+  --warning: var(--warning-on-photo);
+  --danger: var(--danger-on-photo);
+  color: var(--ink);
+  /* Bare copy sits over a moving photo; the shadow is what keeps a 4.5:1 reading
+     at 5:1 where the sky flares. Inherited, and switched off on the glass below. */
+  text-shadow: 0 1px 8px rgba(4, 18, 28, 0.5);
+}
+.app-main :is(
+  .bg-surface, .stat-tile, .profile-body, input, select, textarea,
+  [style*="--milk"], [style*="--surface"],
+  /* A chip, a tab or a button that paints itself with a status hue is a fill, not
+     a sentence: the words on it were chosen against that fill (`--on-solid`, or a
+     literal white). Leaving it in the pane scope would hand the plate the lifted
+     on-photo tint and put white on pale, which is where the finance and board tabs
+     measured 1.7:1. So a filled element keeps the palette it was picked with.
+     Both spellings are listed: the server writes the attribute without the space
+     the CSSOM puts back the moment React re-applies the style. */
+  [style*="background: var(--brand)"], [style*="background:var(--brand)"],
+  [style*="background: var(--gold)"], [style*="background:var(--gold)"],
+  [style*="background: var(--success)"], [style*="background:var(--success)"],
+  [style*="background: var(--warning)"], [style*="background:var(--warning)"],
+  [style*="background: var(--danger)"], [style*="background:var(--danger)"]) {
+  --ink: var(--glass-ink);
+  --ink-soft: var(--glass-ink-soft);
+  --brand: var(--glass-brand);
+  --gold: var(--glass-gold);
+  --gold-green: var(--glass-gold-green);
+  --success: var(--glass-success);
+  --warning: var(--glass-warning);
+  --danger: var(--glass-danger);
+  --on-photo: var(--glass-ink);
+  --on-photo-soft: var(--glass-ink-soft);
+  --gold-on-photo: var(--glass-gold);
+  --gold-green-on-photo: var(--glass-gold-green);
+  --success-on-photo: var(--glass-success);
+  --warning-on-photo: var(--glass-warning);
+  --danger-on-photo: var(--glass-danger);
+  --brand-on-photo: var(--glass-brand);
+  color: var(--ink);
+  text-shadow: none;
+}
+
+/* Brand gold is drawn for the dark chrome; on the light glass it washes out, which
+   is what the glass scope above now handles. The elements that were designed for
+   brand gold on their own dark fill (the buttons here, the empty-state tile, the
+   licence banner, the on-photo button) still name it directly, so they keep it. */
 .app-content .waisha-btn { background: #c9a84c; }
 .app-content .waisha-btn:hover { background: #b8963d; }
 
@@ -923,9 +1048,12 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(180deg, rgba(8, 28, 44, 0.24) 0%, rgba(8, 28, 44, 0.72) 62%, rgba(6, 22, 36, 0.88) 100%);
+  /* The band the caption sits in measured rgb(112,128,139) under the old ramp —
+     the photo is nearly white there, and 0.92 white copy read 3.7:1. The wash has
+     to be on by the time the type starts, not only at the bottom edge. */
+  background: linear-gradient(180deg, rgba(8, 28, 44, 0.46) 0%, rgba(8, 28, 44, 0.78) 46%, rgba(6, 22, 36, 0.9) 100%);
 }
-.profile-cover > * { position: relative; z-index: 1; }
+.profile-cover > :not(.profile-avatar) { position: relative; z-index: 1; }
 .profile-cover .app-sub { font-size: 12.5px; color: var(--on-photo-soft); }
 .profile-name { font-size: 24px; font-weight: 800; letter-spacing: -0.01em; }
 .profile-meta {
@@ -1037,7 +1165,9 @@ body:has(.page-shell) > main { display: flex; flex-direction: column; }
 .on-photo-btn {
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.48);
-  background: rgba(6, 24, 38, 0.46);
+  /* Measured under the brightest sky: at 0.46 the plate still let rgb(123)
+     through and the 12px white label read 3.8:1. */
+  background: rgba(6, 24, 38, 0.66);
   color: #fff;
   font-size: 12px;
   font-weight: 700;
@@ -1390,7 +1520,10 @@ select.auth-field option { color: var(--ink); }
   }
   /* The bar owns the bottom of the viewport on a touch device, so the home
      indicator has to land on padding, not on the last row of a list. */
-  .app-content { padding-bottom: calc(48px + env(safe-area-inset-bottom)); }
+  .app-content { padding-bottom: calc(var(--footer-h, 44px) + 4px + env(safe-area-inset-bottom)); }
+  body:has(.auth-shell) > main,
+  body:has(.portal-shell) > main,
+  body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 44px) + 4px + env(safe-area-inset-bottom)); }
   .profile-cover {
     min-height: 172px;
     grid-template-columns: minmax(0, 1fr);
@@ -1450,11 +1583,10 @@ select.auth-field option { color: var(--ink); }
   .brand-lockup img { width: 118px; }
   .brand-tagline { display: none; }
   .workspace-switch { grid-column: 2; grid-row: 1; margin: 0 12px 8px 0; flex: 0 1 auto; }
-  /* `flex: 1 1 0` is what makes the plate look tidy on a wide pane: three equal
-     thirds. On a phone it is what cut "TRANSPORTER" to "TRANS…" — an equal share
-     of the row is 62px and the word needs 93. Basis auto lets each chip hold its
-     own text, and the plate sizes to the sum of them. */
-  .workspace-switch a { padding: 8px 9px; min-height: 38px; font-size: 10px; flex: 0 1 auto; }
+  /* Chips already size to their own text (see .workspace-switch a); on a phone the
+     plate shares the header row with the brand, so it also gets a smaller face and
+     the tap floor. */
+  .workspace-switch a { padding: 8px 9px; min-height: 38px; font-size: 10px; }
   .nav-scroll { grid-column: 1 / -1; grid-row: 2; padding: 0 12px 10px; }
   .nav-item { min-height: 40px; padding: 8px 11px; font-size: 13px; }
   .topbar {
@@ -1510,12 +1642,17 @@ select.auth-field option { color: var(--ink); }
      itself in vh; inside a shell that owns the viewport, a vh sheet loses its
      action buttons under the on-screen keyboard. */
   .app-main .fixed.inset-0 > * { max-height: 88dvh; overflow-y: auto; }
-  /* The shell footer is `position: sticky; bottom: 0`, so it floats over the tail
-     of the scroll until the scroll reaches it. Its contact block wraps to three
-     lines on a phone and measures 84px — the 48px reserved at 860px was sized to
-     the 45px two-line bar, and at this width the last line of every long page
-     disappeared under it. Measured at 320 and 390; both give 84. */
-  .app-content { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+  /* The bar is `position: sticky; bottom: 0`, so it floats over the tail of the scroll
+     until the scroll reaches it, and the reserve above has to match its real height or the
+     last line of every long page disappears underneath. That height is now measured by
+     FooterReserve; what still changes at this width is only the first paint, before it can
+     report. The contact block wraps to three lines on a handset and the desk's second row
+     wraps with it — 131px at 390, where the fixed 92px this replaces left 17px of the
+     profile tab strip and of the sign-in button under the bar. */
+  .app-content { padding-bottom: calc(var(--footer-h, 131px) + 4px + env(safe-area-inset-bottom)); }
+  body:has(.auth-shell) > main,
+  body:has(.portal-shell) > main,
+  body:has(.page-shell) > main { padding-bottom: calc(var(--footer-h, 131px) + 4px + env(safe-area-inset-bottom)); }
 }
 
 /* Tap targets. This one keys on the input device, not the width: a thumb needs the

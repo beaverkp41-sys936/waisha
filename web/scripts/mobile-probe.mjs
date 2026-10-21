@@ -28,6 +28,16 @@
  *   MSYS2_ARG_CONV_EXCL='*' node web/scripts/mobile-probe.mjs ...   # from Git Bash, or every
  *                                         --pages value arrives as a rewritten Windows path
  *   ... --shots [--full]                  write one PNG per page into --out
+ *   ... --contrast                        measure every sentence against the pixels actually
+ *                                         behind it, because no other counter here can see a
+ *                                         colour problem: a dark-on-dark page measures
+ *                                         perfectly clean. See COLLECT_TEXT for the method.
+ *                                         A sentence that a floating bar bites into is
+ *                                         counted as `under` instead of graded — its backdrop
+ *                                         is the bar's wash, which is a layout finding.
+ *   ... --show-ok                         with --contrast, also print three lines that pass,
+ *                                         so a clean page can be told apart from a sampler
+ *                                         that measured nothing
  *   ... --eval '<expression>'             print the JSON of any expression, per page
  *   ... --open                            click the page's create control before measuring,
  *                                         because a form that only exists after a tap is the
@@ -63,6 +73,10 @@ const OUT = resolve(flag("out", ".mobile-probe"));
 const PAGES = list("pages", "/login");
 const FULL = args.includes("--full");
 const SHOTS = args.includes("--shots");
+const CONTRAST = args.includes("--contrast");
+// Three passing lines printed next to the failures, so a run can be checked for the
+// sampler itself being wrong rather than only for the pages being wrong.
+const SHOW_OK = args.includes("--show-ok");
 const PORT = Number(flag("port", 9333));
 const TOKEN = process.env.WAISHA_PROBE_TOKEN ?? "";
 // A /control desk is opened by the server-issued cookie, not by the bearer in sessionStorage,
@@ -332,6 +346,167 @@ const MEASURE = `(() => {
   };
 })()`;
 
+/**
+ * Contrast, measured rather than guessed.
+ *
+ * Every other counter here reads geometry, so a page whose sentences are the same colour
+ * as the photo behind it measures clean and reads blank to a person. The old audit walked
+ * the DOM looking for an ancestor with a background — which is blind to the two things that
+ * decide the answer: the photo shows through a 58%-opaque veil, and a colour can be set
+ * inline, in a class, or by a token that flips in a dark scheme.
+ *
+ * So this asks the browser what is actually on the screen. Pass one collects every element
+ * holding its own words with its computed colour and box. Pass two hides all the text on
+ * the page (colour to transparent, shadow off — backgrounds and photos stay) and takes a
+ * screenshot, which is now a picture of nothing but backdrops. Pass three samples the
+ * average pixel of each box out of that picture and runs the WCAG ratio against the colour
+ * the text was going to be drawn in. A sentence over the bare photo at 2.1:1 fails here the
+ * same way it fails in the office.
+ *
+ * Still a template literal: no backticks, and no dollar-brace anywhere inside it.
+ */
+const COLLECT_TEXT = `(() => {
+  const out = [];
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+  const sel = (el) => {
+    const cls = typeof el.className === 'string' ? el.className : '';
+    return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (cls ? '.' + cls.trim().split(/\\s+/).slice(0,3).join('.') : '');
+  };
+  for (const el of document.querySelectorAll('body *')) {
+    // Only a node that carries words of its own. A div wrapping a paragraph is measured
+    // by the paragraph, and its box is the whole card — sampling that would average the
+    // sentence's own pixels into its backdrop.
+    let own = false;
+    for (const n of el.childNodes) {
+      if (n.nodeType === 3 && (n.textContent || '').trim().length > 1) { own = true; break; }
+    }
+    if (!own) continue;
+    const cs = getComputedStyle(el);
+    if (cs.visibility === 'hidden' || cs.display === 'none' || parseFloat(cs.opacity) === 0) continue;
+    // WCAG 1.4.3 exempts text that is part of an inactive control, and a dimmed button is
+    // the point of the dimming. Reporting one as a colour failure would send the next
+    // reader to darken a state that is supposed to look dead.
+    if (el.closest(':disabled, [aria-disabled="true"], fieldset[disabled]')) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 6 || r.height < 6) continue;
+    if (r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw) continue;
+    // Which ancestor, if any, paints anything behind these words. A card can carry the
+    // bg-surface class and still be see-through here — the veil, the photo and a blur
+    // are what the reader actually sees — so the host is named by what it paints, not
+    // by what it is called. The pixel sample below is the verdict; this is the address.
+    let host = 'photo';
+    for (let p = el; p; p = p.parentElement) {
+      const b = getComputedStyle(p).backgroundColor;
+      const m = String(b).match(/[\\d.]+/g);
+      if (m && (m.length < 4 || parseFloat(m[3]) > 0.05)) {
+        const cls = typeof p.className === 'string' ? p.className.trim().split(/\\s+/).slice(0, 2).join('.') : '';
+        host = (cls || p.tagName.toLowerCase()) + (p === el ? '' : ' up' + (p === el.parentElement ? '1' : ''));
+        break;
+      }
+      if (!p.parentElement || p.parentElement === document.body) break;
+    }
+    // A line the footer, a sticky bar or a modal has covered is not a colour failure —
+    // it is a different one, and mixing the two would send the next reader hunting for a
+    // token that is not the problem. The hit test at the centre of the box is what the
+    // browser itself says is on top there.
+    //
+    // The four corners are tested as well, because a bar can bite into a box without
+    // reaching its middle: the profile tab strip measured 41px tall with 17 of them under
+    // the contact bar, so its centre hit itself while 40% of its backdrop was somebody
+    // else's wash. Centre foreign -> covered, skipped quietly. Corner foreign -> under:
+    // also not a colour verdict, but counted, because a row that is *permanently* under
+    // the bar is a layout defect worth naming.
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const mine = (x, y) => {
+      const t = document.elementFromPoint(x, y);
+      return !!t && (t === el || el.contains(t) || t.contains(el));
+    };
+    const covered = !mine(cx, cy);
+    const inset = 1;
+    const under = !covered && !(
+      mine(r.left + inset, r.top + inset) &&
+      mine(r.right - inset, r.top + inset) &&
+      mine(r.left + inset, r.bottom - inset) &&
+      mine(r.right - inset, r.bottom - inset));
+    out.push({
+      sel: sel(el),
+      text: (el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 80),
+      color: cs.color, size: Math.round(parseFloat(cs.fontSize) * 10) / 10,
+      weight: cs.fontWeight, style: cs.fontStyle,
+      box: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+      host: host, covered: covered, under: under
+    });
+  }
+  return out;
+})()`;
+
+/** Applied around the second screenshot so the picture holds only backdrops. */
+const HIDE_TEXT_ON = "*, *::before, *::after { color: transparent !important;" +
+  " -webkit-text-fill-color: transparent !important; text-shadow: none !important; }";
+
+const SAMPLE_TEXT = `(async () => {
+  const items = __ITEMS__;
+  const img = new Image();
+  img.src = __DATA__;
+  await img.decode();
+  const cv = document.createElement('canvas');
+  cv.width = img.width; cv.height = img.height;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0);
+  const scale = img.width / document.documentElement.clientWidth;
+  const chan = (v) => { v = v / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  const lum = (r, g, b) => 0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b);
+  const ratio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  const parse = (c) => { const m = String(c).match(/[\\d.]+/g); return m ? [ +m[0], +m[1], +m[2], m.length > 3 ? +m[3] : 1 ] : null; };
+  const bad = [];
+  const ok = [];
+  const unders = [];
+  let checked = 0;
+  let covered = 0;
+  let under = 0;
+  let worst = 99;
+  for (const it of items) {
+    const c = parse(it.color);
+    if (!c || c[3] === 0) continue;
+    if (it.covered) { covered++; continue; }
+    // Partly under a floating bar: the sample would average the bar's wash into the
+    // backdrop and blame a colour token for a piece of layout. Counted, not graded —
+    // and named, because "3 sentences sit under the bar" is only actionable if the run
+    // says which ones.
+    if (it.under) {
+      under++;
+      if (unders.length < 6) unders.push({ sel: it.sel, text: it.text, box: it.box, host: it.host });
+      continue;
+    }
+    const x = Math.max(0, Math.round(it.box[0] * scale));
+    const y = Math.max(0, Math.round(it.box[1] * scale));
+    const w = Math.min(img.width - x, Math.round(it.box[2] * scale));
+    const h = Math.min(img.height - y, Math.round(it.box[3] * scale));
+    if (w < 3 || h < 3) continue;
+    const d = ctx.getImageData(x, y, w, h).data;
+    let sr = 0, sg = 0, sb = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) { sr += d[i]; sg += d[i + 1]; sb += d[i + 2]; n++; }
+    if (!n) continue;
+    sr /= n; sg /= n; sb /= n;
+    // A translucent text colour lands over the backdrop, so composite it before judging.
+    const a = c[3];
+    const r = ratio(lum(c[0] * a + sr * (1 - a), c[1] * a + sg * (1 - a), c[2] * a + sb * (1 - a)), lum(sr, sg, sb));
+    checked++;
+    if (r < worst) worst = r;
+    const large = it.size >= 24 || (it.size >= 18.66 && +it.weight >= 700);
+    const row = { sel: it.sel, text: it.text, color: it.color, size: it.size, weight: it.weight,
+      ratio: Math.round(r * 100) / 100, host: it.host,
+      bg: 'rgb(' + Math.round(sr) + ',' + Math.round(sg) + ',' + Math.round(sb) + ')' };
+    if (r < (large ? 3 : 4.5)) bad.push(row);
+    else if (ok.length < 3) ok.push(row);
+  }
+  bad.sort((p, q) => p.ratio - q.ratio);
+  return { checked: checked, covered: covered, under: under, underItems: unders,
+    worst: Math.round(worst * 100) / 100,
+    bad: bad.slice(0, 12), badCount: bad.length, ok: ok };
+})()`;
+
 /** Open the create form a page only shows after a tap. Verbs are the ones this
  *  codebase uses for form panels, and anything that reads like a destructive act is
  *  refused, because a sweep must not be able to delete a company.
@@ -537,6 +712,34 @@ async function main() {
     const moved = !!m.loc && landed !== short && BY_DESIGN[short] !== landed;
     m.moved = moved;
     m.redirectOnly = BY_DESIGN[short] === landed;
+    if (CONTRAST) {
+      const list = await cdp.send("Runtime.evaluate",
+        { expression: COLLECT_TEXT, returnByValue: true, awaitPromise: true });
+      const items = Array.isArray(list.result.value) ? list.result.value : [];
+      // The second picture is the page with its words gone: whatever is left under a
+      // sentence is the backdrop that sentence has to survive, photo, veil and glass
+      // included, with no need to model any of them here.
+      const style = "(() => { let s = document.getElementById('probe-hide-text');"
+        + " if (!s) { s = document.createElement('style'); s.id = 'probe-hide-text';"
+        + " s.textContent = " + JSON.stringify(HIDE_TEXT_ON) + "; document.head.appendChild(s); }"
+        + " return 1; })()";
+      const unstyle = "(() => { const s = document.getElementById('probe-hide-text');"
+        + " if (s) s.remove(); return 1; })()";
+      await cdp.send("Runtime.evaluate", { expression: style, returnByValue: true });
+      const shot = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+      await cdp.send("Runtime.evaluate", { expression: unstyle, returnByValue: true });
+      // split/join, not replace: a page's own words can hold a dollar sign, and replace()
+      // would read it as a substitution pattern in the middle of the injected expression.
+      const expr = SAMPLE_TEXT
+        .split("__ITEMS__").join(JSON.stringify(items))
+        .split("__DATA__").join(JSON.stringify("data:image/png;base64," + shot.data));
+      const got = await cdp.send("Runtime.evaluate",
+        { expression: expr, returnByValue: true, awaitPromise: true });
+      m.contrast = got.exceptionDetails
+        ? { error: String(got.exceptionDetails.exception?.description ?? "sample threw").split("\n")[0].slice(0, 90) }
+        : (got.result.value ?? { error: "sample returned nothing" });
+    }
+
     if (SHOTS) {
       const shot = await cdp.send("Page.captureScreenshot",
         { format: "png", captureBeyondViewport: FULL, fromSurface: true });
@@ -552,6 +755,9 @@ async function main() {
       `${short.padEnd(28)} ${verdict.padEnd(24)} ovf=${String(m.overflowCount).padStart(2)} ` +
       `clipped=${String(m.clipped.length).padStart(2)} elid=${String(m.elidedCount).padStart(2)} ` +
       `tiny=${String(m.tinyCount).padStart(2)} ` +
+      (m.contrast ? `faint=${String(m.contrast.badCount ?? "?").padStart(2)}/${String(m.contrast.checked ?? "?").padStart(3)} ` +
+        `worst=${m.contrast.worst ?? m.contrast.error ?? "?"} ` +
+        `under=${String(m.contrast.under ?? 0).padStart(2)} ` : "") +
       `settle[${note(settled)}${settledForm ? "+" + note(settledForm) : ""}] ` +
       `${m.sidebar ? `sidebar[${m.sidebar.display} ${m.sidebar.w}px]` : ""}${opened ? ` form[${opened}]` : ""}${clicked ? ` tab[${clicked}]` : ""}`
     );
@@ -559,6 +765,18 @@ async function main() {
     for (const o of m.clipped.slice(0, 3)) console.log(`    cut  ${String(o.lost).padStart(4)}px  ${o.at}`);
     for (const o of m.elided.slice(0, 2)) console.log(`    elid ${String(o.lost).padStart(4)}px  ${o.at}  ${o.text ? JSON.stringify(o.text) : ""}`);
     for (const o of m.tiny.slice(0, 3)) console.log(`    tap  ${String(o.w).padStart(3)}x${String(o.h).padEnd(3)}  ${o.at}  ${o.text ? JSON.stringify(o.text) : ""}`);
+    // `sel` is the address the sampler carries — the geometry rows have an `at` path, but a
+    // faint line is named by the element and its words, and printing a missing field here
+    // would read as "no location" rather than "this channel never had one".
+    for (const o of (m.contrast?.bad ?? []).slice(0, 6)) {
+      console.log(`    faint ${String(o.ratio).padStart(4)}:1 ${o.size}px ${String(o.host).padEnd(18)} ` +
+        `${o.color} over ${o.bg}  ${String(o.sel).slice(0, 34).padEnd(34)}  ${JSON.stringify(o.text)}`);
+    }
+    if (SHOW_OK) for (const o of (m.contrast?.ok ?? [])) {
+      console.log(`    ok    ${String(o.ratio).padStart(4)}:1 ${o.size}px ${String(o.host).padEnd(18)} ` +
+        `${o.color} over ${o.bg}  ${String(o.sel).slice(0, 34).padEnd(34)}  ${JSON.stringify(o.text)}`);
+    }
+    if (m.contrast?.error) console.log(`    faint -- ${m.contrast.error}`);
     if (EVAL) {
       const why = await cdp.send("Runtime.evaluate",
         { expression: EVAL, returnByValue: true, awaitPromise: true });
@@ -572,9 +790,36 @@ async function main() {
 
   writeFileSync(join(OUT, `probe-${WIDTH}.json`), JSON.stringify(results, null, 1));
   const bad = results.filter((r) => r.sidewaysScroll || r.clipped.length);
+  const faint = results.filter((r) => (r.contrast?.badCount ?? 0) > 0 || r.contrast?.error);
   const movedPages = results.filter((r) => r.moved);
   const unsettled = results.filter((r) => r.settled < 0 || r.settledForm < 0);
   console.log(`\n${results.length} pages at ${WIDTH}x${HEIGHT}; ${bad.length} with overflow or clipped content -> ${join(OUT, `probe-${WIDTH}.json`)}`);
+  if (CONTRAST) {
+    const lines = results.reduce((n, r) => n + (r.contrast?.badCount ?? 0), 0);
+    const checked = results.reduce((n, r) => n + (r.contrast?.checked ?? 0), 0);
+    const under = results.reduce((n, r) => n + (r.contrast?.under ?? 0), 0);
+    console.log(`CONTRAST: ${lines} faint sentence(s) of ${checked} measured, on ${faint.length} page(s).`);
+    if (under) {
+      // Not a colour verdict, and not nothing either. The sweep measures at the top of the
+      // scroll, so a bar that is pinned to the viewport edge covers whatever happens to be
+      // sitting at the fold — that is what a sticky bar means, and the page reserves its
+      // height (see --footer-h) so the tail of the scroll is clear. What this list is for is
+      // the sentence that stays under it: a control that lives at the fold on every page of
+      // a shell is a control nobody reads.
+      console.log(`?? ${under} sentence(s) sit partly under the floating contact bar at the fold —` +
+        ` not graded for colour, and a layout question rather than a palette one:`);
+      for (const r of results.filter((x) => (x.contrast?.under ?? 0) > 0)) {
+        const top = (r.contrast.underItems ?? [])[0];
+        console.log(`  ${String(r.path).padEnd(30)} ${String(r.contrast.under).padStart(3)} under` +
+          (top ? `  ${String(top.sel).slice(0, 32).padEnd(32)} ${JSON.stringify(top.text)}` : ""));
+      }
+    }
+    for (const r of faint) {
+      const top = (r.contrast.bad ?? [])[0];
+      console.log(`  ${String(r.path).padEnd(30)} ${String(r.contrast.badCount).padStart(3)} faint` +
+        (top ? `  worst ${top.ratio}:1 ${JSON.stringify(top.text)}` : `  ${r.contrast.error}`));
+    }
+  }
   if (unsettled.length) {
     // Their counters still print, but a page measured while still moving is a page whose
     // zeroes mean nothing — an empty register fits any width.
@@ -589,7 +834,9 @@ async function main() {
   }
   cdp.close();
   stop();
-  process.exit(movedPages.length ? 1 : 0);
+  // A faint sentence is a failure of the same kind as a page that never rendered: the
+  // words are there and nobody can read them. Asked for, it stops the run.
+  process.exit(movedPages.length || (CONTRAST && faint.length) ? 1 : 0);
 }
 
 main().catch((e) => { console.error(e.message); stop(); process.exit(1); });
