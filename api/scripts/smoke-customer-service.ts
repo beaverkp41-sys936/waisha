@@ -231,14 +231,19 @@ async function main() {
       pub.status === 200 && typeof pub.json?.supportEmail === "string" &&
       Array.isArray(pub.json?.links) && "copyright" in pub.json && "hours" in pub.json,
       { keys: Object.keys(pub.json ?? {}) });
-    check("…and carries no brand line, because 105 moved it to the sign-in card",
-      !("brand" in (pub.json ?? {})), { keys: Object.keys(pub.json ?? {}) });
-    const pubSw = await call("/content/copy?lang=sw");
+    const pubSw = await call("/content/footer?lang=sw");
     check("…in the language the visitor asked for", pubSw.status === 200 &&
-      typeof pubSw.json?.loginSubtitle === "string" && pubSw.json.loginSubtitle.length > 0);
-    check("the sign-in payload is the one that carries the mark now",
-      typeof pubSw.json?.loginBrand === "string" && pubSw.json.loginBrand.length > 0,
+      typeof pubSw.json?.supportEmail === "string");
+    // 105 sent the mark to the sign-in card; 116 brought it back to the bar and took it off
+    // the card, so it is said once. The block is still keyed `login.brand`.
+    check("the bar is the one place the mark is said",
+      typeof pubSw.json?.brand === "string" && pubSw.json.brand.length > 0,
       { keys: Object.keys(pubSw.json ?? {}) });
+    const pubCopy = await call("/content/copy?lang=sw");
+    check("the sign-in payload carries its own sentences and no imprint",
+      typeof pubCopy.json?.loginSubtitle === "string" &&
+      pubCopy.json.loginSubtitle.length > 0 && !("loginBrand" in (pubCopy.json ?? {})),
+      { keys: Object.keys(pubCopy.json ?? {}) });
     check("an unknown language falls back to English rather than answering empty",
       (await call("/content/footer?lang=fr")).json?.supportEmail === pub.json?.supportEmail);
 

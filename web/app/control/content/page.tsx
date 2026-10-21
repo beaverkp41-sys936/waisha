@@ -246,13 +246,7 @@ export default function ControlContentPage() {
   const footerDraft = useMemo<FooterContent>(() => {
     const raw: Record<string, unknown> = {};
     for (const g of desk?.groups ?? []) {
-      if (g.group !== "footer") {
-        // The mark is one block (`login.brand`) that the bar and the sign-in card both read,
-        // so the preview has to show it in both places or the desk would lie about one of them.
-        const brand = g.fields.find((x) => x.wire === "loginBrand");
-        if (brand) raw.brand = cellOf(brand, locale);
-        continue;
-      }
+      if (g.group !== "footer") continue;
       for (const f of g.fields) raw[f.wire] = cellOf(f, locale);
     }
     return normalizeFooter(raw);
@@ -265,13 +259,10 @@ export default function ControlContentPage() {
       if (!f) return fallback;
       return asText(cellOf(f, locale)).trim() || fallback;
     };
-    const brand = g?.fields.find((x) => x.wire === "loginBrand");
     return {
       loginSubtitle: line("loginSubtitle", "Sign in to WAISHA"),
       signupSuccessTitle: line("signupSuccessTitle", "Account successfully created"),
-      signupSuccessBody: line("signupSuccessBody", "Sign in with your TIN and email to reach your workspace."),
-      // Blank here is a decision, not a missing row: the card drops the line entirely.
-      loginBrand: brand ? asText(cellOf(brand, locale)).trim() : ""
+      signupSuccessBody: line("signupSuccessBody", "Sign in with your TIN and email to reach your workspace.")
     };
   }, [desk, draft, locale]);
 
@@ -379,20 +370,17 @@ export default function ControlContentPage() {
                   {signinDraft.signupSuccessTitle}
                 </p>
                 <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>{signinDraft.signupSuccessBody}</p>
-                <p className="mt-12 border-t pt-8 text-center text-[10px] font-semibold uppercase tracking-[0.16em]"
-                  style={{ borderColor: "var(--line)", color: "rgba(4, 18, 28, 0.5)" }}>
-                  {signinDraft.loginBrand || "no brand line — the card ends at the door"}
-                </p>
-                <p className="mt-10 text-[11px]" style={{ color: "var(--ink-soft)" }}>
-                  How the sign-in card would word itself. A seeker&apos;s &quot;search account
+                <p className="mt-12 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                  How the sign-in card would word itself. The card carries no mark — &quot;powered
+                  by&quot; is the bar&apos;s line above, said once. A seeker&apos;s &quot;search account
                   verified&quot; sentence is not here because it answers a different door, and the
                   registry has no key for it.
                 </p>
               </div>
               <div className="flex flex-col justify-center gap-10 text-[11px]" style={{ color: "var(--ink-soft)" }}>
                 <p className="text-sm font-semibold" style={{ color: "var(--ink)" }}>Where these words land</p>
-                <span><Link href="/" className="underline" style={{ color: "var(--adm-accent)" }}>The public site</Link> — the bar under the marketing pages.</span>
-                <span><Link href="/login" className="underline" style={{ color: "var(--adm-accent)" }}>The sign-in card</Link> — the subtitle, the sentence after an account is made, and the brand line at its foot.</span>
+                <span><Link href="/" className="underline" style={{ color: "var(--adm-accent)" }}>The public site</Link> — the bar under the marketing pages, mark first.</span>
+                <span><Link href="/login" className="underline" style={{ color: "var(--adm-accent)" }}>The sign-in card</Link> — the subtitle and the sentence after an account is made.</span>
                 <span><Link href="/app/dashboard" className="underline" style={{ color: "var(--adm-accent)" }}>The portal</Link> — the same bar, drawn inside the shell.</span>
               </div>
             </div>

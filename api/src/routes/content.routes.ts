@@ -16,10 +16,12 @@ import { CONTENT_FIELDS, decode } from "../content/fields.js";
  * deliberate "do not show this", which is how a line is removed without deleting the row.
  */
 
-/** The two contact lines every footer on the system has always carried. */
+/** The two contact lines every footer on the system has always carried, plus the mark that
+ *  116 brought back into the bar (its block is still keyed `login.brand`). */
 const FOOTER_FALLBACK: Record<string, string> = {
   supportEmail: "support@tengoaegis.com",
-  phone: ""
+  phone: "",
+  brand: "powered by T ENGO AEGIS"
 };
 
 /** The sign-in microcopy, worded as it is on the page today. These are the fallback
@@ -30,8 +32,7 @@ const FOOTER_FALLBACK: Record<string, string> = {
 const COPY_FALLBACK: Record<string, string> = {
   loginSubtitle: "Sign in to WAISHA",
   signupSuccessTitle: "Account successfully created",
-  signupSuccessBody: "Sign in with your TIN and email to reach your workspace.",
-  loginBrand: "powered by T ENGO AEGIS"
+  signupSuccessBody: "Sign in with your TIN and email to reach your workspace."
 };
 
 async function blocks(locale: "en" | "sw"): Promise<Map<string, string>> {
@@ -53,15 +54,10 @@ function wireOf(group: "footer" | "signin", map: Map<string, string>,
 export async function contentRoutes(app: FastifyInstance, _opts: unknown) {
   app.get("/content/footer", async (req: any) => {
     const locale = req.query?.lang === "sw" ? "sw" : "en";
-    const map = await blocks(locale);
-    // The mark opens the bar, as it did before 105 moved it to the sign-in card. It stays one
-    // block (`login.brand`) so the desk has one place to rephrase it. Absent is the page's own
-    // words; present but empty is the office switching the advertising off.
-    const brandRow = "login.brand";
-    return {
-      ...wireOf("footer", map, FOOTER_FALLBACK),
-      brand: map.has(brandRow) ? (map.get(brandRow) as string) : COPY_FALLBACK.loginBrand
-    };
+    // The mark (`login.brand`, kept under that key since 105) is one of the footer fields, so
+    // wireOf projects it with the rest: absent is the page's own words, present but empty is
+    // the office switching the advertising off. Said once, here — the sign-in card dropped it.
+    return wireOf("footer", await blocks(locale), FOOTER_FALLBACK);
   });
 
   app.get("/content/copy", async (req: any) => {

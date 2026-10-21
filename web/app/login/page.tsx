@@ -56,14 +56,14 @@ function useGreeting() {
  * seeker panel confirms a verified search account, which is a different sentence about a
  * different thing, and the registry has no key for it.
  *
- * `loginBrand` arrived here from the footer in 105. This card is the only page the platform
- * has that is about the platform itself, so it is the one clean place for a publisher's line.
+ * The imprint is not here. "powered by T ENGO AEGIS" is the footer's line (the desk's
+ * `login.brand` block), and 116 took it back off this card so the mark is said once —
+ * a card that advertises the parent above the door and again under it reads as a mistake.
  */
 const COPY_DEFAULT = {
   loginSubtitle: "Sign in to WAISHA",
   signupSuccessTitle: "Account successfully created",
-  signupSuccessBody: "Sign in with your TIN and email to reach your workspace.",
-  loginBrand: "powered by T ENGO AEGIS"
+  signupSuccessBody: "Sign in with your TIN and email to reach your workspace."
 };
 
 function usePlatformCopy() {
@@ -80,12 +80,7 @@ function usePlatformCopy() {
         setCopy({
           loginSubtitle: line("loginSubtitle"),
           signupSuccessTitle: line("signupSuccessTitle"),
-          signupSuccessBody: line("signupSuccessBody"),
-          // The imprint is the one line here that a desk can genuinely remove: an empty
-          // block is "do not show this", which is how the registry treats a blank value
-          // everywhere else. Only a payload without the key at all falls back.
-          loginBrand: typeof j.loginBrand === "string"
-            ? j.loginBrand.trim() : COPY_DEFAULT.loginBrand
+          signupSuccessBody: line("signupSuccessBody")
         });
       })
       .catch(() => { });
@@ -623,14 +618,6 @@ export default function LoginPage() {
               <button type="button" className="auth-link font-semibold underline"
                 onClick={() => { setError(null); setPanel("login"); }}>Sign in</button>
             </div>
-          )}
-
-          {/* The mark goes last, under the door — small, and only here. */}
-          {copy.loginBrand && (
-            <p className="mt-16 text-center text-[10px] font-semibold uppercase tracking-[0.16em]"
-              style={{ color: "rgba(255,255,255,0.6)" }}>
-              {copy.loginBrand}
-            </p>
           )}
         </div>
       </div>

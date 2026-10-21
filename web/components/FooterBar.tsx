@@ -14,9 +14,9 @@ import { FooterReserve } from "@/components/FooterReserve";
    not read would be a worse lie than a hard-coded line, so the list below and the registry
    in api/src/content/fields.ts are the two ends of one contract.
 
-   The brand line opens this bar, as it did before 105 moved it to the foot of the sign-in
-   card. It is the desk's `login.brand` block, served on this payload as `brand` — one block,
-   two pages, and an empty one means the bar carries no mark at all. */
+   The brand line opens this bar. It is the desk's `login.brand` block, served on this payload
+   as `brand` — the mark is said once, here, and an empty block means the bar carries no mark
+   at all. The sign-in card used to repeat it; 116 took it back off the card. */
 
 export type FooterLink = { label: string; href: string };
 export type FooterSocial = { network: string; handle: string; href: string };

@@ -118,9 +118,10 @@ async function main() {
       blocks.rows.length >= fields.length * 2,
       `${blocks.rows.length} rows for ${fields.length} keys`);
 
-    // 105 moved the brand line out of the footer and onto the sign-in card, so the key this
-    // gate writes is `login.brand`. It is still a copy row the runtime role may write and may
-    // not delete, which is the only thing the section below is about.
+    // The mark's block is keyed `login.brand` (105 named it when it sat on the sign-in card;
+    // 116 moved it back into the bar without renaming the row). It is still a copy row the
+    // runtime role may write and may not delete, which is the only thing the section below is
+    // about, so the key is looked up rather than hardcoded.
     const brand = CONTENT_FIELDS.find((f) => f.key === "login.brand")!;
     const up1 = await c.query(UPSERT_BLOCK_SQL, [brand.key, "en", BRAND_VALUE, U]);
     check("a footer line upserts and returns the timestamp the desk shows as 'last by'",

@@ -14,7 +14,7 @@ import { linkAddress } from "../security/url.js";
  * desk says it was changed.
  *
  * Every key here is seeded (seed.sql for the original six, 100 for the footer's new ones,
- * 105 for the brand line's move out of the footer), so the desk never invents a row and
+ * 105 for the brand line), so the desk never invents a row and
  * never edits a block nothing reads. `feature_flags` is deliberately not in here: it is
  * seeded and unread — a switch on this desk would move nothing, which is worse than not
  * offering it.
@@ -94,12 +94,12 @@ export const CONTENT_FIELDS: ContentField[] = [
     hint: "What happens next, in the caller's own language where the browser asks for Swahili."
   },
   {
-    key: "login.brand", group: "signin", wire: "loginBrand", label: "Brand line",
+    key: "login.brand", group: "footer", wire: "brand", label: "Brand line",
     kind: "text", max: 120,
-    hint: "Whose product this is, said once at the foot of the sign-in card — e.g. "
-      + "\"powered by T ENGO AEGIS\". The sign-in card is the front door of the whole "
-      + "platform, so this is where the mark belongs; the footer carries contact details "
-      + "and answering hours, not advertising."
+    hint: "Whose product this is, said once in the footer bar — e.g. "
+      + "\"powered by T ENGO AEGIS\". The key is still `login.brand` because the line was "
+      + "written there before 116 brought it back to the bar; empty switches the mark off. "
+      + "Say it once: the sign-in card no longer repeats it."
   }
 ];
 
