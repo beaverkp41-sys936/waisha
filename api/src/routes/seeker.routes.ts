@@ -225,16 +225,25 @@ export async function seekerRoutes(app: FastifyInstance, _opts: unknown) {
     { preHandler: [requireAuth, requirePermission("seeker_pass.view")] },
     async (req: any) => passState(req.user.sub));
 
+  // The seeker's own log. A route search reads here as the pair of regions it asked for,
+  // not as an empty "looked for" cell — 120 records the route on the row, and this is the
+  // only place a seeker can see what WAISHA kept about them.
   app.get("/seeker/searches",
     { preHandler: [requireAuth, requirePermission("seeker_pass.view")] },
     async (req: any) => {
       const limit = Math.min(Math.max(Number((req.query as any)?.limit) || 20, 1), 50);
       return withTenant(req.user.tid, (c) => c.query(
         `select ss.id, ss.query, ss.filter_kind as kind, ss.filter_region_id as region_id,
-                g.name_en as region_name, ss.found, ss.credits_left, ss.created_at,
+                g.name_en as region_name,
+                ss.filter_origin_region_id as origin_region_id, og.name_en as origin_region,
+                ss.filter_dest_region_id as dest_region_id, dd.name_en as dest_region,
+                ss.filter_origin_text as origin_text, ss.filter_dest_text as dest_text,
+                ss.found, ss.credits_left, ss.created_at,
                 l.company_name as opened_company
          from seeker_searches ss
          left join geo_regions g on g.id = ss.filter_region_id
+         left join geo_regions og on og.id = ss.filter_origin_region_id
+         left join geo_regions dd on dd.id = ss.filter_dest_region_id
          left join directory_listings l on l.id = ss.listing_id
          where ss.tenant_id = $1
          order by ss.created_at desc

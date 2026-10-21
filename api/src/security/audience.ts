@@ -45,11 +45,30 @@ const OPEN_PREFIXES = [
   "/api/v1/announcements", "/api/v1/control/", "/api/v1/internal/",
   "/api/v1/payments/mock", "/api/v1/payments/webhook",
   "/api/v1/directory/", "/api/v1/seeker/",
+  // The two cascades a route is named with. Parameterised, so they are anchored on the
+  // slash rather than listed exactly, and nothing else can be swept in behind them.
+  "/api/v1/geo/districts/", "/api/v1/geo/wards/",
   // The error intake. A portal account is a person on a page too, and the page that
   // crashes is often the one that signs them in — if this door were shut to a shipper
   // token, the portal's failures would be the only ones nobody collects. It is open
   // because it writes nothing that can be read back and attributes nothing (082).
   "/api/v1/client-errors"
+];
+
+/**
+ * Global reference geography, opened one path at a time rather than by the `/api/v1/geo/`
+ * prefix (task #334). A seeker who searches a road has to name it the way a transporter
+ * plans one — region, then the two ends, then the towns along it — and none of these four
+ * reads a tenant's row: `geo_regions`, `geo_corridors` and the OSRM proxy hold the shape of
+ * Tanzania, not anybody's cargo.
+ *
+ * Exact paths, because a prefix here would also open `/geo/places` (a gazetteer no seeker
+ * search needs) and `/geo/border-posts` (a schedule for staff clearing crossings), and any
+ * `/geo/…` route added later would inherit a door nobody chose.
+ */
+const OPEN_PATHS = [
+  "/api/v1/geo/regions", "/api/v1/geo/region-coords",
+  "/api/v1/geo/corridors", "/api/v1/geo/road-route"
 ];
 
 /**
@@ -71,7 +90,9 @@ export function isHealthPath(url: string): boolean {
 export function isOpenSurface(url: string): boolean {
   // The root health probes are exact paths, not a prefix: "/health" sits at the root of
   // the service, where anything added beside it later should not inherit an open door.
-  return isHealthPath(url) || OPEN_PREFIXES.some((p) => url.split("?")[0].startsWith(p));
+  const path = url.split("?")[0];
+  return isHealthPath(url) || OPEN_PATHS.includes(path) ||
+    OPEN_PREFIXES.some((p) => path.startsWith(p));
 }
 
 export async function requireStaffAudience(

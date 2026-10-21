@@ -9,6 +9,8 @@ type SearchRow = {
   id: string; query: string | null; kind: string | null; region_id: number | null;
   region_name: string | null; found: number | null; credits_left: number | null;
   created_at: string; opened_company: string | null;
+  origin_region: string | null; dest_region: string | null;
+  origin_text: string | null; dest_text: string | null;
 };
 
 export default function FindHistoryPage() {
@@ -109,8 +111,18 @@ export default function FindHistoryPage() {
                     {r.opened_company
                       ? <span className="text-xs italic">opened a card</span>
                       : r.query ?? (r.kind ? SERVES_LABELS[r.kind] : "All companies")}
+                    {/* A route search has no words in it, so without this line the log would
+                        read as "looked for nothing" while holding a road the seeker asked for. */}
+                    {r.origin_region && r.dest_region && (
+                      <span className="mt-4 block text-xs" style={{ color: "var(--ink-soft)" }}>
+                        route {r.origin_region}{r.origin_text ? ` (${r.origin_text})` : ""}
+                        {" → "}{r.dest_region}{r.dest_text ? ` (${r.dest_text})` : ""}
+                      </span>
+                    )}
                   </td>
-                  <td className="p-12" style={{ color: "var(--ink-soft)" }}>{r.region_name ?? "—"}</td>
+                  <td className="p-12" style={{ color: "var(--ink-soft)" }}>
+                    {r.region_name ?? (r.origin_region ? "On a route" : "—")}
+                  </td>
                   <td className="p-12 tabular-nums" style={{ color: "var(--ink)" }}>
                     {r.found === null ? "—" : r.found}
                   </td>

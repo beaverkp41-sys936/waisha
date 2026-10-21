@@ -62,6 +62,22 @@ describe("open surface allowlist", () => {
     expect(isOpenSurface("/api/v1/directory-x")).toBe(false);
     expect(isOpenSurface("/api/v1/seeker")).toBe(false);
   });
+  it("opens the reference geography a seeker names a route with, path by path", () => {
+    for (const p of ["/api/v1/geo/regions", "/api/v1/geo/region-coords",
+      "/api/v1/geo/corridors?originRegionId=2&destRegionId=5",
+      "/api/v1/geo/road-route?wps=1,2;3,4",
+      "/api/v1/geo/districts/7", "/api/v1/geo/wards/9"]) {
+      expect(isOpenSurface(p)).toBe(true);
+    }
+  });
+  it("keeps the geography it did not choose to open shut", () => {
+    // The gazetteer and the border schedule are staff reads; and an exact path must not
+    // become a prefix by accident, or every future /geo/ route inherits an open door.
+    for (const p of ["/api/v1/geo/places?q=dod", "/api/v1/geo/border-posts",
+      "/api/v1/geo/regions-evil", "/api/v1/geo/corridors/extra", "/api/v1/geo"]) {
+      expect(isOpenSurface(p)).toBe(false);
+    }
+  });
   it("opens the root health probes exactly, because the deploy platform has no token", () => {
     expect(isOpenSurface("/health")).toBe(true);
     expect(isOpenSurface("/health/ready")).toBe(true);

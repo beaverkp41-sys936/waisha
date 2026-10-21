@@ -7,6 +7,7 @@ import { uuidv7 } from "../util/uuid.js";
 import { verifyAccessToken } from "../security/jwt.js";
 import { writeAudit } from "../audit/audit.js";
 import { requirePermission } from "../security/permissions.js";
+import { enforceRateLimit } from "../security/ratelimit.js";
 import { RoutingUnavailable, traceRoad, type RoadTrace } from "../util/road-router.js";
 
 async function requireAuth(req: any) {
@@ -341,7 +342,13 @@ export async function routesRoutes(app: FastifyInstance, _opts: unknown) {
   // Multi-waypoint: `wps` is the whole chain origin -> via* -> destination. The
   // old two-point params still work, and the payload shape is unchanged, so
   // every caller written before the builder keeps reading distance/geometry.
+  //
+  // Opened to portal accounts one exact path at a time (audience.ts) so a seeker can draw
+  // the road they want searched — which makes this the one read here that costs something
+  // outside this service, so it is the one with a limiter: a cache hit is free, a miss is a
+  // call to the router, and nobody gets to turn WAISHA's key into their own traffic.
   app.get("/geo/road-route", { preHandler: [requireAuth] }, async (req: any, reply) => {
+    await enforceRateLimit(`geo-road:uid:${req.user.sub}`, 120, 3600);
     const parsed = z.object({
       wps: z.string().max(1500).optional(),
       oLat: z.coerce.number().min(-90).max(90).optional(),

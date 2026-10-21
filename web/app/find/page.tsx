@@ -3,8 +3,9 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { seekerFetch } from "./api-client";
 import { useMeter } from "./meter";
+import RoutePicker, { routeBody, type RoutePick } from "./route-picker";
 import {
-  errorCode, errorDetail, errorText, fmtDate, hm, KIND_OPTIONS,
+  errorCode, errorDetail, errorText, fmtDate, hm, KIND_OPTIONS, SERVICE_OPTIONS,
   LICENCE_COLORS, LICENCE_LABELS, SERVES_LABELS
 } from "./labels";
 
@@ -27,7 +28,14 @@ type Card = {
   contact_name: string; contact_channel: string; is_verified: boolean; total: number;
 };
 
-type Applied = { kind: string | null; regionId: number | null; query: string | null };
+/** Everything the one reader call takes, in the shape the search was paid for. The route
+ *  keeps its display names here so the results header can say what it matched on; only
+ *  routeBody() of it ever leaves the browser, because the API schema is strict. */
+type Applied = {
+  kind: string | null; regionId: number | null; query: string | null;
+  route: RoutePick | null; services: string[]; verifiedOnly: boolean;
+  licenceValid: boolean; minFleet: number | null;
+};
 
 type Board = {
   searchId: string; found: number; remaining: number | null; passKind: string | null;
@@ -36,17 +44,88 @@ type Board = {
 };
 
 type Region = { region_id: number; region_name: string; companies: number };
+type GeoRegion = { id: number; name_en: string };
+
+/** The flat query names the GET door reads back (120). A route that did not survive the
+ *  trip into the query string would answer page two with a different list than the one the
+ *  credit bought. */
+function appliedQuery(a: Applied, offset: number): string {
+  const qs = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
+  if (a.kind) qs.set("kind", a.kind);
+  if (a.regionId) qs.set("regionId", String(a.regionId));
+  if (a.query) qs.set("query", a.query);
+  if (a.route) {
+    qs.set("originRegionId", String(a.route.originRegionId));
+    qs.set("destRegionId", String(a.route.destRegionId));
+    if (a.route.originText) qs.set("originText", a.route.originText);
+    if (a.route.destText) qs.set("destText", a.route.destText);
+    if (a.route.corridorId) qs.set("corridorId", String(a.route.corridorId));
+  }
+  if (a.services.length) qs.set("services", a.services.join(","));
+  if (a.verifiedOnly) qs.set("verifiedOnly", "1");
+  if (a.licenceValid) qs.set("licenceValid", "1");
+  if (a.minFleet) qs.set("minFleet", String(a.minFleet));
+  return qs.toString();
+}
+
+/** What the seeker asked for, in the fewest words that still tell the truth about which
+ *  of the boxes above produced this list. */
+function optionSummary(a: Applied): string {
+  const parts: string[] = [];
+  if (a.services.length) {
+    parts.push(a.services
+      .map(s => SERVICE_OPTIONS.find(o => o.value === s)?.label ?? s).join(" + "));
+  }
+  if (a.verifiedOnly) parts.push("verified only");
+  if (a.licenceValid) parts.push("licence still valid");
+  if (a.minFleet) parts.push(`${a.minFleet}+ trucks`);
+  return parts.join(" · ");
+}
+
+/** The POST body. Nulls are what the schema's nullish fields accept; `route` is the one
+ *  that must be absent rather than null, because it is optional and not nullish. */
+function appliedBody(a: Applied, limit: number, offset: number) {
+  return {
+    kind: a.kind, regionId: a.regionId, query: a.query,
+    route: a.route ? routeBody(a.route) : undefined,
+    services: a.services.length ? a.services : null,
+    verifiedOnly: a.verifiedOnly || null, licenceValid: a.licenceValid || null,
+    minFleet: a.minFleet, limit, offset
+  };
+}
 
 export default function FindSearchPage() {
   const { state, ready: meterReady, failed: meterFailed, refresh } = useMeter();
   const [regions, setRegions] = useState<Region[]>([]);
+  const [geoRegions, setGeoRegions] = useState<GeoRegion[]>([]);
   const [kind, setKind] = useState("");
   const [regionId, setRegionId] = useState("");
   const [query, setQuery] = useState("");
+  const [routePick, setRoutePick] = useState<RoutePick | null>(null);
+  const [services, setServices] = useState<string[]>([]);
+  const [verifiedOnly, setVerifiedOnly] = useState(false);
+  const [licenceValid, setLicenceValid] = useState(false);
+  const [minFleet, setMinFleet] = useState("");
   const [board, setBoard] = useState<Board | null>(null);
   const [blocked, setBlocked] = useState<{ message: string; waitMinutes: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  /** The whole filter set as it stands in the form right now, with one field replaced by
+   *  what the chip that was just pressed chose. A route or an option typed but not pressed
+   *  is not a search — the seeker presses Search when they want the meter to move. */
+  function filters(patch: Partial<Applied> = {}): Applied {
+    const fleet = Number(minFleet.trim());
+    return {
+      kind: kind || null,
+      regionId: regionId ? Number(regionId) : null,
+      query: query.trim() || null,
+      route: routePick,
+      services, verifiedOnly, licenceValid,
+      minFleet: minFleet.trim() && Number.isFinite(fleet) ? fleet : null,
+      ...patch
+    };
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -56,20 +135,23 @@ export default function FindSearchPage() {
       .then(async res => (res.ok ? res.json() : []))
       .then(rows => { if (!cancelled && Array.isArray(rows)) setRegions(rows); })
       .catch(() => { });
+    // Every active region, including the ones with nothing published yet: the route
+    // cascades have to offer the whole map, and a road to an empty region is still a road
+    // the seeker wants companies on.
+    seekerFetch("/geo/regions")
+      .then(async res => (res.ok ? res.json() : []))
+      .then(rows => { if (!cancelled && Array.isArray(rows)) setGeoRegions(rows); })
+      .catch(() => { });
     return () => { cancelled = true; };
   }, []);
 
   async function postSearch() {
     setBusy(true); setError(null); setBlocked(null);
-    const applied: Applied = {
-      kind: kind || null,
-      regionId: regionId ? Number(regionId) : null,
-      query: query.trim() || null
-    };
+    const applied = filters();
     try {
       const res = await seekerFetch("/directory/search", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...applied, limit: PAGE, offset: 0 })
+        body: JSON.stringify(appliedBody(applied, PAGE, 0))
       });
       const json = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -109,11 +191,7 @@ export default function FindSearchPage() {
     if (!board) return;
     setBusy(true); setError(null); setBlocked(null);
     try {
-      const qs = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
-      if (next.kind) qs.set("kind", next.kind);
-      if (next.regionId) qs.set("regionId", String(next.regionId));
-      if (next.query) qs.set("query", next.query);
-      const res = await seekerFetch(`/directory/search/${board.searchId}?${qs.toString()}`);
+      const res = await seekerFetch(`/directory/search/${board.searchId}?${appliedQuery(next, offset)}`);
       const json = await res.json().catch(() => ({}));
       if (res.ok) {
         setBoard({ ...board, applied: next, offset, found: json.found ?? 0,
@@ -136,16 +214,22 @@ export default function FindSearchPage() {
     }
   }
 
-  /** A chip or the region picker changes one field of the filters; the typed words always
-   *  come from the box, because that is what the seeker is reading as they choose. */
+  /** A chip or the region picker changes one field of the filters; everything else in the
+   *  set — the route included — comes from the form as the seeker has it, because page two
+   *  of a route search that lost its route answers a different question from page one. */
   function narrow(patch: Partial<Applied>) {
-    const next: Applied = {
-      kind: patch.kind !== undefined ? patch.kind : (kind || null),
-      regionId: patch.regionId !== undefined ? patch.regionId
-        : (regionId ? Number(regionId) : null),
-      query: query.trim() || null
-    };
-    if (board) void reread(next, 0);
+    if (board) void reread(filters(patch), 0);
+  }
+
+  function toggleService(term: string) {
+    const next = services.includes(term) ? services.filter(s => s !== term) : [...services, term];
+    setServices(next);
+    narrow({ services: next });
+  }
+
+  function toggleFlag(field: "verifiedOnly" | "licenceValid", on: boolean) {
+    if (field === "verifiedOnly") setVerifiedOnly(on); else setLicenceValid(on);
+    narrow({ [field]: on } as Partial<Applied>);
   }
 
   const live = state?.live_pass_id != null;
@@ -169,8 +253,8 @@ export default function FindSearchPage() {
         Find a transporter or a clearing agent
       </h1>
       <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
-        Type a company, a corridor, a city or a service and press Search. Your first search
-        of the day is free.
+        Type a company, a corridor, a city or a service and press Search — or pick a route
+        below and search the road instead. Your first search of the day is free.
       </p>
 
       {/* ---------- the one action on this page ---------- */}
@@ -218,6 +302,54 @@ export default function FindSearchPage() {
             ))}
           </select>
         </div>
+
+        {/* ---------- what kind of company, and what they must actually do ---------- */}
+        <div className="mt-16 flex flex-wrap items-center gap-8">
+          <span className="mr-4 text-[10px] font-bold uppercase tracking-[0.14em]"
+            style={{ color: "var(--ink-soft)" }}>
+            Only offer me
+          </span>
+          {SERVICE_OPTIONS.map(o => {
+            const on = services.includes(o.value);
+            return (
+              <button key={o.value} type="button" aria-pressed={on}
+                onClick={() => toggleService(o.value)} className={chip(on)}>
+                {o.label}
+              </button>
+            );
+          })}
+          {[
+            { field: "verifiedOnly" as const, label: "Verified companies", on: verifiedOnly },
+            { field: "licenceValid" as const, label: "Licence still valid", on: licenceValid }
+          ].map(o => (
+            <button key={o.field} type="button" aria-pressed={o.on}
+              onClick={() => toggleFlag(o.field, !o.on)} className={chip(o.on)}>
+              {o.label}
+            </button>
+          ))}
+          <label className="flex items-center gap-8">
+            <span className="text-[10px] font-bold uppercase tracking-[0.14em]"
+              style={{ color: "var(--ink-soft)" }}>
+              At least
+            </span>
+            <input type="number" min={1} max={20000} value={minFleet}
+              onChange={e => setMinFleet(e.target.value)}
+              placeholder="any" aria-label="Minimum declared trucks"
+              className={`${inputCls} w-[110px]`} style={inputStyle} />
+            <span className="text-[10px] font-bold uppercase tracking-[0.14em]"
+              style={{ color: "var(--ink-soft)" }}>
+              trucks
+            </span>
+          </label>
+        </div>
+        <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+          Services are read out of the words each company wrote about itself, so a company
+          missing from one of these boxes may still do it — its card will say. Declared fleet
+          and licence dates are what the company published, not what WAISHA has verified.
+        </p>
+
+        {/* ---------- the route ---------- */}
+        <RoutePicker regions={geoRegions} onPick={setRoutePick} />
 
         {/* The meter, in the one place a seeker looks at before pressing the button. It
             says what the next search costs, never how to go and claim something first. */}
@@ -296,6 +428,23 @@ export default function FindSearchPage() {
               {" · page "}{page}/{pages}
             </p>
           </div>
+
+          {(board.applied.route || optionSummary(board.applied)) && (
+            <p className="mb-16 -mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+              {board.applied.route && (
+                <>Route {board.applied.route.originRegion}
+                  {board.applied.route.originText ? ` (${board.applied.route.originText})` : ""}
+                  {" → "}{board.applied.route.destRegion}
+                  {board.applied.route.destText ? ` (${board.applied.route.destText})` : ""}
+                  {board.applied.route.corridor
+                    ? ` · ${board.applied.route.corridor}`
+                    : " · the two ends only"}
+                </>
+              )}
+              {board.applied.route && optionSummary(board.applied) ? " · " : ""}
+              {optionSummary(board.applied)}
+            </p>
+          )}
 
           {board.results.length === 0 ? (
             <div className={card} style={cardStyle}>

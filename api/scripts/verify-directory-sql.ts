@@ -119,13 +119,18 @@ const statements: [string, string, unknown[]][] = [
 
   ["own search log",
     `select id, created_at, query, filter_kind, filter_region_id, listing_id, found,
-            credits_left
+            credits_left, filter_origin_region_id, filter_dest_region_id,
+            filter_origin_text, filter_dest_text
        from seeker_searches order by created_at desc limit 50`],
 
   // ---------- Spend, then read ----------
   ["spend one credit and get the claim check",
     `select platform_auth.consume_search_credit($1,$2,$3,$4,$5,$6,$7) as r`,
     [FAKE_USER, FAKE_PASS, FAKE_LISTING, "container arusha", "transporter", 4, "41.220.0.1"]],
+
+  ["put the route the seeker clicked onto the row the credit just wrote",
+    `select platform_auth.record_search_route($1,$2,$3,$4,$5) as r`,
+    [FAKE_SEARCH, 4, 1, "Namanga border", "Mikocheni"]],
 
   ["search the directory against the claim",
     `select * from directory_search($1,$2,$3,$4,$5,$6)`,
@@ -135,11 +140,21 @@ const statements: [string, string, unknown[]][] = [
     `select * from directory_search($1,$2,$3,$4,$5,$6)`,
     [FAKE_SEARCH, null, null, null, 60, 20]],
 
+  ["search a ROUTE: an ordered chain plus the four extra options",
+    `select * from directory_search($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [FAKE_SEARCH, "transporter", null, "container", 20, 0,
+     [4, 5, 1], ["haul", "bond"], true, true, 6]],
+
   ["open one card, same claim",
     `select * from directory_card_for($1,$2)`, [FAKE_LISTING, FAKE_SEARCH]],
 
   ["the region filter only offers regions that hold companies",
     `select region_id, region_name, companies from directory_region_counts()`],
+
+  ["the corridor board, top to bottom, with the chain each one crosses",
+    `select corridor_id, corridor, kind, origin_region, dest_region,
+            region_ids, region_names, towns, companies
+       from directory_corridor_board()`],
 
   // ---------- Control: verify money, moderate the board ----------
   ["control: the pending payment queue",
@@ -412,6 +427,163 @@ const shapeChecks: Check[] = [
     (rows) => /geo_regions/.test(rows[0].def)
       && !/from users|join users|from seekers|join seekers|audit_logs|freight_invoices|cargo_files/.test(rows[0].def)],
 
+  // ---------- 120: the route, the board and the four extra options ----------
+  // Postgres resolves a function by name plus INPUT types, so an 11-argument reader that
+  // shares its name with a leftover 6-argument one makes every short call ambiguous and the
+  // reader dies with 42883 "function directory_search is not unique". EXPLAIN cannot catch
+  // that on the defaults, so the overload count is the check.
+  ["there is exactly one directory_search and it takes eleven arguments", `
+     select count(*)::int as overloads, max(p.pronargs) as args from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.proname = 'directory_search'`,
+    (rows) => rows[0].overloads === 1 && rows[0].args === 11],
+
+  ["the new legs are named in the signature", `
+     select a as arg from pg_proc p, unnest(p.proargnames) a
+     where p.proname = 'directory_search'`,
+    (rows) => ["p_route", "p_services", "p_verified_only", "p_licence_valid", "p_min_fleet"]
+      .every((k) => rows.some((r) => r.arg === k))],
+
+  // The count and the page are the same predicate written twice — one number the seeker is
+  // told, one set of rows they get. A leg added to one half only shows up as a result the
+  // seeker cannot page to, so every route/option leg is required to appear exactly twice.
+  // Whitespace is collapsed first: the two copies are indented differently in 120 because
+  // one sits in a CTE, and a check that reads the layout would fail on a re-format.
+  ["the count and the page carry the identical predicate, leg for leg", `
+     select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_search'`,
+    (rows) => {
+      const flat = (rows[0].def as string).replace(/\s+/g, " ");
+      return [
+        "v_services is null",
+        "p_verified_only is distinct from true",
+        "p_licence_valid is distinct from true",
+        "p_min_fleet is null or coalesce(l.fleet_size_declared, 0) >= p_min_fleet",
+        "v_route is null or ends.at_origin or ends.at_dest or exists",
+        "and f.region_id = any(v_route)",
+        "l.status = 'live' and l.deleted_at is null"
+      ].every((phrase) => {
+        const n = (flat.match(new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length;
+        return n === 2;
+      });
+    }],
+
+  ["a one-region chain is not a route, so it cannot rank anything", `
+     select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_search'`,
+    (rows) => /cardinality\(p_route\), 0\) >= 2/.test(rows[0].def)
+      && /v_first := v_route\[1\]/.test(rows[0].def)
+      && /v_last := v_route\[cardinality\(v_route\)\]/.test(rows[0].def)],
+
+  ["both ends outrank either end, which outranks a company merely along the way", `
+     select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_search'`,
+    (rows) => /when v_route is null then 0/.test(rows[0].def)
+      && /ends\.at_origin and ends\.at_dest then 3/.test(rows[0].def)
+      && /ends\.at_origin or ends\.at_dest then 2/.test(rows[0].def)
+      && /else 1\s+end as route_score/.test(rows[0].def)
+      && /order by route_score desc, l\.is_verified desc/.test(rows[0].def)],
+
+  ["the ends read the company's own copy for the end names — and only the ends", `
+     select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_search'`,
+    // corridors_served / home_base / headline are the only free text a listing carries, and
+    // the middle of a chain never matches them, or one long road would rank all of Tanzania.
+    // Twice each: once in the count's lateral, once in the page's — a third copy would mean
+    // a leg was added for the middle of the chain.
+    (rows) => ["v_first_name", "v_last_name"].every((who) =>
+      (rows[0].def.match(new RegExp(`l\\.corridors_served ilike '%' \\|\\| ${who} \\|\\| '%'`, "g")) ?? []).length === 2)
+      && !/v_route\[i|generate_subscripts|unnest\(v_route\)/.test(rows[0].def)],
+
+  ["relevance is ordering only — route_score never reaches the card", `
+     select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_search'`,
+    // directory_card is frozen at 19 columns (checked above); widening it for a rank would
+    // break directory_card_for's composite return, so the score only ever orders rows.
+    (rows) => !/h\.route_score/.test(rows[0].def)
+      && !/route_score\s+from\s+hits/.test(rows[0].def.replace(/\s+/g, " "))
+      && /h\.published_at,\s+h\.total\s+from hits h/.test(rows[0].def.replace(/\s+/g, " "))],
+
+  ["a service filter matches stems case-insensitively, never with a NULL-yielding ilike", `
+     select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_search'`,
+    (rows) => /position\(lower\(term\.word\) in\s+lower\(coalesce\(l\.services_offered, ''\)/.test(rows[0].def)
+      && /as term\(word\)/.test(rows[0].def)],
+
+  ["the search log keeps both ends of a route as integers and the ends' text as capped text", `
+     select column_name, data_type from information_schema.columns
+     where table_name = 'seeker_searches' and column_name like 'filter_%_text'
+        or table_name = 'seeker_searches' and column_name like 'filter_%_region_id'`,
+    (rows) => rows.length === 4
+      && rows.filter((r) => /region_id/.test(r.column_name)).every((r) => r.data_type === "integer")
+      && rows.filter((r) => /text/.test(r.column_name)).every((r) => r.data_type === "text")],
+
+  ["both route ends are foreign keys, so a stale region cannot be logged", `
+     select count(*)::int as n from pg_constraint
+     where contype = 'f' and conrelid = 'seeker_searches'::regclass
+       and confrelid = 'geo_regions'::regclass`,
+    (rows) => rows[0].n === 3],
+
+  ["and the free-text ends are capped, not left to a 1 GB query string", `
+     select pg_get_constraintdef(oid) as def from pg_constraint
+     where contype = 'c' and conrelid = 'seeker_searches'::regclass`,
+    (rows) => ["filter_origin_text", "filter_dest_text"].every((col) =>
+      rows.some((r) => new RegExp(`${col} IS NULL`).test(r.def)
+        && new RegExp(`char_length\\(${col}\\) <= 120`).test(r.def)))],
+
+  ["route demand is indexable without dragging in every plain search", `
+     select indexdef from pg_indexes where indexname = 'seeker_searches_route_idx'`,
+    (rows) => rows.length === 1
+      && /btree \(filter_origin_region_id, filter_dest_region_id\)/.test(rows[0].indexdef)
+      && /filter_origin_region_id IS NOT NULL/.test(rows[0].indexdef)],
+
+  ["record_search_route is the only writer, is a definer, binds the session tenant and refuses a card open", `
+     select p.prosecdef, pg_get_functiondef(p.oid) as def from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'platform_auth' and p.proname = 'record_search_route'`,
+    (rows) => rows.length === 1 && rows[0].prosecdef === true
+      && /SET search_path TO 'public'/.test(rows[0].def)
+      && /s\.tenant_id = nullif\(current_setting\('app\.tenant_id', true\), ''\)::uuid/.test(rows[0].def)
+      && /and s\.listing_id is null/.test(rows[0].def)
+      && /nullif\(trim\(coalesce\(p_origin_text, ''\)\), ''\)/.test(rows[0].def)
+      && /return v_updated = 1/.test(rows[0].def)],
+
+  ["the corridor board is a definer that leaves nothing but aggregate names", `
+     select p.prosecdef, pg_get_functiondef(p.oid) as def from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+     where p.proname = 'directory_corridor_board'`,
+    (rows) => rows.length === 1 && rows[0].prosecdef === true
+      && /SECURITY DEFINER/.test(rows[0].def) && /SET search_path TO 'public'/.test(rows[0].def)],
+
+  ["its output list is the allowlist — no id, no contact, no tenant", `
+     select p.proargnames[i] as arg, p.proargmodes[i] as mode
+       from pg_proc p, generate_subscripts(p.proargnames, 1) as i
+      where p.proname = 'directory_corridor_board'`,
+    // RETURNS TABLE records its arguments as 't' in pg_proc; 'o' is only what a list of
+    // individual OUT parameters gets.
+    (rows) => rows.map((r) => r.arg).join(",") === [
+      "corridor_id", "corridor", "kind", "notes", "origin_region_id", "origin_region",
+      "dest_region_id", "dest_region", "region_ids", "region_names", "towns", "companies"
+    ].join(",") && rows.length === 12 && rows.every((r) => r.mode === "t")],
+
+  ["and it counts listings rather than naming them, so Rule 0 holds on a table it reads", `
+     select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_corridor_board'`,
+    (rows) => /count\(distinct f\.listing_id\) as companies/.test(rows[0].def)
+      && !/l\.contact_name|l\.contact_channel|tenant_id\s*,/.test(rows[0].def)],
+
+  ["the chain is origin -> every stop -> destination, deduplicated in order", `
+     select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_corridor_board'`,
+    (rows) => /c\.origin_region_id as region_id/.test(rows[0].def)
+      && /select 1000, c\.dest_region_id/.test(rows[0].def)
+      && /row_number\(\) over \(partition by corridor_id, region_id order by pos\)/.test(rows[0].def)
+      && /array_agg\(o\.region_id order by o\.pos\)/.test(rows[0].def)
+      && /coalesce\(s\.label, p\.name, g\.name_en\)/.test(rows[0].def)],
+
+  ["main roads come first and the board never invents a corridor", `
+     select pg_get_functiondef(p.oid) as def from pg_proc p where p.proname = 'directory_corridor_board'`,
+    (rows) => /order by \(c\.kind = 'main'\) desc, coalesce\(oc\.companies, 0\) desc, c\.name/.test(rows[0].def)],
+
+  ["there is no view over the corridors either — 046's rule, readers are functions", `
+     select v.viewname from pg_views v
+     join pg_class c on c.relname = v.viewname
+     where v.schemaname = 'public'
+       and pg_get_viewdef(c.oid) ilike '%geo_corridors%'`,
+    (rows) => rows.length === 0],
+
   ["the meter locks the pass row before deciding", `
      select pg_get_functiondef(p.oid) as def from pg_proc p
      join pg_namespace n on n.oid = p.pronamespace
@@ -570,11 +742,13 @@ const shapeChecks: Check[] = [
      select p.proname, has_function_privilege('app_runtime', p.oid, 'execute') as can
        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where (n.nspname = 'public' and p.proname in
-               ('directory_search','directory_card_for','directory_region_counts','directory_claim_ok'))
+               ('directory_search','directory_card_for','directory_region_counts','directory_claim_ok',
+                'directory_corridor_board'))
          or (n.nspname = 'platform_auth' and p.proname in
                ('claim_free_search','record_weekly_pass','consume_search_credit','seeker_pass_state',
-                'verify_search_pass','moderate_listing','list_pending_passes','list_directory_for_control'))`,
-    (rows) => rows.length === 12 && rows.every((r) => r.can === true)],
+                'verify_search_pass','moderate_listing','list_pending_passes','list_directory_for_control',
+                'record_search_route'))`,
+    (rows) => rows.length === 14 && rows.every((r) => r.can === true)],
 
   ["directory_claim_ok is EXECUTE-able even though it is not a definer", `
      select has_function_privilege('app_runtime','directory_claim_ok(uuid)','execute') as can`,
@@ -588,11 +762,13 @@ const shapeChecks: Check[] = [
             has_function_privilege('service_role', p.oid, 'execute') as svc_x
        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where (n.nspname = 'public' and p.proname in
-               ('directory_search','directory_card_for','directory_region_counts','directory_claim_ok'))
+               ('directory_search','directory_card_for','directory_region_counts','directory_claim_ok',
+                'directory_corridor_board'))
          or (n.nspname = 'platform_auth' and p.proname in
                ('claim_free_search','record_weekly_pass','consume_search_credit','seeker_pass_state',
-                'verify_search_pass','moderate_listing','list_pending_passes','list_directory_for_control'))`,
-    (rows) => rows.length === 12 && rows.every((r) =>
+                'verify_search_pass','moderate_listing','list_pending_passes','list_directory_for_control',
+                'record_search_route'))`,
+    (rows) => rows.length === 14 && rows.every((r) =>
       r.anon_x === false && r.auth_x === false && r.public_x === false && r.svc_x === false)],
 
   // 096 pinned this one deliberately: the guard is owner-only in 061, and app_runtime is
@@ -875,6 +1051,10 @@ async function main() {
       //    past that guard is invisible to them. This is the probe that catches 061's
       //    ambiguous `found` reference — the bug that made every paid search a 500.
       const stamp = Date.now().toString(36);
+      // The settle probe counts rows its own search returns, so the word it searches for has
+      // to be one no other fixture's name can contain — 'probe' matched the seeker test
+      // company too and the expected one row became three.
+      const tok7 = `zzsettle${stamp}`;
       const pTenant = randomUUID();
       const pUser = randomUUID();
       const pPass = randomUUID();
@@ -887,7 +1067,8 @@ async function main() {
         built = true;
         // A run that died mid-probe left its fixtures behind, so the script reaps its
         // own history before it starts rather than accumulating live listings.
-        const stale = await oi.query("select id from tenants where name like 'Probe Directory %'");
+        const stale = await oi.query(
+          `select id from tenants where name like 'Probe Directory %' or name like 'Probe Route %'`);
         for (const r of stale.rows) await reapProbeTenant(oi, r.id);
         const free = await oi.query("select id from seeker_pass_products where key = 'free'");
         const reg = await oi.query("select id from geo_regions where is_active order by id limit 1");
@@ -913,9 +1094,9 @@ async function main() {
         await oi.query(
           `insert into directory_listings (id, tenant_id, serves, company_name, headline,
              home_base, contact_name, contact_channel, status)
-           values ($1,$2,'{transporter}',$3,'Probe fixture card','Dar es Salaam',
+           values ($1,$2,'{transporter}',$3,$4,'Dar es Salaam',
                    'Probe Contact','+255 700 000 111','live')`,
-          [pListing, pTenant, `Probe Directory Co ${stamp}`]);
+          [pListing, pTenant, `Probe Directory Co ${stamp}`, `Headline ${tok7}`]);
         await oi.query(
           `insert into directory_listing_regions (listing_id, region_id, tenant_id)
            values ($1,$2,$3)`, [pListing, reg.rows[0].id, pTenant]);
@@ -923,7 +1104,7 @@ async function main() {
         await c.query("select set_config('app.tenant_id', $1, false)", [pTenant]);
         const page1 = await c.query(
           `select count(*)::int as n, min(total)::int as total
-             from directory_search($1, null, null, 'probe', 20, 0)`, [pSearch]);
+             from directory_search($1, null, null, $2, 20, 0)`, [pSearch, tok7]);
         console.log(page1.rows[0].n === 1 && page1.rows[0].total === 1
           ? "ok     directory_search executes end-to-end for a paid claim"
           : `FAIL  directory_search on a real claim returned ${page1.rows[0].n} rows, total=${page1.rows[0].total}`);
@@ -936,12 +1117,179 @@ async function main() {
         if (settled.rows[0].found !== 1) failed++;
 
         const page2 = await c.query(
-          `select count(*)::int as n from directory_search($1, null, null, 'probe', 20, 20)`, [pSearch]);
+          `select count(*)::int as n from directory_search($1, null, null, $2, 20, 20)`,
+          [pSearch, tok7]);
         const restamped = await c.query("select found from seeker_searches where id = $1", [pSearch]);
         console.log(page2.rows[0].n === 0 && restamped.rows[0].found === 1
           ? "ok     page two is free and leaves the settled count alone"
           : `FAIL  page two read ${page2.rows[0].n} rows and left found=${restamped.rows[0].found}`);
         if (!(page2.rows[0].n === 0 && restamped.rows[0].found === 1)) failed++;
+
+        // 8. THE ROUTE AND THE FOUR NEW OPTIONS. A ranking is not a shape: the shape checks
+        //    above can read the CASE text and still be wrong about what it returns, so four
+        //    live companies are put on one three-region chain and the reader is asked to
+        //    order them. A tagged both ends, B the origin, C the middle only, D nothing at
+        //    all — D earns its place purely from the destination NAME it wrote into its own
+        //    copy, which is the leg that widens the match beyond the region tags.
+        const routeTenants: string[] = [];
+        const tok = `zroute${stamp}`;
+        try {
+          const chainRows = await oi.query(
+            `select id, name_en from geo_regions where is_active order by id offset 3 limit 3`);
+          if ((chainRows.rowCount ?? 0) < 3) throw new Error("geo_regions has no three active regions to chain");
+          const ids = chainRows.rows.map((r: any) => Number(r.id));
+          const nm = chainRows.rows.map((r: any) => String(r.name_en));
+
+          const mkCompany = async (label: string, tagIds: number[], copy: any) => {
+            const tid = randomUUID();
+            await oi.query(`insert into tenants (id, type, name, status)
+                            values ($1,'transporter',$2,'active')`,
+              [tid, `Probe Route ${label} ${stamp}`]);
+            routeTenants.push(tid);
+            await oi.query(
+              `insert into directory_listings (id, tenant_id, serves, company_name, headline,
+                 home_base, services_offered, corridors_served, fleet_size_declared,
+                 licence_valid_to, contact_name, contact_channel, status)
+               values ($1,$2,'{transporter}',$3,$4,'Dodoma',$5,$6,$7,$8,
+                       'Probe Contact','+255 700 000 222','live')`,
+              [randomUUID(), tid, `Probe Route ${label} ${stamp}`, `Headline ${tok}`,
+               copy.services ?? null, copy.corridors ?? null, copy.fleet ?? null,
+               copy.licence ?? null]);
+            for (const regionId of tagIds) {
+              await oi.query(
+                `insert into directory_listing_regions (listing_id, region_id, tenant_id)
+                 select l.id, $2, $1 from directory_listings l where l.tenant_id = $1`,
+                [tid, regionId]);
+            }
+            return `Probe Route ${label} ${stamp}`;
+          };
+
+          const both = await mkCompany("Both Ends", [ids[0], ids[2]],
+            { services: "Bulk haulage and bonded warehousing", fleet: 40, licence: "2027-12-31" });
+          const origin = await mkCompany("One End", [ids[0]], { services: "Clearing and forwarding" });
+          const middle = await mkCompany("Along The Middle", [ids[1]], { services: "Storage only" });
+          const copyOnly = await mkCompany("End In Its Copy", [],
+            { services: "Container haulage", corridors: `Kapagaga — ${nm[2]}` });
+
+          await c.query("select set_config('app.tenant_id', $1, false)", [pTenant]);
+
+          const ranked = await c.query(
+            `select company_name, total from directory_search($1,null,null,$2,20,0,$3::int[])`,
+            [pSearch, tok, ids]);
+          const names = ranked.rows.map((r: any) => r.company_name);
+          const scored = ranked.rows.length === 4 && names[0] === both
+            && names[3] === middle && names.includes(copyOnly) && ranked.rows[0].total === 4;
+          console.log(scored
+            ? "ok     a route ranks both ends first, the middle last and reaches a company that tagged nothing"
+            : `FAIL  route ranking gave ${JSON.stringify(names)}`);
+          if (!scored) failed++;
+
+          // The same four rows in the same search without the chain — the only thing the
+          // route leg is allowed to change is the order, never the count.
+          const plain = await c.query(
+            `select company_name from directory_search($1,null,null,$2,20,0)`, [pSearch, tok]);
+          const reordered = plain.rows.length === 4 && plain.rows[0].company_name !== both;
+          console.log(reordered
+            ? "ok     the same search with no route keeps the four rows and its old order"
+            : `FAIL  no-route order ${JSON.stringify(plain.rows.map((r: any) => r.company_name))}`);
+          if (!reordered) failed++;
+
+          const oneEnd = await c.query(
+            `select count(*)::int as n from directory_search($1,null,null,$2,20,0,array[$3,$4]::int[])`,
+            [pSearch, tok, ids[0], ids[1]]);
+          console.log(oneEnd.rows[0].n === 3
+            ? "ok     a two-region chain drops the company that only covers the far end"
+            : `FAIL  a chain of ${ids[0]},${ids[1]} matched ${oneEnd.rows[0].n} of 4, expected 3`);
+          if (oneEnd.rows[0].n !== 3) failed++;
+
+          const optProbe = async (label: string, sql: string, expectName: string | null) => {
+            const r = await c.query(sql, [pSearch, tok]);
+            const ok = expectName === null
+              ? r.rows[0].n === 0
+              : r.rows[0].n === 1 && r.rows[0].company_name === expectName;
+            console.log(ok ? `ok     ${label} filters for real`
+              : `FAIL  ${label} matched ${JSON.stringify(r.rows).slice(0, 200)}`);
+            if (!ok) failed++;
+          };
+          // Written out one statement at a time rather than built from a table of fragments:
+          // the reader's arity IS the interface, and a call assembled from strings hides
+          // which position a leg actually sits in. min() keeps the single expected name
+          // readable without dragging company_name into a GROUP BY.
+          await optProbe("services haul and bond",
+            `select count(*)::int as n, min(company_name) as company_name
+               from directory_search($1,null,null,$2,20,0,null,'{haul,bond}')`, both);
+          await optProbe("verified only",
+            `select count(*)::int as n, min(company_name) as company_name
+               from directory_search($1,null,null,$2,20,0,null,null,true)`, null);
+          await optProbe("licence still valid",
+            `select count(*)::int as n, min(company_name) as company_name
+               from directory_search($1,null,null,$2,20,0,null,null,null,true)`, both);
+          await optProbe("fleet of 10 or more",
+            `select count(*)::int as n, min(company_name) as company_name
+               from directory_search($1,null,null,$2,20,0,null,null,null,null,10)`, both);
+
+          // The board, for the picker: aggregate rows only, and it must not carry a phone.
+          const board = await c.query("select * from directory_corridor_board()");
+          const keys = Object.keys(board.rows[0] ?? {});
+          const boardOk = board.rows.length > 0
+            && !keys.some((k) => /contact|tenant|company_id|listing_id/.test(k))
+            && board.rows.every((r: any) => Array.isArray(r.region_ids) && r.region_ids.length >= 2
+              && r.region_ids[0] === r.origin_region_id);
+          console.log(boardOk
+            ? `ok     directory_corridor_board answers with ${board.rows.length} chains and no private column`
+            : `FAIL  corridor board ${JSON.stringify(keys).slice(0, 220)}`);
+          if (!boardOk) failed++;
+
+          // record_search_route: the seeker's own row, then a stranger's session, then a
+          // card open. Only the first may be written.
+          const mine = await c.query(
+            "select platform_auth.record_search_route($1,$2,$3,$4,$5) as ok",
+            [pSearch, ids[0], ids[2], `${nm[0]} boundary`, `${nm[2]} council`]);
+          const written = await c.query(
+            `select filter_origin_region_id as o, filter_dest_region_id as d,
+                    filter_origin_text as ot, filter_dest_text as dt
+               from seeker_searches where id = $1`, [pSearch]);
+          const recOk = mine.rows[0].ok === true && written.rows[0].o === ids[0]
+            && written.rows[0].d === ids[2] && written.rows[0].ot === `${nm[0]} boundary`
+            && written.rows[0].dt === `${nm[2]} council`;
+          console.log(recOk
+            ? "ok     the route lands on the search log row the credit wrote"
+            : `FAIL  record_search_route answered ${JSON.stringify([mine.rows[0], written.rows[0]])}`);
+          if (!recOk) failed++;
+
+          const stranger = randomUUID();
+          await c.query("select set_config('app.tenant_id', $1, false)", [routeTenants[0]]);
+          const stolen = await c.query(
+            "select platform_auth.record_search_route($1,$2,$3,null,null) as ok",
+            [pSearch, ids[0], ids[2]]);
+          await c.query("select set_config('app.tenant_id', $1, false)", [pTenant]);
+          console.log(stolen.rows[0].ok === false
+            ? "ok     another tenant's session cannot write onto this seeker's log row"
+            : "FAIL  record_search_route wrote a row for a session that does not own it");
+          if (stolen.rows[0].ok !== false) failed++;
+
+          await oi.query(
+            `insert into seeker_searches (id, tenant_id, user_id, pass_id, listing_id, credits_left)
+             values ($1,$2,$3,$4,$5,0)`,
+            [stranger, pTenant, pUser, pPass, pListing]);
+          const cardOpen = await c.query(
+            "select platform_auth.record_search_route($1,$2,$3,'a','b') as ok",
+            [stranger, ids[0], ids[2]]);
+          console.log(cardOpen.rows[0].ok === false
+            ? "ok     a card open is not a route and the writer says so"
+            : "FAIL  record_search_route wrote a route onto a card-open row");
+          if (cardOpen.rows[0].ok !== false) failed++;
+          await oi.query("delete from seeker_searches where id = $1", [stranger]);
+
+          const blank = await c.query(
+            "select platform_auth.record_search_route($1,null,null,'  ','  ') as ok", [pSearch]);
+          console.log(blank.rows[0].ok === false
+            ? "ok     a route with no regions is refused before it can blank the row"
+            : "FAIL  record_search_route accepted a route with no ends");
+          if (blank.rows[0].ok !== false) failed++;
+        } finally {
+          for (const t of routeTenants) await reapProbeTenant(oi, t);
+        }
       } catch (e: any) {
         failed++;
         console.log("FAIL  settle-path probe -", e.code ? `${e.code} ${e.message}` : e.message);
@@ -951,9 +1299,11 @@ async function main() {
           // Checked by name, not by this run's ids: a previous crashed run's fixtures
           // would otherwise pass for residue this run never made.
           const residue = await oi.query(
-            `select (select count(*) from tenants t where t.name like 'Probe Directory %') as tenants,
+            `select (select count(*) from tenants t
+                     where t.name like 'Probe Directory %' or t.name like 'Probe Route %') as tenants,
                     (select count(*) from directory_listings l
-                       where l.company_name like 'Probe Directory Co %') as listings,
+                       where l.company_name like 'Probe Directory Co %'
+                          or l.company_name like 'Probe Route %') as listings,
                     (select count(*) from seeker_searches s where s.query = 'probe settle') as searches,
                     (select count(*) from users u where u.full_name = 'Probe Seeker') as users`).catch(() => null);
           const clean = !!residue && Object.values(residue.rows[0]).every((n: any) => Number(n) === 0);

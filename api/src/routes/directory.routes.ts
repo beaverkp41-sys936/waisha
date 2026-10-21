@@ -22,6 +22,15 @@ async function requireAuth(req: any) {
 const KINDS = ["transporter", "cfa"] as const;
 const SERVES = ["transporter", "cfa"] as const;
 
+/**
+ * The service chips are stems, not labels: `directory_listings.services_offered` is free
+ * text the company typed itself, so "Bonding" has to match "bonded transit" as readily as
+ * "bonding". The reader takes the stems straight and matches them case-insensitively
+ * against the published copy, which is the only honest test available on a field with no
+ * vocabulary behind it.
+ */
+const SERVICE_TERMS = ["haul", "clear", "bond", "transit", "storage", "wareh", "deliver"] as const;
+
 /** The meter counts down in minutes, and 1439 of them is a sentence nobody reads. */
 function hm(totalMinutes: number): string {
   const m = Math.max(0, Math.floor(totalMinutes));
@@ -30,22 +39,40 @@ function hm(totalMinutes: number): string {
 }
 
 /**
- * A region id reaches two foreign keys — seeker_searches.filter_region_id and
- * directory_listing_regions.region_id — and both raise 23503 from inside a definer or
- * a trigger, which would surface as a 500 for what is really a bad number in a
- * dropdown. Checked before anything is spent, because a search that errors after
- * consume_search_credit has already taken the credit is a search the seeker paid for
+ * A region id reaches four foreign keys — seeker_searches.filter_region_id, its two route
+ * columns and directory_listing_regions.region_id — and every one of them raises 23503 from
+ * inside a definer or a trigger, which would surface as a 500 for what is really a bad
+ * number in a dropdown. Checked before anything is spent, because a search that errors
+ * after consume_search_credit has already taken the credit is a search the seeker paid for
  * and did not get.
  */
-async function assertRegions(ids: number[]): Promise<void> {
+async function assertRegions(ids: number[], field = "regionId"): Promise<void> {
   if (!ids.length) return;
   const found = await pool.query(
     "select id from geo_regions where id = any($1::int[]) and is_active", [ids]);
   if (found.rowCount !== ids.length) {
     throw new ApiError("VALIDATION_FAILED", "Unknown region.", 400,
-      [{ field: "regionId", message: "Not a WAISHA region" }]);
+      [{ field, message: "Not a WAISHA region" }]);
   }
 }
+
+/** A route is a pair of WAISHA regions plus the two free-text ends the seeker typed
+ *  (a council or a ward below the region, which no listing is tagged at). The id pair is
+ *  what the search matches on; the text is what the log keeps so the seeker's history
+ *  page can show the same thing they picked. */
+const routeSchema = z.object({
+  originRegionId: z.number().int().positive(),
+  destRegionId: z.number().int().positive(),
+  originText: z.string().trim().max(120).nullish(),
+  destText: z.string().trim().max(120).nullish(),
+  corridorId: z.number().int().positive().nullish()
+}).strict().superRefine((v, ctx) => {
+  // Same region at both ends is a "who works in this region" search, and the region
+  // filter answers that without ranking anyone as if they ran a road.
+  if (v.originRegionId === v.destRegionId) {
+    ctx.addIssue({ code: "custom", path: ["destRegionId"], message: "Pick two different regions" });
+  }
+});
 
 const searchSchema = z.object({
   kind: z.enum(KINDS).nullish(),
@@ -55,10 +82,86 @@ const searchSchema = z.object({
   // log row with a nullable listing_id for exactly this, and the per-listing counts
   // the office and the company both read depend on it being set.
   listingId: z.string().uuid().optional(),
+  route: routeSchema.optional(),
+  services: z.array(z.enum(SERVICE_TERMS)).max(SERVICE_TERMS.length).nullish(),
+  verifiedOnly: z.boolean().nullish(),
+  licenceValid: z.boolean().nullish(),
+  minFleet: z.number().int().min(1).max(20000).nullish(),
   limit: z.number().int().min(1).max(60).default(20),
   offset: z.number().int().min(0).max(5000).default(0),
   passId: z.string().uuid().optional()
-}).strict();
+}).strict().superRefine((v, ctx) => {
+  // platform_auth.record_search_route refuses to write a route onto a card-open row, so
+  // accepting both here would spend a credit and then quietly drop half of what was asked.
+  if (v.listingId && v.route) {
+    ctx.addIssue({ code: "custom", path: ["route"], message: "A card open has no route" });
+  }
+});
+type SearchInput = z.infer<typeof searchSchema>;
+
+/**
+ * The GET door takes the same filters as the POST one, in a query string. Paging and
+ * narrowing both come through here, and the read that answers them has to be the read the
+ * credit paid for — a route dropped on the way through would show the seeker page two of a
+ * list they never asked for.
+ */
+function searchInputFromQuery(q: Record<string, string | undefined>): SearchInput {
+  const origin = q.originRegionId ? Number(q.originRegionId) : null;
+  const dest = q.destRegionId ? Number(q.destRegionId) : null;
+  return searchSchema.parse({
+    kind: q.kind || undefined,
+    regionId: q.regionId ? Number(q.regionId) : undefined,
+    query: q.query || undefined,
+    limit: q.limit ? Number(q.limit) : undefined,
+    offset: q.offset ? Number(q.offset) : undefined,
+    route: origin && dest ? {
+      originRegionId: origin, destRegionId: dest,
+      originText: q.originText || undefined, destText: q.destText || undefined,
+      corridorId: q.corridorId ? Number(q.corridorId) : undefined
+    } : undefined,
+    services: q.services ? q.services.split(",").map(s => s.trim()).filter(Boolean) : undefined,
+    verifiedOnly: q.verifiedOnly === undefined ? undefined : q.verifiedOnly !== "0",
+    licenceValid: q.licenceValid === undefined ? undefined : q.licenceValid !== "0",
+    minFleet: q.minFleet ? Number(q.minFleet) : undefined
+  });
+}
+
+/** The eleven arguments the reader takes, built in one place so the count and the page
+ *  cannot drift apart from each other across the two doors. */
+function cardParams(searchId: string, f: SearchInput, chain: number[] | null): unknown[] {
+  return [searchId, f.kind ?? null, f.regionId ?? null, f.query || null,
+    f.limit, f.offset, chain, f.services ?? null, f.verifiedOnly ?? null,
+    f.licenceValid ?? null, f.minFleet ?? null];
+}
+
+/**
+ * geo_corridors (075) is WAISHA's own curated set — the main roads, each anchored
+ * region -> towns -> region. A seeker who picks Namanga -> Dar is picking one of those
+ * chains, so the search reads the whole chain rather than two dots: a company tagged at
+ * Babati runs the Arusha road even if it never tagged either end. When the pair has no
+ * published corridor the chain collapses to its two ends, which is the honest answer —
+ * nobody has mapped that road, and inventing a chain would rank companies along a route
+ * the platform never drew.
+ */
+async function resolveChain(route: z.infer<typeof routeSchema>):
+  Promise<{ chain: number[]; corridor: string | null }> {
+  const { rows } = await pool.query(
+    "select corridor_id, corridor, region_ids from directory_corridor_board()");
+  const hit = rows.find((r: any) =>
+    (route.corridorId ? r.corridor_id === route.corridorId
+      : r.region_ids[0] === route.originRegionId &&
+        r.region_ids[r.region_ids.length - 1] === route.destRegionId) ||
+    r.region_ids[r.region_ids.length - 1] === route.originRegionId &&
+      r.region_ids[0] === route.destRegionId);
+  if (!hit) return { chain: [route.originRegionId, route.destRegionId], corridor: null };
+  // The board is stored one way; the seeker asked the other. The reader ranks its first
+  // element as the origin, so a reversed pick has to be walked backwards.
+  const back = Number(hit.region_ids[0]) !== route.originRegionId;
+  return {
+    chain: back ? [...hit.region_ids].reverse() : hit.region_ids,
+    corridor: hit.corridor
+  };
+}
 
 const listingSchema = z.object({
   serves: z.array(z.enum(SERVES)).min(1).max(2),
@@ -76,7 +179,7 @@ const listingSchema = z.object({
   regionIds: z.array(z.number().int().positive()).max(31).default([])
 }).strict();
 
-const CARDS_SQL = `select * from directory_search($1,$2,$3,$4,$5,$6)`;
+const CARDS_SQL = `select * from directory_search($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`;
 
 /**
  * directory_card_for returns one composite, not a set, so a listing that is not on the
@@ -105,6 +208,17 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
       return rows;
     });
 
+  // WAISHA's own corridors, top to bottom, each with the region chain it crosses and how
+  // many live companies sit on it. Aggregate public facts again, so the picker can be
+  // built before the seeker spends anything — and the seeker who wants "the southern
+  // road" gets WAISHA's road, not a guess at one.
+  app.get("/directory/corridors",
+    { preHandler: [requireAuth, requirePermission("directory.search")] },
+    async () => {
+      const { rows } = await pool.query("select * from directory_corridor_board()");
+      return rows;
+    });
+
   // One call, one credit, one page. Claim, consume and read deliberately share the
   // withTenant transaction: if the read throws, the rollback returns both the credit and
   // the day's free claim, so a seeker never pays for a search the server failed to run.
@@ -112,9 +226,17 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
     { preHandler: [requireAuth, requirePermission("directory.search")] },
     async (req: any) => {
       await enforceRateLimit(`directory-search:uid:${req.user.sub}`, 30, 3600);
-      const body = searchSchema.parse(req.body);
+      const body = searchSchema.parse(req.body) as SearchInput;
       const query = body.query || null;
       if (body.regionId) await assertRegions([body.regionId]);
+      if (body.route) {
+        await assertRegions([body.route.originRegionId, body.route.destRegionId],
+          "route.originRegionId");
+      }
+      // Resolved outside the paid transaction: a pair whose corridor lookup fails is a
+      // 500 that must not have cost a credit.
+      const walked = body.route ? await resolveChain(body.route) : null;
+      const routeOut = body.route && walked ? { ...body.route, ...walked } : null;
 
       let passId = body.passId ?? null;
       let state: any = null;
@@ -169,6 +291,16 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
         const res = spent.rows[0]?.r ?? {};
         if (!res.ok) throw meterRefusal(res);
 
+        // The route lands on the log row the credit just wrote, in the same transaction, so
+        // "who wants the Namanga road" is a demand fact the office can read instead of a
+        // filter that only existed in a browser. False means the row was not this tenant's
+        // or was a card open — neither is a search failure, so nothing throws.
+        if (body.route) {
+          await c.query("select platform_auth.record_search_route($1,$2,$3,$4,$5)",
+            [res.search_id, body.route.originRegionId, body.route.destRegionId,
+             body.route.originText ?? null, body.route.destText ?? null]);
+        }
+
         if (body.listingId) {
           const card = await c.query("select * from directory_card_for($1,$2)",
             [body.listingId, res.search_id]);
@@ -192,8 +324,7 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
         }
 
         const cards = await c.query(CARDS_SQL,
-          [res.search_id, body.kind ?? null, body.regionId ?? null, query,
-           body.limit, body.offset]);
+          cardParams(res.search_id, body, walked?.chain ?? null));
         // total rides on the rows the read returns, so a page with nothing on it carries
         // no count. The meter already settled seeker_searches.found for this search, and
         // that table is SELECT-visible to this tenant, so an empty board answers with a
@@ -210,7 +341,13 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
           requestId: req.requestId, entity: "seeker_searches", entityId: res.search_id,
           action: "directory.searched",
           after: { kind: body.kind ?? null, regionId: body.regionId ?? null,
-                   query, found, remaining: res.remaining }
+                   query, found, remaining: res.remaining,
+                   route: walked ? { origin: body.route!.originRegionId,
+                                     dest: body.route!.destRegionId,
+                                     corridor: walked.corridor,
+                                     chain: walked.chain.length } : null,
+                   services: body.services ?? null, verifiedOnly: body.verifiedOnly ?? null,
+                   licenceValid: body.licenceValid ?? null, minFleet: body.minFleet ?? null }
         });
 
         return {
@@ -218,6 +355,11 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
           kind: body.kind ?? null,
           regionId: body.regionId ?? null,
           query,
+          route: routeOut,
+          services: body.services ?? null,
+          verifiedOnly: body.verifiedOnly ?? null,
+          licenceValid: body.licenceValid ?? null,
+          minFleet: body.minFleet ?? null,
           limit: body.limit,
           offset: body.offset,
           found,
@@ -232,22 +374,22 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
 
   // Paging through a search the seeker already paid for costs nothing: 061's claim
   // check covers the whole five minutes. The filters come back with the search id
-  // because the same credit can be read with a narrower slice of it.
+  // because the same credit can be read with a narrower slice of it — ALL of them,
+  // including the route, or page two answers a different question from page one.
   app.get("/directory/search/:searchId",
     { preHandler: [requireAuth, requirePermission("directory.search")] },
     async (req: any) => {
       const searchId = z.string().uuid().parse((req.params as any).searchId);
-      const q = req.query as Record<string, string>;
-      const body = searchSchema.pick({ kind: true, regionId: true, query: true,
-        limit: true, offset: true }).parse({
-        kind: q.kind || undefined,
-        regionId: q.regionId ? Number(q.regionId) : undefined,
-        query: q.query || undefined,
-        limit: q.limit ? Number(q.limit) : undefined,
-        offset: q.offset ? Number(q.offset) : undefined
-      });
-      const query = body.query || null;
+      const body = searchInputFromQuery(req.query as Record<string, string | undefined>);
       if (body.regionId) await assertRegions([body.regionId]);
+      // Only the two ends are the client's numbers. The regions between them come from
+      // the board and only ever appear in an = any(...) test, which cannot raise a
+      // foreign key.
+      if (body.route) {
+        await assertRegions([body.route.originRegionId, body.route.destRegionId],
+          "route.originRegionId");
+      }
+      const walked = body.route ? await resolveChain(body.route) : null;
 
       return withTenant(req.user.tid, async (c) => {
         const claim = await c.query("select directory_claim_ok($1) as ok", [searchId]);
@@ -257,8 +399,7 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
             410, [{ reason: "claim_expired" }]);
         }
         const cards = await c.query(CARDS_SQL,
-          [searchId, body.kind ?? null, body.regionId ?? null, query,
-           body.limit ?? 20, body.offset ?? 0]);
+          cardParams(searchId, body, walked?.chain ?? null));
         return { searchId, found: cards.rows[0]?.total ?? 0, results: cards.rows };
       });
     });

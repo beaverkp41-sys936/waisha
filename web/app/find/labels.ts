@@ -39,6 +39,20 @@ export const KIND_OPTIONS = [
   { value: "cfa", label: "Clearing agents" }
 ];
 
+/** The seven words a seeker may ask a company to have written about itself. They are stems,
+ *  because the database matches them inside `services_offered` and the description exactly
+ *  as the company typed them ("bonded clearing", "warehousing") — the same stems the API's
+ *  SERVICE_TERMS allow, so a chip here can never ask for a term the search rejects. */
+export const SERVICE_OPTIONS = [
+  { value: "haul", label: "Haulage" },
+  { value: "clear", label: "Clearing" },
+  { value: "bond", label: "Bonded" },
+  { value: "transit", label: "Transit" },
+  { value: "storage", label: "Storage" },
+  { value: "wareh", label: "Warehousing" },
+  { value: "deliver", label: "Delivery" }
+];
+
 export const LICENCE_LABELS: Record<string, string> = {
   valid: "Licence valid", expiring_soon: "Licence expiring soon",
   expired: "Licence expired", not_declared: "Licence not declared"
