@@ -42,8 +42,8 @@
  *   ... --open                            click the page's create control before measuring,
  *                                         because a form that only exists after a tap is the
  *                                         page a phone user actually has to fill in
- *   ... --click 'waiting on you'          click the first control whose words begin with
- *                                         this, for the same reason one tab deep
+ *   ... --click 'waiting on you'          click the control whose words are this, or begin
+ *                                         with it, for the same reason one tab deep
  *   ... --fill 'Dar es Salaam'            type into the page's first empty box before
  *                                         --click runs, because a search board — the page
  *                                         a seeker actually reads — does not exist until
@@ -531,7 +531,7 @@ const SHELL = ".app-main, .portal-shell main, .control-shell";
 const OPEN_FORM = `(() => {
   const opener = /^(\\+?\\s*)?(add|new|create|raise|report|book)\\b/i;
   const shown = /^(close|hide|cancel|done|back)\\b/i;
-  const danger = /delete|remove|revoke|suspend|block|wipe|reset/i;
+  const danger = /delete|remove|revoke|suspend|block|wipe|reset|sign ?out|log ?out/i;
   const text = (el) => (el.textContent || '').trim();
   // A panel's own dismiss control is a short command — "Close", "Close file", "Cancel".
   // A filter chip called "Back on the road" is not, and treating it as one made the sweep
@@ -556,11 +556,17 @@ const OPEN_FORM = `(() => {
  *  literal: no backticks in here. */
 const clickForm = (want) => `(() => {
   const want = ${JSON.stringify(want)};
-  const danger = /delete|remove|revoke|suspend|block|wipe|reset/i;
+  // A sweep must never end its own session. "sign" prefix-matched the header's Sign out and the
+  // rest of the pass measured the login page while reporting clean numbers.
+  const danger = /delete|remove|revoke|suspend|block|wipe|reset|sign ?out|log ?out/i;
   const text = (el) => (el.textContent || '').trim().toLowerCase();
   const btns = [...document.querySelectorAll('${SHELL} button, ${SHELL} a.waisha-btn')]
     .filter(el => !el.closest('[hidden]') && el.getBoundingClientRect().height > 0);
-  const hit = btns.find(el => text(el).startsWith(want) && !danger.test(text(el)));
+  // A row's control is often a single word — "Open", "Edit" — that the page's own create
+  // button also begins with ("Open a dispute"). Taking the first prefix match measured the
+  // toolbar form and reported it as the sheet, so an exact label wins when one is on the page.
+  const safe = btns.filter(el => !danger.test(text(el)));
+  const hit = safe.find(el => text(el) === want) ?? safe.find(el => text(el).startsWith(want));
   if (!hit) return 'no ' + want;
   hit.click();
   return want + ' -> ' + text(hit).slice(0, 24);

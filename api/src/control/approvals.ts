@@ -42,32 +42,52 @@ export const VIEW = "control.approvals.view";
 export const DECIDE = "control.approvals.decide";
 /** Raising a proposal costs the duty the act itself would have cost. */
 const TENANTS_MANAGE = "control.tenants.manage";
+const REFUND_MANAGE = "control.payments.manage";
 
 /**
- * What can be proposed, and what proposing it costs.
+ * What can be signed, and what signing it does.
  *
  * A kind with no apply path here would be a signature that can never be spent, so the
- * registry is deliberately exhaustive: every entry names the definer call that finishes
- * the job. Money, prices and duty changes join it as `apply` shapes in their own stages,
- * and the register below needs no change when they do.
+ * registry is deliberately exhaustive: every entry names the effect its released signature
+ * buys. Two effects exist today because the platform has two kinds of thing the rule covers
+ * — a company's access, and money going back out — and a third kind joins by naming its own
+ * definer rather than by restating the transaction below.
+ *
+ * `proposable` is the one field the desk cannot ignore. A refund paper's payload is the
+ * figure and the call it belongs to, and those are read out of the row by
+ * `propose_refund_release` so that the bytes the second seat signs are provably the paper.
+ * The generic raise endpoint takes a body, so it is not allowed to raise that one.
  */
 export interface ApprovalKind {
   action: string;
   label: string;
   /** Which duty the proposing seat must hold. */
   proposeDuty: string;
-  /** The `tenant_actions` verb this releases into. */
-  tenantAction: "block" | "close";
+  /** What a released signature is spent on. */
+  effect: "tenant_action" | "refund_release";
+  /** The `tenant_actions` verb a ban releases into. */
+  tenantAction?: "block" | "close";
+  /** Whether this desk may raise it at all. */
+  proposable: boolean;
 }
 
 export const KINDS: Record<string, ApprovalKind> = {
   "tenant.block": {
     action: "tenant.block", label: "Block a company's access",
-    proposeDuty: TENANTS_MANAGE, tenantAction: "block"
+    proposeDuty: TENANTS_MANAGE, effect: "tenant_action",
+    tenantAction: "block", proposable: true
   },
   "tenant.close": {
     action: "tenant.close", label: "Close a company account",
-    proposeDuty: TENANTS_MANAGE, tenantAction: "close"
+    proposeDuty: TENANTS_MANAGE, effect: "tenant_action",
+    tenantAction: "close", proposable: true
+  },
+  // Raised from the Service desk against one refund paper (126). It appears on this board
+  // like any other signature, because the register it lives in is the same one and the seat
+  // that signs it is asked to read the same sentence.
+  "service.refund": {
+    action: "service.refund", label: "Release a refund to a caller",
+    proposeDuty: REFUND_MANAGE, effect: "refund_release", proposable: false
   }
 };
 
@@ -93,6 +113,9 @@ export const DECIDE_SQL = "select platform_auth.decide_approval($1,$2,$3,$4,$5,$
 export const CLAIM_SQL = "select platform_auth.claim_approval($1,$2) as r";
 /** Params: id, result jsonb. */
 export const SETTLE_SQL = "select platform_auth.settle_approval($1,$2::jsonb) as r";
+/** Params: approval, actor, role, ip. 126's refund effect, read out of the paper's own row. */
+export const REFUND_APPLY_SQL =
+  "select platform_auth.apply_refund_release($1,$2,$3,$4) as r";
 /** Params: status, action, search, limit, offset. */
 export const BOARD_SQL = "select platform_auth.approvals_board($1,$2,$3,$4,$5) as b";
 /** Params: id. */
@@ -180,6 +203,11 @@ function stripTargets(row: Record<string, unknown>) {
  */
 export async function propose(req: any, action: string, body: ProposalInput) {
   const kind = kindOf(action);
+  if (!kind.proposable) {
+    throw new ApiError("VALIDATION_FAILED",
+      `${kind.label} is raised from the paper it is about, not from this desk — the figure a ` +
+      "second seat signs has to be read out of the row, not typed into a body.", 400);
+  }
   const a = actor(req);
   const r = await run(pool, PROPOSE_SQL, [
     kind.action, "tenant", body.targetId,
@@ -218,13 +246,23 @@ export async function reject(req: any, id: string, note: string) {
  * signed, because they are the one who pressed the button; `approval_id` is what names the
  * proposer beside them. The trigger reads that pair and lets the row through only if a
  * real, matching, second-seat proposal stands behind it.
+ *
+ * The two effects share the order and nothing else after it. A refund paper is finished
+ * inside the transaction — the row itself is the receipt, and there is no caller to email
+ * about a signature — so the notice, its cached gate clearing and its delivery receipt all
+ * stay on the ban branch, where 078 put them for the reason that still holds: a mail
+ * provider that is down must never leave a company two people agreed to shut still trading.
  */
+type Spent =
+  | { kind: ApprovalKind; tenant: AppliedAction; refund?: undefined }
+  | { kind: ApprovalKind; tenant?: undefined; refund: Record<string, unknown> };
+
 export async function releaseAndApply(req: any, id: string, note: string) {
   const a = actor(req);
   const decision = [id, "approve", note, a.id, a.role, a.ip, ua(req)];
-  let applied: AppliedAction;
+  let spent: Spent;
   try {
-    applied = await withTx(async (c) => {
+    spent = await withTx(async (c): Promise<Spent> => {
       const d = await run(c, DECIDE_SQL, decision);
       if (!d.r) throw new ApiError("UPSTREAM_ERROR", "The decision could not be recorded.", 502);
       if (d.r.status !== "ok") refusal(d.r, id);
@@ -236,9 +274,29 @@ export async function releaseAndApply(req: any, id: string, note: string) {
       }
 
       const kind = kindOf(cl.r.action);
+
+      if (kind.effect === "refund_release") {
+        const res = await run(c, REFUND_APPLY_SQL, [id, a.id, a.role, a.ip]);
+        const eff = res.r as (Record<string, any> | undefined);
+        if (!eff) throw new ApiError("UPSTREAM_ERROR", "The refund could not be recorded.", 502);
+        // Same rule as the ban: the paper did not move, so the signature must not have been
+        // spent by the attempt that failed to move it.
+        if (eff.status !== "ok") {
+          throw new ApiError(eff.status === "not_found" ? "NOT_FOUND" : "CONFLICT",
+            eff.message ?? "The paper changed under this signature. Nothing was released.",
+            eff.status === "not_found" ? 404 : 409);
+        }
+        await run(c, SETTLE_SQL, [id, JSON.stringify({
+          request_id: eff.request_id, ref: eff.ref, amount: eff.amount,
+          currency: eff.currency, pay_back: eff.pay_back,
+          request_status: eff.request_status, released_by: eff.released_by
+        })]);
+        return { kind, refund: eff };
+      }
+
       const payload = cl.r.payload as { tenant_id: string; reason_code: string; note: string };
       const res = await run(c, APPLY_SQL, [
-        payload.tenant_id, kind.tenantAction, payload.reason_code, payload.note,
+        payload.tenant_id, kind.tenantAction!, payload.reason_code, payload.note,
         "control", a.id, a.role, a.ip, id
       ]);
       const eff = res.r as (AppliedAction & { status: string }) | undefined;
@@ -255,7 +313,7 @@ export async function releaseAndApply(req: any, id: string, note: string) {
         action_id: eff.action_id, new_status: eff.new_status,
         sessions_revoked: eff.sessions_revoked ?? null
       })]);
-      return eff as AppliedAction;
+      return { kind, tenant: eff as AppliedAction };
     });
   } catch (e) {
     // The definer marks an expired proposal lapsed as it refuses it, and the rollback above
@@ -271,6 +329,11 @@ export async function releaseAndApply(req: any, id: string, note: string) {
     throw e;
   }
 
+  if (spent.kind.effect === "refund_release") {
+    return { ...spent.refund, approval_id: id };
+  }
+
+  const applied = spent.tenant!;
   forgetSuspensions();
   const receipt = await sendTenantNotice(applied, sendSms);
   await pool.query(RECEIPT_SQL, [applied.action_id, JSON.stringify(receipt)]);

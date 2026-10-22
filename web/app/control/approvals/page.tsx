@@ -10,13 +10,17 @@ const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 interface ApprovalRow {
   id: string; action: string; target_kind: string; target_id: string; target_name: string;
   reason: string; approval_status: string;
-  payload: { tenant_id?: string; reason_code?: string; note?: string };
+  payload: { tenant_id?: string; reason_code?: string; note?: string;
+    request_id?: string; ref?: string; ticket_ref?: string; amount?: string;
+    currency?: string; pay_back?: string; company_name?: string; reason?: string };
   payload_sha256: string;
   proposed_name: string | null; proposed_role: string | null; proposed_at: string;
   decided_name: string | null; decided_role: string | null;
   decided_note: string | null; decided_at: string | null;
   applied_at: string | null;
-  result: { action_id?: string; new_status?: string; sessions_revoked?: number | null } | null;
+  result: { action_id?: string; new_status?: string; sessions_revoked?: number | null;
+    request_id?: string; ref?: string; amount?: string; currency?: string;
+    pay_back?: string; request_status?: string } | null;
   expires_at: string;
 }
 interface Counts {
@@ -35,9 +39,18 @@ interface Applied {
     errors?: string[]; sent_at?: string;
   };
 }
+/** The answer to a spent refund signature. `released` is the office agreeing to pay, not a
+ *  payment: the money leaves with #344's ledger, and saying so here is the whole honesty of
+ *  this panel. */
+interface SpentRefund {
+  request_id: string; ref: string; amount: string; currency: string; pay_back: string;
+  ticket_ref?: string; company_name: string; request_status: string;
+  approval_id: string; raised_by?: string; released_by?: string;
+}
 
 const ACTIONS: [string, string][] = [
-  ["", "Any act"], ["tenant.block", "A proposed block"], ["tenant.close", "A proposed close"]
+  ["", "Any act"], ["tenant.block", "A proposed block"], ["tenant.close", "A proposed close"],
+  ["service.refund", "A proposed refund"]
 ];
 const TABS: [string, string][] = [
   ["pending", "Waiting"], ["applied", "Done"], ["rejected", "Refused"],
@@ -52,6 +65,12 @@ const reasonLabel = (k?: string) => ({
 const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
 const seat = (name: string | null, role: string | null) =>
   name ? `${name}${role ? ` (${role})` : ""}` : (role ?? "a platform seat");
+const isRefund = (r: ApprovalRow) => r.action === "service.refund";
+/** What the row is about, said the way a seat can act on it. A refund paper's target_name is
+ *  the uuid behind the request, and no one signs a uuid — the armed tap and the export both
+ *  have to carry the ref the caller was quoted. */
+const subject = (r: ApprovalRow) =>
+  isRefund(r) ? r.payload?.ref ?? r.target_name : r.target_name;
 
 /** Left as it was, or already shut? The badge has to answer without reading the sentence. */
 function statusTone(s: string) {
@@ -77,6 +96,7 @@ export default function ApprovalsPage() {
   const [armed, setArmed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [spent, setSpent] = useState<Applied | null>(null);
+  const [spentRefund, setSpentRefund] = useState<SpentRefund | null>(null);
 
   const LIMIT = 30;
 
@@ -115,7 +135,8 @@ export default function ApprovalsPage() {
   useEffect(() => { load(status, action, q, offset); }, [status, action, q, offset, load]);
 
   function openRow(id: string) {
-    setSign(sign === id ? null : id); setNote(""); setArmed(null); setSpent(null);
+    setSign(sign === id ? null : id); setNote(""); setArmed(null);
+    setSpent(null); setSpentRefund(null);
   }
 
   /**
@@ -128,7 +149,7 @@ export default function ApprovalsPage() {
    * the second tap is armed.
    */
   async function decide(row: ApprovalRow, decision: "approve" | "reject") {
-    setBusy(true); setError(null); setSpent(null);
+    setBusy(true); setError(null); setSpent(null); setSpentRefund(null);
     try {
       const res = await fetch(`${API}/api/v1/control/approvals/${row.id}/${decision}`, {
         method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
@@ -149,7 +170,8 @@ export default function ApprovalsPage() {
         return;
       }
       if (decision === "approve") {
-        setSpent(j as Applied);
+        if (row.action === "service.refund") setSpentRefund(j as SpentRefund);
+        else setSpent(j as Applied);
         setNote("");
       } else {
         setSign(null);
@@ -169,7 +191,7 @@ export default function ApprovalsPage() {
     const head = ["raised_at", "act", "company", "reason_for_the_office", "note_to_the_company",
       "payload_sha256", "raised_by", "status", "signed_by", "signed_note", "signed_at", "applied_at"];
     const cell = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const body = rows.map(r => [r.proposed_at, r.action, r.target_name, r.reason,
+    const body = rows.map(r => [r.proposed_at, r.action, subject(r), r.reason,
       r.payload?.note, r.payload_sha256, seat(r.proposed_name, r.proposed_role),
       r.approval_status, seat(r.decided_name, r.decided_role), r.decided_note,
       r.decided_at, r.applied_at].map(cell).join(","));
@@ -210,8 +232,10 @@ export default function ApprovalsPage() {
           A ban is proposed by one platform seat and applied by another. Nothing on this page has happened
           to a company until a second seat signs it: signing a block or a close shuts the door in the same
           call, tells the company&apos;s directors by SMS and email, and writes both names on the
-          company&apos;s register. The seat that raised a proposal cannot sign it, and a proposal nobody
-          signs lapses after a week.
+          company&apos;s register. A refund paper is raised on the <Link href="/control/service"
+            className="underline" style={{ color: "var(--adm-accent)" }}>Service desk</Link> and signed
+          here, and the figure the second seat signs is read out of the paper, not typed into this page.
+          The seat that raised a proposal cannot sign it, and a proposal nobody signs lapses after a week.
         </p>
 
         {counts && (
@@ -246,6 +270,22 @@ export default function ApprovalsPage() {
                   + `${spent.delivery.recipients ?? 0} directors`
                   + `${spent.delivery.errors?.length ? ` · ${spent.delivery.errors.join("; ")}` : ""}`
                 : "no delivery receipt"}
+            </p>
+          </div>
+        )}
+
+        {spentRefund && (
+          <div role="status" className="mb-16 rounded-input px-12 py-8 text-sm"
+            style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)",
+              borderLeft: "4px solid var(--success)", color: "var(--ink)" }}>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em]">
+              Signed and released · {spentRefund.ref} · {spentRefund.request_status}
+            </p>
+            <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+              {spentRefund.company_name} · {new Intl.NumberFormat("en-GB").format(Number(spentRefund.amount))} {spentRefund.currency} by {spentRefund.pay_back} ·{" "}
+              the paper is agreed, not paid — the payment itself is settled from the{" "}
+              <Link href="/control/service" className="underline"
+                style={{ color: "var(--adm-accent)" }}>Service desk</Link>.
             </p>
           </div>
         )}
@@ -299,8 +339,10 @@ export default function ApprovalsPage() {
             <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
               {status === "pending"
                 ? <>A ban raised on the <Link href="/control/tenants" className="underline"
-                  style={{ color: "var(--adm-accent)" }}>Tenants</Link> desk appears here the moment it is
-                  proposed, and stays until a second seat signs it or a week passes.</>
+                  style={{ color: "var(--adm-accent)" }}>Tenants</Link> desk and a refund raised on the{" "}
+                  <Link href="/control/service" className="underline"
+                    style={{ color: "var(--adm-accent)" }}>Service</Link> desk both appear here the moment
+                  they are proposed, and stay until a second seat signs them or a week passes.</>
                 : "Try Everything, or widen the search."}
             </p>
           </div>
@@ -309,6 +351,13 @@ export default function ApprovalsPage() {
         {rows.map(r => {
           const mine = sign === r.id;
           const waiting = r.approval_status === "pending";
+          // A refund paper is a different act on the same register: it names a figure and a
+          // call rather than a company and a notice, and the sentence beside it has to say
+          // what is being signed instead of borrowing the ban's words.
+          const refund = isRefund(r);
+          const figure = r.payload?.amount
+            ? `${new Intl.NumberFormat("en-GB").format(Number(r.payload.amount))} ${r.payload.currency ?? ""}`
+            : null;
           const lapsedAt = new Date(r.expires_at).getTime() - Date.now();
           return (
             <section key={r.id} className="mb-16 rounded-card border p-16"
@@ -324,7 +373,9 @@ export default function ApprovalsPage() {
                     {actionLabel(r.action)}
                   </h2>
                   <p className="mt-8 break-words text-sm font-semibold" style={{ color: "var(--ink)" }}>
-                    {r.target_name}
+                    {refund && r.payload?.ref
+                      ? `${r.payload.ref} · ${r.payload.company_name ?? "a caller"}`
+                      : r.target_name}
                   </p>
                   <p className="mt-4 text-[10px] uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
                     {r.target_kind} · {r.target_id}
@@ -351,20 +402,31 @@ export default function ApprovalsPage() {
               {/* Whether the company has been told is a fact the signature changed. A row
                   still waiting describes a notice that has not happened; an applied row has
                   already sent one, and this desk cannot see whether it arrived — only the
-                  company's own register carries the receipt. */}
+                  company's own register carries the receipt. A refund paper is never sent
+                  anywhere: the paper is the record, and the money is paid from it. */}
               <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
-                {r.approval_status === "applied"
-                  ? <>The note that went with the effect: {r.payload?.note || "—"} — whether it
-                    reached anyone is on{" "}
-                    <Link href="/control/tenants" className="underline"
-                      style={{ color: "var(--adm-accent)" }}>the company's register</Link>.</>
-                  : r.approval_status === "pending" || r.approval_status === "approved"
-                    ? `The company would be told: ${r.payload?.note || "—"}`
-                    : `Never sent. The note would have read: ${r.payload?.note || "—"}`}
+                {refund
+                  ? <>The paper asks to pay <span className="font-semibold"
+                    style={{ color: "var(--ink)" }}>{figure ?? "a figure"}</span> back by{" "}
+                    <span className="font-semibold" style={{ color: "var(--ink)" }}>
+                      {r.payload?.pay_back ?? "the channel on the paper"}
+                    </span>{" "}
+                    {r.payload?.ticket_ref ? `on the call ${r.payload.ticket_ref}` : ""}
+                    {r.payload?.reason ? ` — “${r.payload.reason}”` : ""}.</>
+                  : r.approval_status === "applied"
+                    ? <>The note that went with the effect: {r.payload?.note || "—"} — whether it
+                      reached anyone is on{" "}
+                      <Link href="/control/tenants" className="underline"
+                        style={{ color: "var(--adm-accent)" }}>the company's register</Link>.</>
+                    : r.approval_status === "pending" || r.approval_status === "approved"
+                      ? `The company would be told: ${r.payload?.note || "—"}`
+                      : `Never sent. The note would have read: ${r.payload?.note || "—"}`}
               </p>
-              <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
-                For {reasonLabel(r.payload?.reason_code)}
-              </p>
+              {!refund && (
+                <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                  For {reasonLabel(r.payload?.reason_code)}
+                </p>
+              )}
               <p className="mt-8 break-all font-mono text-[10px]" style={{ color: "var(--ink-soft)" }}>
                 sha256 {r.payload_sha256}
               </p>
@@ -381,13 +443,17 @@ export default function ApprovalsPage() {
                   Applied {when(r.applied_at)}
                   {r.result?.new_status ? ` · company is now ${r.result.new_status}` : ""}
                   {r.result?.sessions_revoked ? ` · ${r.result.sessions_revoked} sessions revoked` : ""}
+                  {r.result?.request_status
+                    ? ` · paper ${r.result.ref ?? r.result.request_id} is now ${r.result.request_status}`
+                      + ` — the office has agreed to pay it, not paid it`
+                    : ""}
                 </p>
               )}
 
               {waiting && !canDecide && (
                 <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
-                  Your seat can read this register but not sign it. Ask a platform seat that manages
-                  companies.
+                  Your seat can read this register but not sign it. Ask a platform seat that can sign a
+                  ban — the same duty signs a refund.
                 </p>
               )}
 
@@ -395,7 +461,9 @@ export default function ApprovalsPage() {
                 <button type="button" onClick={() => openRow(r.id)}
                   className="mt-12 rounded-input border px-16 py-10 text-xs font-semibold"
                   style={{ borderColor: "var(--adm-accent)", color: "var(--ink)" }}>
-                  {r.action === "tenant.close" ? "Sign, or refuse this close" : "Sign, or refuse this block"}
+                  {refund ? "Sign or refuse this refund"
+                    : r.action === "tenant.close" ? "Sign or refuse this close"
+                      : "Sign or refuse this block"}
                 </button>
               )}
 
@@ -423,8 +491,9 @@ export default function ApprovalsPage() {
                           background: "color-mix(in srgb, var(--danger) 14%, transparent)", color: "var(--ink)" }
                         : { borderColor: "var(--danger)", color: "var(--ink)" }}>
                       {armed === `sign-${r.id}`
-                        ? `Tap again to ${r.action === "tenant.close" ? "close" : "block"} ${r.target_name}`
-                        : `Sign and ${r.action === "tenant.close" ? "close the account" : "block access"}`}
+                        ? `Tap again to ${refund ? "release" : r.action === "tenant.close" ? "close" : "block"} ${subject(r)}`
+                        : `Sign and ${refund ? "release the paper"
+                          : r.action === "tenant.close" ? "close the account" : "block access"}`}
                     </button>
                     <button type="button" disabled={busy || note.trim().length < 4}
                       onClick={() => decide(r, "reject")}

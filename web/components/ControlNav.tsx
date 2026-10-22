@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Activity, Banknote, Boxes, Bug, Building2, CreditCard, Globe, Headphones, Languages, Lightbulb, LogOut,
-  Megaphone, ScrollText, Settings2, Stamp, Tag, TrendingUp, UserCog, Users, type LucideIcon
+  Megaphone, Scale, ScrollText, Settings2, Stamp, Tag, TrendingUp, UserCog, Users, type LucideIcon
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
@@ -52,8 +52,14 @@ const SCREENS: Screen[] = [
   // The customer service register: every call that was written down, and the desk that now
   // owns it. Its own two duties, because reading a register of complaints is not the same
   // authority as settling one.
-  { href: "/control/tickets", label: "Service", icon: Headphones,
+  { href: "/control/tickets", label: "Calls", icon: Headphones,
     keys: ["control.tickets.view", "control.tickets.manage"] },
+  // What a call left behind: the disputes written against it, the papers it owes, the caller's
+  // answer and the mark on the seat. Three duties because opening a file, deciding one and
+  // grading a call are three different authorities — and a seat that can only read them all
+  // still needs the link to find them.
+  { href: "/control/service", label: "Service", icon: Scale,
+    keys: ["control.service.view", "control.service.manage", "control.service.review"] },
   // The command center. `control.view` is the floor every platform seat already holds and the
   // route reads it for the read, so this is the one desk a new analyst sees on day one — the
   // words are nobody's secret; publishing them is.

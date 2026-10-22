@@ -97,7 +97,10 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       // The two-person register. Reading it and signing it are separate duties: a seat
       // that can see a ban waiting but cannot sign it is the second opinion the rule asks
       // for, and 121 seeded `decide` only onto the roles that can already manage tenants.
-      "control.approvals.view", "control.approvals.decide"];
+      "control.approvals.view", "control.approvals.decide",
+      // The service registers (126). Grading a call is its own duty — a seat that can open a
+      // dispute is not thereby allowed to mark how somebody else answered the phone.
+      "control.service.view", "control.service.manage", "control.service.review"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });
 
