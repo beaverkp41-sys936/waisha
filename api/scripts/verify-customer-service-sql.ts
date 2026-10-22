@@ -1,6 +1,6 @@
 /**
  * Live proof for the customer service register and the command center's copy desk
- * (migrations 099–103: api/src/routes/control-tickets.routes.ts,
+ * (migrations 099–103 and 123: api/src/routes/control-tickets.routes.ts,
  * api/src/routes/control-content.routes.ts, api/src/content/fields.ts).
  *
  * Every statement the two desks export is executed here verbatim — never re-typed — as
@@ -10,7 +10,7 @@
  * log in as it. Only the host and database come from the operator URL; the password is
  * APP_DB_PASSWORD, which belongs to the runtime role alone.
  *
- * Five things this exists to catch:
+ * Things this exists to catch:
  *  - the register's honesty about PII (AGENTS.md): no list statement selects the encrypted
  *    callback number, yet `?phone=` still finds the caller through the HMAC hash alone, and
  *    only the detail read can decrypt it back;
@@ -23,6 +23,14 @@
  *  - that a `javascript:` address never passes the content validator, and that the company
  *    reader (102) names a foreign company without letting the session read the tenants row —
  *    which is exactly why it had to be SECURITY DEFINER.
+ *
+ * A sixth, added for 123: that the desk's own queue number and the two working-minute
+ * deadlines survive being run by the API role rather than by the operator. The minter
+ * escalates through its definer owner to write the desk's counter, the clock functions do not
+ * escalate at all, and the only way to see which of the two `app_runtime` may reach is to ask
+ * it. The clock is then pinned against a call whose ring time is written in this file, so the
+ * date a Friday-evening caller is owed is read off the desk's own week, not off the minute the
+ * gate happened to run.
  *
  * Nothing a person owns is touched: the run's marker goes into every row it writes, the
  * transaction is rolled back, and the residue is read afterwards on an operator connection
@@ -41,10 +49,11 @@ import {
   CONTENT_BLOCKS_SQL, UPSERT_BLOCK_SQL
 } from "../src/routes/control-content.routes.js";
 import {
-  ALLOCATE_SQL, CALLER_HISTORY_SQL, COMPANY_SQL, DEPARTMENT_LOAD_SQL,
-  INSERT_EVENT_SQL, INSERT_TICKET_SQL, MY_DEPARTMENTS_SQL, OPEN_DEPARTMENT_SQL, PRIORITY_SQL,
-  RESOLVE_SQL, TICKETS_COUNT_SQL, TICKETS_SQL, TICKET_EVENTS_SQL, TICKET_SQL, TOMBSTONE_SQL,
-  WORK_SQL
+  ALLOCATE_SQL, CALLER_HISTORY_SQL, COMPANY_HQ_REGION_SQL, COMPANY_SQL, DEPARTMENT_LOAD_SQL,
+  ESCALATE_SQL, FIRST_RESPONSE_SQL, INSERT_EVENT_SQL, INSERT_TICKET_SQL,
+  MINT_DESK_NUMBER_SQL, MY_DEPARTMENTS_SQL, OPEN_DEPARTMENT_SQL, POINT_ROUTED_SQL, PRIORITY_SQL,
+  RESOLVE_SQL, ROUTE_MATCH_SQL, STAMP_DESK_NUMBER_SQL, TICKETS_COUNT_SQL, TICKETS_SQL,
+  TICKET_CLOCK_SQL, TICKET_EVENTS_SQL, TICKET_SQL, TOMBSTONE_SQL, WORK_SQL
 } from "../src/routes/control-tickets.routes.js";
 
 let failures = 0;
@@ -68,6 +77,54 @@ const PHONE = `+2557${String(Date.now() % 100_000_000).padStart(8, "0")}`;
 const SUBJECT = `The gate probe cannot allocate (${MARK})`;
 const BODY = `Written by the verifier behind reference ${MARK}.`;
 const BRAND_VALUE = `CS-GATE-VERIFY ${MARK}`;
+
+/**
+ * 123's clock is only worth asserting against a week this file owns, so the probe desks get
+ *  one written here: the office's published Mon–Fri/Sat-morning week, a desk that never shuts
+ *  and a desk that never opens. Times are Dar es Salaam wall clock, the way a desk reads its
+ *  own board — 2026-03-02 is a Monday, 03-06 a Friday, 03-07 a Saturday, 03-08 a Sunday.
+ */
+const OFFICE_WEEK = {
+  mon: { open: "08:00", close: "17:30" }, tue: { open: "08:00", close: "17:30" },
+  wed: { open: "08:00", close: "17:30" }, thu: { open: "08:00", close: "17:30" },
+  fri: { open: "08:00", close: "17:30" }, sat: { open: "09:00", close: "13:00" },
+  sun: null
+};
+const ALWAYS_OPEN = Object.fromEntries(Object.keys(OFFICE_WEEK)
+  .map((d) => [d, { open: "00:00", close: "23:59" }]));
+const NEVER_OPEN = Object.fromEntries(Object.keys(OFFICE_WEEK).map((d) => [d, null]));
+/** A Friday evening, after the office week has shut for the day. */
+const FRIDAY_EVENING = "2026-03-06 18:00";
+
+/** The gate's own fixture writes. The register's statements below are imported and run
+ *  verbatim; these three exist because there is no route that says "make a desk whose week the
+ *  office has not published", and a gate that moved a real desk would be measuring a clock that
+ *  desk does not keep. Everything sits on the platform tenant inside the rolled-back
+ *  transaction, and `sort` 990 keeps the probe desks off the top of the board. */
+const PROBE_DESK_SQL = `
+  insert into platform_departments (tenant_id, key, name, purpose, sort,
+        first_response_minutes, resolve_minutes, business_hours, max_open_tickets)
+  values ($1,$2,$3,'Written by the customer-service gate and rolled back with it.',990,
+          $4,$5,$6::jsonb,$7)
+  returning id, upper(key) as key, name, first_response_minutes, resolve_minutes,
+            business_hours, max_open_tickets`;
+const PROBE_RING_SQL = `
+  update support_tickets set ts = $3::timestamp at time zone 'Africa/Dar_es_Salaam'
+   where id = $1 and tenant_id = $2 and deleted_at is null`;
+const PROBE_CLOCK_READ_SQL = `
+  select to_char(ts at time zone 'Africa/Dar_es_Salaam','YYYY-MM-DD HH24:MI') as rang,
+         to_char(response_due_at at time zone 'Africa/Dar_es_Salaam','YYYY-MM-DD HH24:MI')
+           as owed_answer,
+         to_char(resolution_due_at at time zone 'Africa/Dar_es_Salaam','YYYY-MM-DD HH24:MI')
+           as owed_fix,
+         status, after_hours, dept_ref, first_response_at,
+         department_id, allocated_by, escalated_from_id, numbered_by
+    from support_tickets where id = $1 and tenant_id = $2 and deleted_at is null`;
+const PROBE_RULE_SQL = `
+  insert into support_ticket_routes (tenant_id, name, department_id, categories, precedence,
+                                     note, created_by)
+  values ($1,$2,$3,'{cargo_clearing}',20,'Written by the customer-service gate.',$4)
+  returning id, name, department_id`;
 
 async function main() {
   const base = process.env.MIGRATE_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -173,10 +230,12 @@ async function main() {
     const ins = await c.query(INSERT_TICKET_SQL, [
       T, "Gate Reporter", `${MARK}@example.com`, encryptField(PHONE), searchHash(PHONE),
       "phone_call", company.rows[0]?.id ?? null, company.rowCount ? company.rows[0].name : "Gate Co",
-      "system_error", SUBJECT, BODY, "urgent", null, U]);
+      "system_error", SUBJECT, BODY, "urgent", null, U, "sw"]);
     const tk = ins.rows[0];
     check("a logged incidence mints its number from the sequence and starts open",
       /^CS-\d{4}-\d{5,}$/.test(tk.ref) && tk.status === "open", tk.ref);
+    check("…and the language the desk heard it in is kept, because a routing rule matches on it",
+      tk.language === "sw", tk.language);
 
     const ev = await c.query(INSERT_EVENT_SQL, [
       T, tk.id, tk.ref, U, "super_admin", "127.0.0.1", REQ, "logged",
@@ -190,7 +249,7 @@ async function main() {
     check("audit_logs.entity_id takes a support_tickets uuid", true);
 
     const list = await c.query(TICKETS_SQL, [
-      T, null, null, null, null, null, `%${MARK}%`, null, null, 60, 60, 0]);
+      T, null, null, null, null, null, `%${MARK}%`, null, null, 60, null, 60, 0]);
     const hit = list.rows.find((r: any) => r.id === tk.id);
     check("the queue finds it by that marker and shows no encrypted column at all",
       !!hit && !("reporter_phone_encrypted" in hit) && hit.has_phone === true,
@@ -198,15 +257,24 @@ async function main() {
     check("and no row of the queue can carry the number in plain text either",
       list.rows.every((r: any) => !JSON.stringify(r).includes(PHONE)));
     const cnt = await c.query(TICKETS_COUNT_SQL, [
-      T, null, null, null, null, null, `%${MARK}%`, null, null, 60]);
+      T, null, null, null, null, null, `%${MARK}%`, null, null, 60, null]);
     check("the header counts the same filter the rows come from",
       cnt.rows[0].n === list.rows.length && cnt.rows[0].pressing >= 1,
       JSON.stringify(cnt.rows[0]));
+    check("…and it says how many of them no desk has yet given a queue number, which is the "
+      + "figure the board needs before it can promise one",
+      cnt.rows[0].unnumbered >= 1 && cnt.rows[0].no_clock >= 1 && cnt.rows[0].unanswered >= 1,
+      JSON.stringify(cnt.rows[0]));
 
     const byPhone = await c.query(TICKETS_SQL, [
-      T, null, null, null, null, null, null, searchHash(PHONE), null, 365, 60, 0]);
+      T, null, null, null, null, null, null, searchHash(PHONE), null, 365, null, 60, 0]);
     check("?phone= finds the caller through the hash alone",
       byPhone.rows.length === 1 && byPhone.rows[0].id === tk.id, `${byPhone.rowCount} rows`);
+    check("…and the row the queue hands back carries the two promises and the answer stamp, "
+      + "none of which a list should invent",
+      byPhone.rows[0].response_due_at === null && byPhone.rows[0].resolution_due_at === null
+      && byPhone.rows[0].first_response_at === null && byPhone.rows[0].response_state === "none",
+      JSON.stringify({ r: byPhone.rows[0].response_due_at, s: byPhone.rows[0].response_state }));
 
     const detail = await c.query(TICKET_SQL, [tk.id, T]);
     check("the detail read can decrypt the number it hid from the list",
@@ -224,9 +292,11 @@ async function main() {
       moved.rows[0].status === "open" && moved.rows[0].allocated_at === null);
     await c.query(ALLOCATE_SQL, [tk.id, T, D.id, U]);
 
-    const work = await c.query(WORK_SQL, [tk.id, T, "in_progress"]);
+    const work = await c.query(WORK_SQL, [tk.id, T, "in_progress", false]);
     check("a department that holds it can say work has started",
       work.rows[0].status === "in_progress");
+    check("…and saying so is the human act that stops the answer clock, not the logging of it",
+      !!work.rows[0].first_response_at, work.rows[0].first_response_at);
     const prio = await c.query(PRIORITY_SQL, [tk.id, T, "normal"]);
     check("it can be re-rated", prio.rows[0].priority === "normal");
     const resolved = await c.query(RESOLVE_SQL,
@@ -324,12 +394,307 @@ async function main() {
       stillClosed.rows[0].n === 0, `${stillClosed.rows[0].n} row(s) to re-tag`);
 
     const afterGone = await c.query(TICKETS_SQL, [
-      T, null, null, null, null, null, `%${MARK}%`, null, null, 60, 60, 0]);
+      T, null, null, null, null, null, `%${MARK}%`, null, null, 60, null, 60, 0]);
     const survivor = await c.query("select deleted_at from support_tickets where id = $1", [tk.id]);
     check("and the queue stops showing it while the row and its evidence survive",
       afterGone.rows.length === 0 && !!survivor.rows[0].deleted_at);
 
+    // ---------- the desk's own number and the clock it starts (123) ----------
+    // The probe desks below are written by the gate rather than borrowed from the office's own
+    // chart: a gate that moved a real desk's week would be reporting a clock that desk does not
+    // keep. Each one is rolled back with everything else.
+    let probeNo = 0;
+    const probeDesk = async (label: string, terms: {
+      answer?: number | null; fix?: number | null; week?: object; ceiling?: number | null
+    } = {}) => {
+      probeNo++;
+      const made = await c.query(PROBE_DESK_SQL, [
+        T, `zzcsgate${probeNo}`, `Gate ${label} (${MARK})`,
+        terms.answer === undefined ? 60 : terms.answer,
+        terms.fix === undefined ? 480 : terms.fix,
+        JSON.stringify(terms.week ?? OFFICE_WEEK), terms.ceiling ?? null]);
+      return made.rows[0] as { id: string; key: string; name: string };
+    };
+    /** A call exactly as the register writes one, then put back on the phone so its ring time is
+     *  a date this file owns. `ts` is what every deadline below is counted from. */
+    const probeTicket = async (label: string, departmentId: string | null, ringAt?: string) => {
+      probeNo++;
+      const made = await c.query(INSERT_TICKET_SQL, [
+        T, "Gate Reporter", "", null, "", "phone_call", null, `Gate probe co (${MARK})`,
+        "cargo_clearing", `The desk clock probe: ${label} (${MARK})`,
+        "Written by the verifier behind the customer-service gate.", "normal",
+        departmentId, U, "en"]);
+      const row = made.rows[0];
+      if (ringAt) await c.query(PROBE_RING_SQL, [row.id, T, ringAt]);
+      return row as { id: string; ref: string; status: string; department_id: string | null };
+    };
+    /** The row read back as the wall clock a desk would write on its own board. */
+    const clockRead = async (id: string) => (await c.query(PROBE_CLOCK_READ_SQL, [id, T])).rows[0];
+
+    const office = await probeDesk("office week", { week: OFFICE_WEEK });
+    const rang = await probeTicket("numbered on an office desk", office.id, FRIDAY_EVENING);
+    const mint = (await c.query(MINT_DESK_NUMBER_SQL, [office.id])).rows[0].minted;
+    check("the API role may ask a desk for its next queue number, and the definer writes the "
+      + "counter for it: EXECUTE is the whole of the door",
+      mint?.status === "ok" && Number(mint?.number) === 1 && mint?.ref === `${office.key}-1`, mint);
+    const stamped = await c.query(STAMP_DESK_NUMBER_SQL, [
+      rang.id, T, mint.number, mint.ref, mint.department_id]);
+    check("…and the number is written whole — figure, readable form, and the desk that issued it",
+      stamped.rowCount === 1 && stamped.rows[0].dept_ref === `${office.key}-1`
+      && stamped.rows[0].numbered_by === office.id, stamped.rows[0]);
+    const restamped = await c.query(STAMP_DESK_NUMBER_SQL, [rang.id, T, 2, `${office.key}-2`, office.id]);
+    check("a call the caller has already been quoted never gets a second number, whichever desk "
+      + "it ends up standing on", restamped.rowCount === 0, restamped.rowCount);
+
+    await c.query("savepoint half_a_number");
+    let halfNumber = "no error raised";
+    try {
+      await c.query(`update support_tickets set dept_ref = $3 where id = $1 and tenant_id = $2`,
+        [rang.id, T, `${office.key}-77`]);
+    } catch (e: any) { halfNumber = e.message.slice(0, 70); }
+    await c.query("rollback to savepoint half_a_number");
+    check("half a number is refused by the table: a form without the minting desk is not a fact",
+      /check|constraint/.test(halfNumber), halfNumber);
+
+    const firstClock = await c.query(TICKET_CLOCK_SQL, [rang.id, T, true]);
+    const owedOn = await clockRead(rang.id);
+    check("a Friday-evening call to a desk that shuts at 17:30 is owed an answer from the minute "
+      + "it next opens, not from the minute a clerk got to it",
+      firstClock.rowCount === 1 && owedOn.owed_answer === "2026-03-07 10:00", owedOn);
+    check("…and eight working hours on the same desk waits out Saturday's half day before "
+      + "Monday's morning: 2026-03-09 12:00",
+      owedOn.owed_fix === "2026-03-09 12:00", owedOn.owed_fix);
+    check("…so the call is marked as having come in out of hours, which is a fact about the phone "
+      + "call and stays true",
+      firstClock.rows[0].after_hours === true && owedOn.after_hours === true, firstClock.rows[0]);
+    check("the clock read hands back the desk it started, in the key the register spells numbers "
+      + "with, and the terms it was counted under",
+      firstClock.rows[0].department_id === office.id
+      && firstClock.rows[0].department_key === office.key
+      && Number(firstClock.rows[0].first_response_minutes) === 60, firstClock.rows[0]);
+
+    await c.query(`update platform_departments set first_response_minutes = 5 where id = $1 `
+      + `and tenant_id = $2`, [office.id, T]);
+    const secondClock = await c.query(TICKET_CLOCK_SQL, [rang.id, T, false]);
+    check("a promise that has already started is not restarted by the next hand that touches the "
+      + "row — coalesce is the statement",
+      secondClock.rows[0].response_due_at.getTime()
+        === firstClock.rows[0].response_due_at.getTime(),
+      { before: firstClock.rows[0].response_due_at, after: secondClock.rows[0].response_due_at });
+    check("…and an act that is not the arrival cannot make an out-of-hours call look like it came "
+      + "in at opening time",
+      secondClock.rows[0].after_hours === true, secondClock.rows[0].after_hours);
+
+    const round = await probeDesk("open all day", { answer: 60, fix: null, week: ALWAYS_OPEN });
+    const roundCall = await probeTicket("counted from the ring", round.id, FRIDAY_EVENING);
+    await c.query(MINT_DESK_NUMBER_SQL, [round.id]);
+    await c.query(TICKET_CLOCK_SQL, [roundCall.id, T, true]);
+    check("on a desk that never shuts, an hour promised is owed at 19:00 the same Friday evening: "
+      + "the clock counts from the ring",
+      (await clockRead(roundCall.id)).owed_answer === "2026-03-06 19:00", await clockRead(roundCall.id));
+
+    const bare = await probeDesk("no promise", { answer: null, fix: null });
+    const bareCall = await probeTicket("a desk that set no clock", bare.id, FRIDAY_EVENING);
+    const bareClock = await c.query(TICKET_CLOCK_SQL, [bareCall.id, T, true]);
+    check("a desk that has set no answer time is given no deadline, rather than one the platform "
+      + "invented on its behalf",
+      bareClock.rows[0].response_due_at === null
+      && bareClock.rows[0].resolution_due_at === null, bareClock.rows[0]);
+    const bareRead = await clockRead(bareCall.id);
+    check("…but it is still marked as having rung outside the desk's week: the hour a call came in "
+      + "at is a fact about the phone, not a consequence of the promise a desk never set",
+      bareRead.after_hours === true && bareRead.owed_answer === null, bareRead);
+
+    const shut = await probeDesk("shut week", { week: NEVER_OPEN });
+    const shutCall = await probeTicket("a desk that never opens", shut.id, FRIDAY_EVENING);
+    const shutClock = await c.query(TICKET_CLOCK_SQL, [shutCall.id, T, true]);
+    check("a desk whose week contains no open time promises no date at all — the clock gives up "
+      + "rather than inventing one",
+      shutClock.rows[0].response_due_at === null && shutClock.rows[0].after_hours === true,
+      shutClock.rows[0]);
+
+    // ---------- who takes the call when nobody chose ----------
+    const ruleTarget = await probeDesk("routing target", { ceiling: 3 });
+    await c.query(PROBE_RULE_SQL, [T, `Gate cargo rule (${MARK})`, ruleTarget.id, U]);
+    const matched = (await c.query(ROUTE_MATCH_SQL, [
+      T, "phone_call", "cargo_clearing", "normal", "en", null])).rows[0].matched;
+    check("the register asks the rules who takes a call nobody named, and gets a desk rather than "
+      + "a guess",
+      matched?.status === "rule" && matched?.department_id === ruleTarget.id
+      && matched?.department_key === ruleTarget.key, matched);
+    check("…with the ceiling that desk set and the work it is holding, so the clerk can be told "
+      + "before the call lands",
+      Number(matched?.max_open_tickets) === 3 && Number(matched?.open_tickets) === 0, matched);
+    const unrouted = (await c.query(ROUTE_MATCH_SQL, [T, "email", "complaint", "low", "en", null]))
+      .rows[0].matched;
+    check("a call no rule covers is answered with no_rule, not with the nearest desk",
+      unrouted?.status === "no_rule", unrouted);
+    check("…and the mint refuses a desk that is not on the chart, so a retired team cannot hand "
+      + "out numbers",
+      (await c.query(MINT_DESK_NUMBER_SQL, [uuidv7()])).rows[0].minted?.status === "unavailable");
+
+    // A rule named the desk; no person has said they are on it. 101's CHECK allows exactly this.
+    const pointed = await probeTicket("routed but nobody has started", null, FRIDAY_EVENING);
+    const sat = await c.query(POINT_ROUTED_SQL, [pointed.id, T, ruleTarget.id]);
+    check("a routed call takes the desk and stays open: the number says whose problem it is, the "
+      + "state says nobody has started",
+      sat.rowCount === 1 && sat.rows[0].status === "open"
+      && sat.rows[0].department_id === ruleTarget.id, sat.rows[0]);
+    const pointedRead = await clockRead(pointed.id);
+    check("…and it holds no allocation, because inventing one would credit a person who has not "
+      + "picked the phone up",
+      pointedRead.allocated_by === null && pointedRead.status === "open", pointedRead);
+    const movedAgain = await c.query(POINT_ROUTED_SQL, [pointed.id, T, office.id]);
+    check("…so a second rule cannot quietly re-point a call that already has a desk",
+      movedAgain.rowCount === 0, movedAgain.rowCount);
+
+    // ---------- the answer stamp, and the two acts that clear it ----------
+    const untouched = await probeTicket("a note with nobody on it", null, FRIDAY_EVENING);
+    const noDesk = await c.query(FIRST_RESPONSE_SQL, [untouched.id, T]);
+    check("a note on an incidence no desk holds matches no row: a note in the margin is not an "
+      + "answer to the caller", noDesk.rowCount === 0, noDesk.rowCount);
+    const answered = await c.query(FIRST_RESPONSE_SQL, [pointed.id, T]);
+    check("the first human act on a call a desk holds stops the answer clock",
+      answered.rowCount === 1 && !!answered.rows[0].first_response_at, answered.rows[0]);
+    const answeredTwice = await c.query(FIRST_RESPONSE_SQL, [pointed.id, T]);
+    check("…and a second act cannot improve it: the stamp is the first one, coalesce is the "
+      + "statement",
+      answeredTwice.rows[0].first_response_at.getTime()
+        === answered.rows[0].first_response_at.getTime(), answeredTwice.rows[0]);
+
+    const reopened = await c.query(WORK_SQL, [pointed.id, T, "in_progress", true]);
+    check("a reopen clears the answer stamp — the caller says it is not fixed, and the desk's "
+      + "first answer belongs to the attempt that failed",
+      reopened.rows[0].status === "in_progress" && reopened.rows[0].first_response_at === null,
+      reopened.rows[0]);
+    const keptDeadlines = await c.query(WORK_SQL, [pointed.id, T, "in_progress", false]);
+    check("…while the two deadlines ride through it untouched: a desk cannot erase its own breach "
+      + "by declaring a second attempt",
+      keptDeadlines.rows[0].response_due_at === null
+      && keptDeadlines.rows[0].resolution_due_at === null
+      && keptDeadlines.rows[0].dept_ref === reopened.rows[0].dept_ref, keptDeadlines.rows[0]);
+
+    // ---------- up the chain ----------
+    const wrongDesk = await c.query(ESCALATE_SQL, [rang.id, T, bare.id, office.id, U]);
+    check("an escalation is a compare-and-swap: if the desk moved between the read and the write, "
+      + "nobody is credited with a call it does not hold",
+      wrongDesk.rowCount === 0, wrongDesk.rowCount);
+    const above = await probeDesk("the desk above", { answer: 30, fix: 240 });
+    const went = await c.query(ESCALATE_SQL, [rang.id, T, office.id, above.id, U]);
+    check("handing it up keeps everything the caller was told: the register's number, the desk's "
+      + "queue number and both promises",
+      went.rowCount === 1 && went.rows[0].dept_ref === `${office.key}-1`
+      && went.rows[0].escalated_from_id === office.id && !!went.rows[0].escalated_at, went.rows[0]);
+    const afterEscalate = await c.query(TICKET_CLOCK_SQL, [rang.id, T, false]);
+    check("…and the new desk starts a clock only where none had started: the promise the first "
+      + "desk was measured against does not move because it failed",
+      afterEscalate.rows[0].response_due_at.getTime()
+        === firstClock.rows[0].response_due_at.getTime()
+      && afterEscalate.rows[0].department_id === above.id, afterEscalate.rows[0]);
+    const escalatedRead = await clockRead(rang.id);
+    check("…the row says who failed to answer, which is the only figure the desk above is being "
+      + "asked to take over",
+      escalatedRead.department_id === above.id && escalatedRead.escalated_from_id === office.id,
+      escalatedRead);
+
+    // ---------- the two figures the register's own guards read ----------
+    const full = await probeDesk("at its ceiling", { ceiling: 1 });
+    await probeTicket("one call on a full desk", full.id, FRIDAY_EVENING);
+    const deskRow = (await c.query(OPEN_DEPARTMENT_SQL, [full.id, T])).rows[0];
+    check("the desk read carries both figures the hand-over guard needs, so a full desk can be "
+      + "named in the refusal",
+      Number(deskRow.live_tickets) === 1 && Number(deskRow.max_open_tickets) === 1
+      && deskRow.escalation_department_id === null, deskRow);
+    const region = await c.query(COMPANY_HQ_REGION_SQL, [uuidv7()]);
+    check("a company with no head office on file gives a region rule nothing to match on, rather "
+      + "than a wildcard it did not ask for",
+      region.rowCount === 0, region.rows[0]);
+
+    await c.query(INSERT_EVENT_SQL, [
+      T, rang.id, rang.ref, U, "super_admin", "127.0.0.1", REQ, "routed",
+      null, `${above.name} (by rule "Gate cargo rule")`, office.id, above.id,
+      "Routed by the gate.", JSON.stringify({ rule_id: matched.rule_id })]);
+    await c.query(INSERT_EVENT_SQL, [
+      T, rang.id, rang.ref, U, "super_admin", "127.0.0.1", REQ, "escalated",
+      office.name, above.name, office.id, above.id,
+      "Escalated by the gate.", JSON.stringify({ kept_number: `${office.key}-1` })]);
+    const counted = await c.query(
+      `select count(*)::int as n from support_ticket_events e
+        join support_ticket_routes r on r.id::text = e.detail->>'rule_id' and r.tenant_id = e.tenant_id
+        where e.ticket_id = $1 and e.action = 'routed'`, [rang.id]);
+    check("the register has a word for a rule doing it and a word for the desk above doing it, "
+      + "and the routed line is the one the rules board counts",
+      counted.rows[0].n === 1, counted.rows[0]);
+
+    const byQueueNumber = await c.query(TICKETS_SQL, [
+      T, null, null, null, null, null, `%${office.key}-1%`, null, null, 365, null, 60, 0]);
+    check("the queue can be searched by the number the caller was read out, which is the only "
+      + "reason a desk number exists",
+      byQueueNumber.rows.length === 1 && byQueueNumber.rows[0].id === rang.id
+      && byQueueNumber.rows[0].response_state === "breached",
+      byQueueNumber.rows.map((r: any) => `${r.dept_ref}:${r.response_state}`));
+    check("…and it shows which desk minted the number, not only which one is holding the call "
+      + "now",
+      byQueueNumber.rows[0].numbered_by_name === office.name
+      && byQueueNumber.rows[0].department_name === above.name,
+      { n: byQueueNumber.rows[0].numbered_by_name, d: byQueueNumber.rows[0].department_name });
+    const noClockRows = await c.query(TICKETS_SQL, [
+      T, null, null, null, null, null, `%desk clock probe%`, null, null, 365, "no_clock", 60, 0]);
+    check("the clock filter finds the calls nobody has promised anything about",
+      noClockRows.rows.length >= 3
+      && noClockRows.rows.every((r: any) => r.response_state === "none"
+        && r.resolution_state === "none"),
+      noClockRows.rows.map((r: any) => `${r.subject.slice(0, 26)}:${r.response_state}`).join(" | "));
+    const lateRows = await c.query(TICKETS_SQL, [
+      T, null, null, null, null, null, `%desk clock probe%`, null, null, 365, "late", 60, 0]);
+    check("…and the one that is past both promises is the first thing the filter hands back",
+      lateRows.rows.some((r: any) => r.id === rang.id)
+      && lateRows.rows.every((r: any) => r.response_due_at < new Date()
+        || r.resolution_due_at < new Date()),
+      lateRows.rows.map((r: any) => `${r.dept_ref ?? "-"}`).join(" | "));
+    // The chain is written on the row, not guessed by the route: the desk that just took the
+    // call has to be able to say who it would hand on to if it cannot answer either.
+    await c.query(`update platform_departments set escalation_department_id = $2 `
+      + `where id = $1 and tenant_id = $3`, [above.id, bare.id, T]);
+    const oneDetail = await c.query(TICKET_SQL, [rang.id, T]);
+    check("the detail read carries the desk's own terms next to the dates they produced, so a "
+      + "panel can explain a deadline without a second query",
+      oneDetail.rows[0].first_response_minutes === 30 && oneDetail.rows[0].resolve_minutes === 240
+      && oneDetail.rows[0].escalation_key === bare.key
+      && oneDetail.rows[0].numbered_by_key === office.key,
+      { fr: oneDetail.rows[0].first_response_minutes, up: oneDetail.rows[0].escalation_name });
+    check("…and the two promises are read as the desk's own words, from the same CASE the list "
+      + "uses, so the header and the row cannot disagree",
+      oneDetail.rows[0].response_state === "breached"
+      && oneDetail.rows[0].resolution_state === "breached",
+      `${oneDetail.rows[0].response_state}/${oneDetail.rows[0].resolution_state}`);
+
+    const probeCount = (await c.query(TICKETS_COUNT_SQL, [
+      T, null, null, null, null, null, "%desk clock probe%", null, null, 365, null])).rows[0];
+    const lateCount = (await c.query(TICKETS_COUNT_SQL, [
+      T, null, null, null, null, null, "%desk clock probe%", null, null, 365, "late"])).rows[0];
+    const clockCount = (await c.query(TICKETS_COUNT_SQL, [
+      T, null, null, null, null, null, "%desk clock probe%", null, null, 365, "no_clock"])).rows[0];
+    const probeRows = (await c.query(TICKETS_SQL, [
+      T, null, null, null, null, null, "%desk clock probe%", null, null, 365, null, 200, 0])).rows;
+    check("the header counts the same filter the rows come from, clock predicate and all",
+      probeCount.n === probeRows.length && lateCount.n === lateRows.rows.length
+      && clockCount.n === noClockRows.rows.length && lateCount.n >= 1,
+      { rows: probeCount.n, late: lateCount.n, no_clock: clockCount.n });
+
     const load = await c.query(DEPARTMENT_LOAD_SQL, [T]);
+    const probeRow = load.rows.find((r: any) => r.id === office.id);
+    check("the desk board counts each desk's promises, its no-clock calls and the ones still "
+      + "waiting for a number",
+      typeof probeRow?.overdue === "number" && typeof probeRow?.no_clock === "number"
+      && typeof probeRow?.unnumbered === "number"
+      && typeof probeRow?.desk_is_open_now === "boolean",
+      probeRow && JSON.stringify({ o: probeRow.overdue, n: probeRow.no_clock,
+        u: probeRow.unnumbered, l: probeRow.live_tickets }));
+    const bareRow = load.rows.find((r: any) => r.id === bare.id);
+    check("…so a desk with a call on it and no clock set is visible as exactly that",
+      Number(bareRow?.live_tickets) === 1 && Number(bareRow?.no_clock) === 1
+      && Number(bareRow?.unnumbered) === 1, bareRow);
     check("the desks are listed with what each one is holding",
       load.rows.length >= 1 && load.rows.every((r: any) => typeof r.working === "number"),
       load.rows.map((r: any) => `${r.name}:${r.working}/${r.unallocated}`).join(" "));
@@ -370,12 +735,16 @@ async function main() {
             (select count(*)::int from support_ticket_events where request_id = $2) as e,
             (select count(*)::int from audit_logs where request_id = $2) as a,
             (select count(*)::int from content_blocks
-              where value::text ilike '%' || $3 || '%') as b`,
+              where value::text ilike '%' || $3 || '%') as b,
+            (select count(*)::int from platform_departments where name ilike $1) as d,
+            (select count(*)::int from support_ticket_routes where name ilike $1) as r`,
     [`%${MARK}%`, REQ, MARK]);
   await after.end();
-  check("the rollback left nothing behind — incidences, acts, audit and copy included",
+  check("the rollback left nothing behind — incidences, acts, audit, copy, probe desks and rules "
+    + "included",
     residue.rows[0].t === 0 && residue.rows[0].e === 0 && residue.rows[0].a === 0 &&
-    residue.rows[0].b === 0, JSON.stringify(residue.rows[0]));
+    residue.rows[0].b === 0 && residue.rows[0].d === 0 && residue.rows[0].r === 0,
+    JSON.stringify(residue.rows[0]));
 
   console.log(`\n${checks} checks, ${failures} failure(s) — marker ${MARK}`);
   if (failures) process.exitCode = 1;

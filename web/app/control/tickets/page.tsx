@@ -19,6 +19,12 @@ const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
  * The callback number is the one piece of it that is somebody's personal data: it is on every
  * detail read for a seat that holds the view duty, and on no list row at all — a row prints
  * "number on file" and nothing else.
+ *
+ * Since 123 a call carries two numbers and two clocks. The CS number is the platform's and never
+ * changes; the desk number is the holding desk's own queue position, minted once by
+ * `platform_auth.next_ticket_number`, and both survive an escalation to the desk above — so this
+ * page prints the number that was quoted, the desk that quoted it, and the register's own sentence
+ * whenever a deadline does not exist. A grey "no clock set" is never shown as a kept promise.
  */
 
 // The vocabulary is the API's (control-tickets.routes.ts). A key the route does not accept is
@@ -40,13 +46,28 @@ const STATUSES: [string, string][] = [
   ["open", "In the queue"], ["allocated", "Handed over"], ["in_progress", "Being worked on"],
   ["resolved", "Resolved"], ["closed", "Closed"]
 ];
+const LANGUAGES: [string, string][] = [["en", "English"], ["sw", "KiSwahili"]];
 const ACTIONS: [string, string][] = [
   ["logged", "Written into the register"], ["allocated", "Handed to a department"],
-  ["reallocated", "Moved between desks"], ["status_changed", "State changed"],
+  ["reallocated", "Moved between desks"],
+  ["routed", "Sent to a desk by the chart"],
+  ["escalated", "Pushed up to the desk above"],
+  ["status_changed", "State changed"],
   ["priority_changed", "Re-rated"], ["note_added", "A line was added"],
   ["resolved", "Resolved"], ["reopened", "Reopened"], ["closed", "Closed"],
   ["withdrawn", "Taken off the boards"]
 ];
+
+/** The two clocks, in the words the register returns them in (`CLOCK_STATES`). `none` is not a
+ *  pass: it means the desk set no deadline, so nothing was promised and nothing can be late. */
+const CLOCK_WORDS: Record<string, string> = {
+  none: "no clock set", running: "clock running", breached: "past its deadline",
+  met: "kept", late: "missed it"
+};
+const CLOCK_EDGE: Record<string, string> = {
+  none: "var(--ink-soft)", running: "var(--adm-accent)", breached: "var(--danger)",
+  met: "var(--success)", late: "var(--danger)"
+};
 
 const label = (list: [string, string][], key: string | null | undefined) =>
   list.find(([k]) => k === key)?.[1] ?? key ?? "—";
@@ -54,8 +75,16 @@ const label = (list: [string, string][], key: string | null | undefined) =>
 type Row = {
   id: string; ref: string; ts: string; updated_at: string; reporter_name: string;
   reporter_email: string | null; channel: string; category: string; subject: string;
-  priority: string; status: string; company_tenant_id: string | null; company_name: string | null;
+  priority: string; status: string; language: string;
+  company_tenant_id: string | null; company_name: string | null;
   department_id: string | null; department_name: string | null; has_phone: boolean;
+  // What the desk it is standing on promised it, and whether it has been kept.
+  dept_ref: string | null; dept_number: number | null;
+  numbered_by_key: string | null; numbered_by_name: string | null;
+  response_due_at: string | null; resolution_due_at: string | null;
+  first_response_at: string | null; after_hours: boolean;
+  escalated_at: string | null; escalated_from_name: string | null;
+  response_state: string; resolution_state: string;
   allocated_at: string | null; resolved_at: string | null; allocated_by_name: string | null;
   events: number; last_activity: string | null;
 };
@@ -63,16 +92,28 @@ type DeskSeat = { id: string; name: string; key: string };
 type Load = DeskSeat & {
   sort: number; unallocated: number; working: number; pressing: number; settled: number;
   oldest_open: string | null;
+  first_response_minutes: number | null; resolve_minutes: number | null;
+  max_open_tickets: number | null; escalation_department_id: string | null;
+  desk_is_open_now: boolean; overdue: number; unanswered: number; no_clock: number;
+  unnumbered: number; live_tickets: number;
 };
-type Summary = { n: number; unallocated: number; working: number; settled: number; pressing: number };
+type Summary = { n: number; unallocated: number; working: number; settled: number;
+  pressing: number; overdue: number; unanswered: number; no_clock: number; unnumbered: number };
 type Desk = {
   can_manage: boolean; window_days: number; summary: Summary; departments: Load[];
   my_departments: DeskSeat[]; items: Row[];
 };
 type Ticket = Omit<Row, "has_phone" | "events" | "last_activity" | "allocated_by_name"> & {
   body: string; department_key: string | null; resolution: string | null;
+  numbered_by: string | null;
   allocated_by_name: string | null; resolved_by_name: string | null; created_by_name: string | null;
   phone: string | null; phone_unreadable: boolean;
+  // The holding desk's own terms, on the same row the deadlines were read from, so the panel
+  // can never quote a due minute without the week and the promise it was counted against.
+  first_response_minutes: number | null; resolve_minutes: number | null;
+  business_hours: Record<string, { open: string; close: string } | null> | null;
+  max_open_tickets: number | null; escalation_department_id: string | null;
+  escalation_key: string | null; escalation_name: string | null; desk_is_open_now: boolean;
   caller_history: {
     calls: number; still_open: number; last_30d: number;
     first_call: string | null; last_call: string | null;
@@ -88,29 +129,35 @@ type EventLine = {
 
 type Filter = {
   status: string; department: string; mine: string; category: string; priority: string;
-  q: string; phone: string; company: string; days: string; limit: string;
+  q: string; phone: string; company: string; days: string; limit: string; clock: string;
 };
 const EMPTY_FILTER: Filter = {
   status: "", department: "", mine: "", category: "", priority: "",
-  q: "", phone: "", company: "", days: "60", limit: "60"
+  q: "", phone: "", company: "", days: "60", limit: "60", clock: ""
 };
+const CLOCKS: [string, string][] = [
+  ["", "Any clock"], ["late", "Past a deadline"], ["on_time", "Still inside every promise"],
+  ["no_clock", "Nobody set a deadline"]
+];
 
 /** One draft object for every form on the desk, the way the org chart does it: a panel that
  *  reuses the last panel's typing is how a reason ends up on the wrong incidence. */
 type Draft = {
   reporterName: string; reporterEmail: string; reporterPhone: string; channel: string;
   companyTenantId: string; companyName: string; category: string; subject: string;
-  body: string; priority: string; departmentId: string; reason: string;
-  toDepartment: string; workStatus: string; reopen: boolean; outcome: string; resolution: string;
-  priorityTo: string;
+  body: string; priority: string; language: string; departmentId: string; reason: string;
+  toDepartment: string; escalateTo: string; workStatus: string; reopen: boolean;
+  outcome: string; resolution: string; priorityTo: string;
 };
 const EMPTY_DRAFT: Draft = {
   reporterName: "", reporterEmail: "", reporterPhone: "", channel: "phone_call",
   companyTenantId: "", companyName: "", category: "", subject: "", body: "",
-  priority: "normal", departmentId: "", reason: "", toDepartment: "", workStatus: "in_progress",
-  reopen: false, outcome: "resolved", resolution: "", priorityTo: ""
+  priority: "normal", language: "en", departmentId: "", reason: "", toDepartment: "",
+  escalateTo: "", workStatus: "in_progress", reopen: false, outcome: "resolved",
+  resolution: "", priorityTo: ""
 };
-type PanelKind = "new" | "allocate" | "unallocate" | "work" | "resolve" | "priority" | "note" | "tombstone";
+type PanelKind = "new" | "allocate" | "unallocate" | "work" | "resolve" | "priority"
+  | "note" | "escalate" | "tombstone";
 type Panel = { kind: PanelKind; ticketId?: string; ticketRef?: string };
 
 const E164 = /^\+[1-9]\d{7,14}$/;
@@ -139,10 +186,47 @@ const PRIORITY_EDGE: Record<string, string> = {
 };
 const EVENT_EDGE: Record<string, string> = {
   logged: "var(--adm-accent)", allocated: "var(--success)", reallocated: "var(--warning)",
+  routed: "var(--gold)", escalated: "var(--danger)",
   status_changed: "var(--adm-accent)", priority_changed: "var(--warning)",
   note_added: "var(--ink-soft)", resolved: "var(--success)", reopened: "var(--danger)",
   closed: "var(--ink-soft)", withdrawn: "var(--danger)"
 };
+
+/** A promise in the unit a clerk quotes back over the phone. */
+function clockWords(n: number | null): string {
+  if (n === null) return "no clock";
+  if (n < 60) return `${n} min`;
+  if (n < 1440) return `${Math.round(n / 6) / 10} h`;
+  const days = n / 1440;
+  return `${Number.isInteger(days) ? days : Math.round(days * 10) / 10} day${days === 1 ? "" : "s"}`;
+}
+
+const WEEK_DAYS: [string, string][] = [
+  ["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"],
+  ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]
+];
+/** The desk's week in one line. The detail read returns the JSON 123 stores, and a deadline
+ *  quoted without the hours it was counted against is the deadline that gets argued with. */
+function weekShort(w: Ticket["business_hours"]): string {
+  if (!w) return "no working week set";
+  const open = WEEK_DAYS.filter(([k]) => !!(w as any)[k]?.open && !!(w as any)[k]?.close);
+  if (!open.length) return "shut every day of the week";
+  return open.map(([k]) =>
+    `${k.toUpperCase()} ${(w as any)[k].open}–${(w as any)[k].close}`).join(" · ");
+}
+
+/** One of the two clocks, as a chip. `none` is grey on purpose: a promise nobody made cannot be
+ *  broken, and printing it as kept would say the desk hit a target it never had. */
+function ClockChip({ which, state }: { which: "Answer" | "Fix"; state: string }) {
+  const edge = CLOCK_EDGE[state] ?? "var(--line)";
+  return (
+    <span className="whitespace-nowrap rounded-input px-8 py-2 text-[10px] font-semibold"
+      style={{ border: `1px solid ${edge}`, color: edge }}
+      title={`${which} clock: ${CLOCK_WORDS[state] ?? state}`}>
+      {which.toLowerCase()}: {CLOCK_WORDS[state] ?? state}
+    </span>
+  );
+}
 
 const box = "mt-4 w-full rounded-input border px-10 py-8 text-sm";
 const boxStyle = { borderColor: "var(--line)", background: "var(--milk)", color: "var(--ink)" };
@@ -167,6 +251,10 @@ export default function ControlTicketsPage() {
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [events, setEvents] = useState<EventLine[]>([]);
   const [sheetLoading, setSheetLoading] = useState(false);
+  // The register's own sentence about why a call has no deadline, read with the call. The desk
+  // does not invent this: a clock the platform could not set is the desk's problem to explain.
+  const [sheetNote, setSheetNote] = useState<string | null>(null);
+  const [canEscalate, setCanEscalate] = useState(false);
 
   const [companyQ, setCompanyQ] = useState("");
   const [companyHits, setCompanyHits] = useState<any[] | null>(null);
@@ -193,6 +281,7 @@ export default function ControlTicketsPage() {
     // the desk would rather not show while somebody is still typing.
     if (filter.phone.replace(/\D/g, "").length >= 8) params.set("phone", filter.phone.trim());
     if (filter.company) params.set("company", filter.company);
+    if (filter.clock) params.set("clock", filter.clock);
     params.set("days", filter.days);
     params.set("limit", filter.limit);
     const res = await fetch(`${API}/api/v1/control/tickets?${params}`, { credentials: "include" });
@@ -217,6 +306,22 @@ export default function ControlTicketsPage() {
     })();
   }, []);
 
+  // A desk sheet links here with the calls it is standing on: `?department=` filters the queue
+  // to it, `?open=` brings one incidence out. Read off the location rather than
+  // useSearchParams, which would make this page a suspense boundary for a query string only
+  // our own links write. A value that is not an id is dropped, not sent — the register would
+  // answer a stray link with a 400 the operator cannot fix.
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  useEffect(() => {
+    const qs = new URLSearchParams(window.location.search);
+    const dept = qs.get("department");
+    if (dept && UUID.test(dept)) setF((prev) => ({ ...prev, department: dept, mine: "" }));
+    const one = qs.get("open");
+    if (one && UUID.test(one)) openTicket(one);
+    // Once, from the address the page was opened with — later typing in the filters is the
+    // operator's, not something a stale query string may overwrite.
+  }, []);
+
   // Two of the ten filters are typed, so the register is re-read on a pause rather than on
   // every keystroke — an ilike over the whole body column on each letter is a queue that
   // arrives late, and the operator keeps typing anyway.
@@ -239,6 +344,7 @@ export default function ControlTicketsPage() {
     }
     const j = await res.json();
     setTicket(j.ticket); setEvents(j.events ?? []);
+    setSheetNote(j.clock_note ?? null); setCanEscalate(!!j.can_escalate);
     setSheetLoading(false);
   }, []);
 
@@ -246,12 +352,13 @@ export default function ControlTicketsPage() {
     setPanel(null); setPanelError(null); setArmed(null);
     setNotice(null);
     setOpened(id); setTicket(null); setEvents([]);
+    setSheetNote(null); setCanEscalate(false);
     setDraft({ ...EMPTY_DRAFT });
     loadDetail(id);
   }
   function closeTicket() {
     setOpened(null); setTicket(null); setEvents([]); setPanel(null); setPanelError(null);
-    setArmed(null);
+    setArmed(null); setSheetNote(null); setCanEscalate(false);
   }
 
   /** Opening an action form on the incidence it belongs to. Re-tapping the same button closes
@@ -338,12 +445,21 @@ export default function ControlTicketsPage() {
       companyTenantId: draft.companyTenantId || null,
       companyName: draft.companyName.trim() || null,
       category: draft.category, subject: draft.subject.trim(), body: draft.body.trim(),
-      priority: draft.priority, departmentId: draft.departmentId || null,
+      priority: draft.priority, language: draft.language,
+      departmentId: draft.departmentId || null,
       reason: draft.reason.trim() || null
     });
     if (!j) return;
-    setNotice(`${j.ref} is in the register — `
-      + (j.allocated_to ? `straight to ${j.allocated_to}.` : "waiting for a department."));
+    // Every part of this sentence is the register's own answer, not a guess at what happened:
+    // the desk the chart chose, the number the caller was quoted, and the reason there is no
+    // number when there isn't one.
+    const who = j.allocated_to
+      ? (j.routed_by_rule ? `${j.allocated_to}, by the rule "${j.routed_by_rule}"` : `straight to ${j.allocated_to}`)
+      : "waiting for a department";
+    const number = j.dept_ref ? ` Quoted ${j.dept_ref}.` : (j.number_note ? ` ${j.number_note}` : "");
+    setNotice(`${j.ref} is in the register — ${who}.${number}`
+      + (j.clock_note ? ` ${j.clock_note}` : "")
+      + (j.over_ceiling ? ` ${j.allocated_to} is already at its ceiling, so it takes this one as an extra.` : ""));
     setPanel(null); setDraft({ ...EMPTY_DRAFT });
     setCompanyQ(""); setCompanyHits(null); setCompanyNote(null);
     refresh();
@@ -355,9 +471,31 @@ export default function ControlTicketsPage() {
       departmentId: to, reason: draft.reason.trim()
     });
     if (!j) return;
+    // The desk's own number and the register's own sentence about its clock are both in the
+    // reply. Repeating them is the point: the operator reads the caller the same words the
+    // table kept, and a hand-over that started no clock says so instead of looking quiet.
     settle(to
-      ? `${j.ref} now belongs to ${desk?.departments.find((d) => d.id === to)?.name ?? "that desk"}.`
-      : `${j.ref} is back in the queue — nobody holds it.`);
+      ? `${j.ref} now belongs to ${j.department_name ?? "that desk"}`
+        + (j.dept_ref ? `, quoted ${j.dept_ref} by it.` : ".")
+      : `${j.ref} is back in the queue — nobody holds it.`
+      + (j.clock_note ? ` ${j.clock_note}` : ""));
+  }
+
+  /** Hand it to the desk above, and write down who could not answer. The number and both
+   *  deadlines ride up with the work — the register says so, so the sentence here must not
+   *  imply a fresh start the caller will not get. */
+  async function submitEscalate() {
+    const target = draft.escalateTo || ticket?.escalation_department_id || null;
+    const j = await write("POST", `/${ticket!.id}/escalate`, {
+      departmentId: target, reason: draft.reason.trim()
+    });
+    if (!j) return;
+    settle(`${j.ref} is with ${j.department_name} now — ${j.escalated_from_name ?? "that desk"}`
+      + " is on record as not having answered it."
+      + (j.dept_ref ? ` It keeps ${j.dept_ref}, the number the caller already has.`
+        : " It has no desk number of its own yet.")
+      + (j.over_ceiling ? ` ${j.department_name} is already at its ceiling, so it takes this one as an extra.` : "")
+      + (j.clock_note ? ` ${j.clock_note}` : ""));
   }
 
   async function submitWork() {
@@ -413,22 +551,45 @@ export default function ControlTicketsPage() {
     desk?.departments.find((d) => d.id === id)?.name ?? id ?? "—";
   /** Which desk a register line moved the incidence between. "the queue" is an answer to
    *  "who has it", so it is named instead of left blank; a line that moved nothing between
-   *  desks — a note, a re-rate, work on the same desk — says nothing here. */
+   *  desks — a note, a re-rate, work on the same desk — says nothing here. A rule and a desk
+   *  above are not the same act as a clerk's hand-over, so they are not described as one. */
   const moveWords = (ev: EventLine) => {
     if (ev.action === "logged" || (!ev.department_from_id && !ev.department_to_id)) return "";
     const from = ev.department_from_id ? deptName(ev.department_from_id) : "the queue";
     const to = ev.department_to_id ? deptName(ev.department_to_id) : "the queue";
-    return from === to ? "" : ` · ${from} → ${to}`;
+    if (from === to) return "";
+    if (ev.action === "routed") return ` · the chart put it on ${to}`;
+    if (ev.action === "escalated") return ` · ${from} could not answer, so it went up to ${to}`;
+    return ` · ${from} → ${to}`;
   };
 
-  const summary: Summary = desk?.summary ?? { n: 0, unallocated: 0, working: 0, settled: 0, pressing: 0 };
-  const stats: [string | number, string, string?][] = desk ? [
+  const summary: Summary = desk?.summary ?? {
+    n: 0, unallocated: 0, working: 0, settled: 0, pressing: 0,
+    overdue: 0, unanswered: 0, no_clock: 0, unnumbered: 0
+  };
+  // The first five count the register; the last four count the promises on it. They are
+  // deliberately not merged into one number: "past a deadline" and "nobody set a deadline"
+  // are different failures, and the desk has to be able to tell which one it is looking at.
+  const stats: [string | number, string, string?, string?][] = desk ? [
     [summary.n, `Written down in ${desk.window_days} days`,
       `CS numbers issued since ${desk.window_days} days ago, on this filter`],
     [summary.unallocated, "Nobody holds them", "Still in the queue — 101 will not let one be worked"],
     [summary.working, "With a department", "Allocated or being worked on"],
-    [summary.pressing, "High or urgent and not finished", "The list to read first"],
-    [summary.settled, "Settled", "Resolved or closed on this filter"]
+    [summary.pressing, "High or urgent and not finished", "The list to read first",
+      summary.pressing ? "var(--danger)" : undefined],
+    [summary.settled, "Settled", "Resolved or closed on this filter"],
+    [summary.overdue, "Past a promise",
+      "Never answered and past its answer minute, or past the fix date the desk gave",
+      summary.overdue ? "var(--danger)" : undefined],
+    [summary.unanswered, "Waiting for a first answer",
+      "Nobody has written a human line on them yet, so the answer clock is still running",
+      summary.unanswered ? "var(--warning)" : undefined],
+    [summary.no_clock, "No deadline was set",
+      "The holding desk promises no answer time, so nothing here can be called late — yet",
+      summary.no_clock ? "var(--warning)" : undefined],
+    [summary.unnumbered, "No desk number yet",
+      "The caller holds the CS number; the desk has not quoted its own queue number for them",
+      summary.unnumbered ? "var(--warning)" : undefined]
   ] : [];
 
   if (forbidden) {
@@ -482,7 +643,10 @@ export default function ControlTicketsPage() {
             <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
               Who rang, what they said the problem is, and which department owns it now. Each incidence
               gets a number the caller can quote — <code>CS-{new Date().getFullYear()}-00042</code> — and
-              every move on it is written with the reason a person would defend out loud.
+              the desk that takes it adds one of its own, <code>BILLING-4</code>, which stays the call&apos;s
+              name even after the work is pushed up the chart. Every move is written with the reason a
+              person would defend out loud, and every desk&apos;s answer and fix promises run as two clocks
+              against its own working week.
             </p>
           </div>
           {canManage && (
@@ -494,10 +658,10 @@ export default function ControlTicketsPage() {
         </div>
 
         <div className="mt-20 grid gap-12" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))" }}>
-          {stats.map(([value, text, hint]) => (
+          {stats.map(([value, text, hint, tone]) => (
             <div key={text} className="rounded-card border p-14"
               style={{ borderColor: "var(--line)", background: "var(--surface)" }} title={hint}>
-              <p className="text-lg font-bold tabular-nums" style={{ color: "var(--ink)" }}>{value}</p>
+              <p className="text-lg font-bold tabular-nums" style={{ color: tone ?? "var(--ink)" }}>{value}</p>
               <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.14em]"
                 style={{ color: "var(--ink-soft)" }}>{text}</p>
             </div>
@@ -565,7 +729,7 @@ export default function ControlTicketsPage() {
                 Which company is this about
               </p>
               <div className="mt-8 flex flex-wrap items-end gap-10">
-                <label className={`${labelText} min-w-[240px] flex-1 block`} style={{ color: "var(--ink-soft)" }}>
+                <label className={`${labelText} min-w-[min(100%,240px)] flex-1 block`} style={{ color: "var(--ink-soft)" }}>
                   Find the account on the platform
                   <input value={companyQ} onChange={(e) => setCompanyQ(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); searchCompany(); } }}
@@ -637,6 +801,15 @@ export default function ControlTicketsPage() {
                 <select value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: e.target.value })}
                   className={box} style={boxStyle}>
                   {PRIORITIES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </label>
+              {/* The language is not decoration: 123's routing rules can send a KiSwahili call to
+                  a different desk, so what the clerk picks here decides who answers. */}
+              <label className={`${labelText} block`} style={{ color: "var(--ink-soft)" }}>
+                The call was made in
+                <select value={draft.language} onChange={(e) => setDraft({ ...draft, language: e.target.value })}
+                  className={box} style={boxStyle}>
+                  {LANGUAGES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
               </label>
               <label className={`${labelText} block`} style={{ color: "var(--ink-soft)" }}>
@@ -715,7 +888,7 @@ export default function ControlTicketsPage() {
                       {label(CATEGORIES, ticket.category)}
                     </p>
                   </div>
-                  <div className="flex items-center gap-10">
+                  <div className="flex flex-wrap items-center justify-end gap-10">
                     <span className="px-10 py-5 text-[10px] font-bold uppercase tracking-[0.1em]"
                       style={{ borderLeft: `4px solid ${STATUS_EDGE[ticket.status]}`, color: "var(--ink)" }}>
                       {label(STATUSES, ticket.status)}
@@ -787,6 +960,75 @@ export default function ControlTicketsPage() {
                         {ticket.resolved_by_name ? ` by ${ticket.resolved_by_name}` : ""}
                       </p>
                     )}
+                    <p className="mt-8 text-[11px]" style={{ color: "var(--ink)" }}>
+                      {ticket.department_id
+                        ? (ticket.dept_ref
+                          ? <>Quoted <strong>{ticket.dept_ref}</strong> by {ticket.numbered_by_name ?? ticket.department_name}
+                            {ticket.numbered_by_name && ticket.numbered_by_name !== ticket.department_name
+                              ? ` — the number came from the desk that first held it, and it is kept when the work moves.` : "."}</>
+                          : <span style={{ color: "var(--warning)" }}>
+                              That desk has not given it a queue number yet, so the caller can only quote {ticket.ref}.
+                            </span>)
+                        : "In the queue: no desk number and no clock until a department holds it."}
+                    </p>
+                  </div>
+
+                  {/* The two clocks, the promises they were counted against, and the register's
+                      own sentence about why a deadline is missing. A due minute shown without the
+                      desk's week next to it is the number that gets argued with on the phone. */}
+                  <div className="rounded-card border p-14" style={{ borderColor: "var(--line)" }}>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+                      What it was promised
+                    </p>
+                    <div className="mt-6 flex flex-wrap gap-6">
+                      <ClockChip which="Answer" state={ticket.response_state} />
+                      <ClockChip which="Fix" state={ticket.resolution_state} />
+                    </div>
+                    <p className="mt-8 text-[11px]" style={{ color: "var(--ink)" }}>
+                      {ticket.department_name
+                        ? `${ticket.department_name} promises: answer in ${clockWords(ticket.first_response_minutes)}, `
+                          + `fix in ${clockWords(ticket.resolve_minutes)}.`
+                        : "No desk holds it, so no promises have been counted against it."}
+                    </p>
+                    <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                      Working week: {weekShort(ticket.business_hours)} ·{" "}
+                      <span style={{ color: ticket.desk_is_open_now ? "var(--success)" : "var(--warning)" }}>
+                        {ticket.desk_is_open_now ? "the desk is inside its hours now" : "the desk is outside its hours now"}
+                      </span>
+                    </p>
+                    <ul className="mt-8 space-y-4 text-[11px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                      <li>Answer due {when(ticket.response_due_at)}
+                        {ticket.first_response_at ? ` · first answered ${when(ticket.first_response_at)}` : " · nobody has answered yet"}</li>
+                      <li>Fix due {when(ticket.resolution_due_at)}
+                        {ticket.resolved_at ? ` · settled ${when(ticket.resolved_at)}` : " · not settled"}</li>
+                    </ul>
+                    {ticket.after_hours && (
+                      <p className="mt-6 text-[11px]" style={{ color: "var(--warning)" }}>
+                        Logged outside the desk&apos;s hours, so its clocks started when the desk opened, not when the phone rang.
+                      </p>
+                    )}
+                    {sheetNote && (
+                      <p className="mt-8 text-[11px]" style={{ color: "var(--danger)" }}>
+                        {sheetNote}
+                      </p>
+                    )}
+                    {ticket.escalated_at && (
+                      <p className="mt-6 text-[11px]" style={{ color: "var(--danger)" }}>
+                        Escalated {when(ticket.escalated_at)}
+                        {ticket.escalated_from_name ? ` from ${ticket.escalated_from_name}` : ""}
+                        {" "}— the desk below it is on record as having failed to answer.
+                      </p>
+                    )}
+                    {ticket.escalation_name && (
+                      <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                        Above this desk sits{" "}
+                        <Link href={`/control/departments/${ticket.escalation_department_id}`}
+                          className="underline" style={{ color: "var(--adm-accent)" }}>
+                          {ticket.escalation_name}
+                        </Link>
+                        {" "}— where the work goes when this desk says it cannot answer.
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -836,6 +1078,15 @@ export default function ControlTicketsPage() {
                         className="rounded-input border px-12 py-6 text-[11px] font-semibold"
                         style={{ borderColor: "var(--line)", color: "var(--success)" }}>
                         Settle it
+                      </button>
+                    )}
+                    {/* The API decides whether this move is on the table at all: a call nobody
+                        holds cannot be escalated, and a finished one must be reopened instead. */}
+                    {canEscalate && (
+                      <button type="button" onClick={() => openPanel({ kind: "escalate", ticketId: ticket.id, ticketRef: ticket.ref })}
+                        className="rounded-input border px-12 py-6 text-[11px] font-semibold"
+                        style={{ borderColor: "var(--danger)", color: "var(--danger)" }}>
+                        {ticket.escalation_name ? `Up to ${ticket.escalation_name}` : "Push it up the chart"}
                       </button>
                     )}
                     {(ticket.status === "resolved" || ticket.status === "closed") && (
@@ -900,6 +1151,62 @@ export default function ControlTicketsPage() {
                           onClick={() => submitAllocate(draft.toDepartment)}
                           className="waisha-btn mt-12 rounded-input px-14 py-6 text-xs font-semibold">
                           Hand it over
+                        </button>
+                      </>
+                    )}
+
+                    {panel.kind === "escalate" && (
+                      <>
+                        <p className="text-xs font-bold uppercase tracking-[0.12em]" style={{ color: "var(--danger)" }}>
+                          {ticket.department_name} could not answer {ticket.ref}
+                        </p>
+                        <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                          This is not a quiet re-allocate: the register writes which desk gave up and when,
+                          so the line is evidence about {ticket.department_name ?? "that desk"}. The number the
+                          caller was quoted stays, and so do both deadlines — the desk above inherits the
+                          time already lost.
+                        </p>
+                        {!ticket.escalation_department_id && (
+                          <p className="mt-6 text-[11px]" style={{ color: "var(--warning)" }}>
+                            Nothing is set above {ticket.department_name}
+                            {" "}— pick the desk that should take it, or set an escalation target on{" "}
+                            <Link href={`/control/departments/${ticket.department_id}`}
+                              className="underline" style={{ color: "var(--adm-accent)" }}>its own terms</Link>.
+                          </p>
+                        )}
+                        <label className={`${labelText} mt-12 block`} style={{ color: "var(--ink-soft)" }}>
+                          Which desk takes it
+                          <select value={draft.escalateTo || ticket.escalation_department_id || ""}
+                            onChange={(e) => setDraft({ ...draft, escalateTo: e.target.value })}
+                            className={box} style={boxStyle}>
+                            <option value="">Use the desk named above {ticket.department_name}</option>
+                            {(desk?.departments ?? [])
+                              .filter((d) => d.id !== ticket.department_id)
+                              .map((d) => (
+                                <option key={d.id} value={d.id}>
+                                  {d.name} — {d.live_tickets}
+                                  {d.max_open_tickets !== null ? ` of a ${d.max_open_tickets} ceiling` : " live"}
+                                  {d.max_open_tickets !== null && d.live_tickets >= d.max_open_tickets
+                                    ? " (already at its ceiling)" : ""}
+                                  {d.desk_is_open_now ? "" : " · outside its hours"}
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                        <p className="mt-6 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                          A desk at its ceiling still takes an escalation — the ceiling stops a hand-over from
+                          piling on, never a call that is going unanswered.
+                        </p>
+                        <label className={`${labelText} mt-12 block`} style={{ color: "var(--ink-soft)" }}>
+                          Why it goes up — say what this desk could not do
+                          <input value={draft.reason} onChange={(e) => setDraft({ ...draft, reason: e.target.value })}
+                            placeholder="Billing cannot reach the customer's TIN; only the head office desk holds the tax keys."
+                            className={box} style={boxStyle} />
+                        </label>
+                        <button type="button" disabled={busy || !reasonReady} onClick={submitEscalate}
+                          className="mt-12 rounded-input px-14 py-6 text-xs font-semibold"
+                          style={{ background: "var(--danger)", color: "#fff", border: "1px solid var(--danger)" }}>
+                          Escalate it
                         </button>
                       </>
                     )}
@@ -1115,6 +1422,10 @@ export default function ControlTicketsPage() {
                           {ev.actor_user_id === me?.userId ? " — you" : ""}
                           {ev.detail?.previous_resolution
                             ? ` · the earlier answer was: ${String(ev.detail.previous_resolution).slice(0, 120)}` : ""}
+                          {ev.detail?.kept_number
+                            ? ` · the caller kept the number ${String(ev.detail.kept_number)}` : ""}
+                          {ev.detail?.over_ceiling
+                            ? ` · onto a desk already at its ${String(ev.detail.ceiling ?? "—")} ceiling` : ""}
                           {ev.detail?.withdrawn ? " · withdrawn from the register" : ""}
                         </p>
                       </li>
@@ -1200,6 +1511,13 @@ export default function ControlTicketsPage() {
               </select>
             </label>
             <label className={`${labelText} block`} style={{ color: "var(--ink-soft)" }}>
+              Which clock
+              <select value={f.clock} onChange={(e) => setF({ ...f, clock: e.target.value })}
+                className={box} style={boxStyle}>
+                {CLOCKS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </label>
+            <label className={`${labelText} block`} style={{ color: "var(--ink-soft)" }}>
               How far back
               <select value={f.days} onChange={(e) => setF({ ...f, days: e.target.value })}
                 className={box} style={boxStyle}>
@@ -1218,12 +1536,21 @@ export default function ControlTicketsPage() {
           </div>
 
           {(f.status || f.department || f.mine || f.category || f.priority || f.q || f.phone || f.company
-            || f.days !== EMPTY_FILTER.days) && (
+            || f.clock || f.days !== EMPTY_FILTER.days) && (
             <div className="mt-12 flex flex-wrap items-center gap-8">
               <p className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
                 Filtered{f.phone.trim().length >= 7 ? " to one callback number" : ""}
-                {f.company ? " to one company" : ""}.
+                {f.company ? " to one company" : ""}
+                {f.clock ? ` to "${label(CLOCKS, f.clock)}"` : ""}
+                {f.department ? " to one desk" : ""}.
               </p>
+              {f.department && (
+                <Link href={`/control/departments/${f.department}`}
+                  className="rounded-input border px-12 py-6 text-[11px] font-semibold"
+                  style={{ borderColor: "var(--line)", color: "var(--adm-accent)" }}>
+                  That desk&apos;s own sheet
+                </Link>
+              )}
               <button type="button" onClick={() => setF({ ...EMPTY_FILTER })}
                 className="rounded-input border px-12 py-6 text-[11px] font-semibold"
                 style={{ borderColor: "var(--line)", color: "var(--adm-accent)" }}>
@@ -1277,12 +1604,42 @@ export default function ControlTicketsPage() {
                       <span className="text-[10px] uppercase" style={{ color: "var(--ink-soft)" }}>pressing</span>
                     </p>
                     <p className="flex items-baseline gap-6">
+                      <span className="text-lg font-bold tabular-nums"
+                        style={{ color: d.overdue ? "var(--danger)" : "var(--ink-soft)" }}>
+                        {d.overdue}
+                      </span>
+                      <span className="text-[10px] uppercase" style={{ color: "var(--ink-soft)" }}>past a promise</span>
+                    </p>
+                    <p className="flex items-baseline gap-6">
                       <span className="text-lg font-bold tabular-nums" style={{ color: "var(--ink-soft)" }}>
                         {d.settled}
                       </span>
                       <span className="text-[10px] uppercase" style={{ color: "var(--ink-soft)" }}>settled</span>
                     </p>
                   </div>
+                  {/* What the desk promised and how full it is, read on the same card that hands
+                      work to it. A ceiling is a warning, not a wall — the register keeps taking
+                      calls over it, and the board has to say so out loud. */}
+                  <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                    {d.first_response_minutes === null && d.resolve_minutes === null
+                      ? "Sets no answer or fix time, so its calls carry no deadline."
+                      : `Answers in ${clockWords(d.first_response_minutes)}, `
+                        + `fixes in ${clockWords(d.resolve_minutes)}.`}
+                  </p>
+                  <p className="mt-4 text-[11px]" style={{ color: d.desk_is_open_now ? "var(--success)" : "var(--warning)" }}>
+                    {d.desk_is_open_now ? "Open now" : "Outside its working week"}
+                    {d.max_open_tickets !== null
+                      ? ` · ${d.live_tickets} of ${d.max_open_tickets} ceiling`
+                        + (d.live_tickets > d.max_open_tickets ? ", over by one" : "")
+                      : ` · ${d.live_tickets} live, no ceiling set`}
+                  </p>
+                  {!!(d.no_clock || d.unnumbered) && (
+                    <p className="mt-4 text-[11px]" style={{ color: "var(--warning)" }}>
+                      {[d.no_clock ? `${d.no_clock} with no deadline` : null,
+                        d.unnumbered ? `${d.unnumbered} without a desk number` : null]
+                        .filter(Boolean).join(" · ")}
+                    </p>
+                  )}
                   <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
                     {d.oldest_open ? `Oldest one waiting since ${when(d.oldest_open)} (${age(d.oldest_open)})`
                       : "Nothing in work right now."}
@@ -1315,13 +1672,14 @@ export default function ControlTicketsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
-                    <th className="p-12">Number</th>
+                    <th className="p-12">Numbers it holds</th>
                     <th className="p-12">What they said</th>
                     <th className="p-12">Who rang</th>
                     <th className="p-12">Company</th>
                     <th className="p-12">Rating</th>
                     <th className="p-12">State</th>
                     <th className="p-12">Held by</th>
+                    <th className="p-12">Its promises</th>
                     <th className="p-12">Last touched</th>
                   </tr>
                 </thead>
@@ -1335,6 +1693,18 @@ export default function ControlTicketsPage() {
                           title={t.events ? `${t.events} line(s) on the register` : "No lines yet"}>
                           {t.ref}
                         </button>
+                        {/* Two numbers ride on one call: the platform's, which the caller quotes
+                            anywhere, and the desk's, which only means something at that desk.
+                            A call that has not been given one is named, not left blank. */}
+                        <p className="mt-4 text-[10px] font-semibold tabular-nums"
+                          style={{ color: t.dept_ref ? "var(--ink)" : "var(--warning)" }}>
+                          {t.dept_ref ?? "no desk number yet"}
+                        </p>
+                        {t.dept_ref && t.numbered_by_name && t.numbered_by_name !== t.department_name && (
+                          <p className="text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                            from {t.numbered_by_name}
+                          </p>
+                        )}
                         <p className="mt-4 text-[10px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
                           {day(t.ts)} · {age(t.ts)} old
                         </p>
@@ -1345,7 +1715,7 @@ export default function ControlTicketsPage() {
                           {t.subject}
                         </button>
                         <p className="mt-4 text-[10px] uppercase tracking-[0.1em]" style={{ color: "var(--ink-soft)" }}>
-                          {label(CATEGORIES, t.category)} · {label(CHANNELS, t.channel)}
+                          {label(CATEGORIES, t.category)} · {label(CHANNELS, t.channel)} · {label(LANGUAGES, t.language)}
                         </p>
                       </td>
                       <td className="p-12 align-top text-xs" style={{ color: "var(--ink)" }}>
@@ -1384,6 +1754,39 @@ export default function ControlTicketsPage() {
                             by {t.allocated_by_name}
                           </p>
                         )}
+                        {t.department_id && (
+                          <Link href={`/control/departments/${t.department_id}`}
+                            className="mt-4 block text-[10px] underline" style={{ color: "var(--adm-accent)" }}>
+                            that desk&apos;s sheet
+                          </Link>
+                        )}
+                      </td>
+                      <td className="p-12 align-top">
+                        <div className="flex flex-wrap gap-6">
+                          <ClockChip which="Answer" state={t.response_state} />
+                          <ClockChip which="Fix" state={t.resolution_state} />
+                        </div>
+                        <p className="mt-6 text-[10px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                          {[t.response_due_at ? `answer by ${when(t.response_due_at)}` : null,
+                            t.resolution_due_at ? `fix by ${when(t.resolution_due_at)}` : null]
+                            .filter(Boolean).join(" · ") || "no deadline was set"}
+                        </p>
+                        {t.first_response_at && (
+                          <p className="text-[10px]" style={{ color: "var(--success)" }}>
+                            first answered {when(t.first_response_at)}
+                          </p>
+                        )}
+                        {t.after_hours && (
+                          <p className="text-[10px]" style={{ color: "var(--warning)" }}>
+                            logged out of hours — the clock waits for the desk to open
+                          </p>
+                        )}
+                        {t.escalated_at && (
+                          <p className="text-[10px]" style={{ color: "var(--danger)" }}>
+                            pushed up {when(t.escalated_at)}
+                            {t.escalated_from_name ? ` because ${t.escalated_from_name} could not answer` : ""}
+                          </p>
+                        )}
                       </td>
                       <td className="p-12 align-top text-xs tabular-nums" style={{ color: "var(--ink-soft)" }}
                         title={when(t.last_activity ?? t.updated_at)}>
@@ -1400,6 +1803,12 @@ export default function ControlTicketsPage() {
             Urgent and unfinished rows print first, then the newest. A withdrawn incidence is off this list and
             still in the table; <Link href="/control/forensics" style={{ color: "var(--adm-accent)" }}>Forensics</Link>{" "}
             carries every write as <code>control.tickets.*</code>.
+          </p>
+          <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+            “Past a deadline” counts only work still open: an answer never given and past its minute, or a fix
+            date gone by. A settled call that missed one is not late — it is <code>missed it</code> on its own
+            row, and the desk sheet keeps both. A grey “no clock set” is not a pass: it means the holding desk
+            promised nothing, which is a decision somebody has to defend on Monday.
           </p>
         </section>
       </main>

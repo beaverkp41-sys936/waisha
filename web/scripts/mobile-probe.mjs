@@ -518,10 +518,11 @@ const SAMPLE_TEXT = `(async () => {
 })()`;
 
 /** Where a control a phone user has to reach lives. The portal pane is `.app-main`,
- *  the seeker and shipper panes are `.portal-shell main`, and a sweep that names only
- *  the first reports "no create control" for a page whose form was there all along —
- *  which reads exactly like a page with nothing wrong in it. */
-const SHELL = ".app-main, .portal-shell main";
+ *  the seeker and shipper panes are `.portal-shell main`, the admin desks are
+ *  `.control-shell`, and a sweep that names only the first two reports "no create
+ *  control" for a page whose form was there all along — which reads exactly like a
+ *  page with nothing wrong in it. */
+const SHELL = ".app-main, .portal-shell main, .control-shell";
 
 /** Open the create form a page only shows after a tap. Verbs are the ones this
  *  codebase uses for form panels, and anything that reads like a destructive act is
