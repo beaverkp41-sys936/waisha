@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Activity, Banknote, Boxes, Bug, Building2, CreditCard, Globe, Headphones, Languages, Lightbulb, LogOut,
-  Megaphone, Scale, ScrollText, Settings2, Stamp, Tag, TrendingUp, UserCog, Users, type LucideIcon
+  Megaphone, Scale, ScrollText, Settings2, ShieldCheck, Stamp, Tag, TrendingUp, UserCog, Users, type LucideIcon
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
@@ -43,6 +43,11 @@ const SCREENS: Screen[] = [
   // blocked by nothing except waiting.
   { href: "/control/approvals", label: "Approvals", icon: Stamp,
     keys: ["control.approvals.view", "control.approvals.decide"] },
+  // Who each customer is and what the office has signed about it. Three duties because the desk
+  // does three different jobs: reading the board, writing on the file, and answering a check —
+  // the last of which is also the only seat allowed to read a whole identity number back.
+  { href: "/control/customers", label: "Verification", icon: ShieldCheck,
+    keys: ["control.customers.view", "control.customers.verify", "control.customers.manage"] },
   { href: "/control/directory", label: "Directory", icon: Globe, roles: LICENCE },
   { href: "/control/recommendations", label: "Inbox", icon: Lightbulb,
     keys: ["control.recommendations.view", "control.recommendations.manage"] },

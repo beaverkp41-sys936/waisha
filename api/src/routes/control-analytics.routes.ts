@@ -100,7 +100,11 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       "control.approvals.view", "control.approvals.decide",
       // The service registers (126). Grading a call is its own duty — a seat that can open a
       // dispute is not thereby allowed to mark how somebody else answered the phone.
-      "control.service.view", "control.service.manage", "control.service.review"];
+      "control.service.view", "control.service.manage", "control.service.review",
+      // The customer register (127). `verify` is the duty that answers a check and the only one
+      // that may read a whole identity number back; `manage` raises lines and writes the office's
+      // own words but cannot certify anything.
+      "control.customers.view", "control.customers.verify", "control.customers.manage"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });
 
