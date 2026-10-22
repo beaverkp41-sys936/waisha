@@ -1735,8 +1735,12 @@ select.auth-field option { color: var(--ink); }
      it measured 28x16 — three of them per cargo file. These links sit in a flex row, so
      padding would grow the row rather than the hit box; `min-height` needs a block-level box,
      which is why this one uses inline-flex. The label is a single short word, so it cannot
-     truncate and lose the `text-xs` density the register was signed off at. */
-  .app-main :is(.doc-view, .rec-link) { display: inline-flex; align-items: center; min-height: 38px; }
+     truncate and lose the `text-xs` density the register was signed off at. The admin desks
+     copied the same plain-link shape — an incidence number that opens a call, a phone number
+     a clerk taps to ring the caller back — and every rule here named `.app-main`, so the
+     control shell never got the floor: on a phone the ring-back link measured 116x20 and the
+     incidence number 62x32, and each is that call's only route on the board. */
+  :is(.app-main, .control-shell) :is(.doc-view, .rec-link) { display: inline-flex; align-items: center; min-height: 38px; }
   .app-main a.doc-view { min-width: 34px; justify-content: center; }
   /* A pane-note that carries a link is a page's way back — "← All cargo files", "Office
      desk", "← Office area" — and it stands alone on its own line, so it is a control rather

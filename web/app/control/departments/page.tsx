@@ -90,6 +90,7 @@ type Department = {
   head_user_id: string | null; head_name: string | null; seat_count: number; live_covers: number;
   first_response_minutes: number | null; resolve_minutes: number | null;
   business_hours: Week | null; max_open_tickets: number | null; ticket_seq: number;
+  reopen_days: number | null;
   escalation_department_id: string | null; escalation_key: string | null;
   escalation_name: string | null;
   live_tickets: number; breached_tickets: number; oldest_open: string | null;
@@ -111,7 +112,8 @@ type Move = {
  *  not accept is a rule that sits on the desk matching nothing, so this is a mirror. */
 const RULE_CHANNELS: [string, string][] = [
   ["phone_call", "Phone call"], ["whatsapp", "WhatsApp"], ["email", "Email"],
-  ["walk_in", "Walked in"], ["portal_message", "Portal message"], ["other", "Other"]
+  ["walk_in", "Walked in"], ["portal_message", "Portal message"],
+  ["chat", "Portal chat"], ["web_form", "Web form"], ["other", "Other"]
 ];
 const RULE_CATEGORIES: [string, string][] = [
   ["onboarding", "Onboarding"], ["account_access", "Account access"],
@@ -192,9 +194,11 @@ type Panel = { kind: PanelKind; deptId?: string; userId?: string; userName?: str
 type Draft = {
   key: string; name: string; purpose: string; sort: string; reason: string; endsOn: string;
   picked: string[]; headUserId: string; moveTo: string;
-  /** The desk's five terms, edited together because they are read together: a clock without
-   *  the week it is counted against is the panel that gets argued with. */
+  /** The desk's six terms, edited together because they are read together: a clock without
+   *  the week it is counted against is the panel that gets argued with, and a reopen window
+   *  without the promise it follows is a caller told one thing and answered another. */
   answer: string; fix: string; ceiling: string; escalateTo: string; week: Week;
+  reopen: string;
   /** Closing a desk that still holds calls has to name where they go. */
   moveTicketsTo: string;
   /** A routing rule, all five predicates and the desk it points at. */
@@ -207,6 +211,7 @@ type Draft = {
 };
 const EMPTY: Draft = { key: "", name: "", purpose: "", sort: "100", reason: "", endsOn: "",
   picked: [], headUserId: "", moveTo: "", answer: "", fix: "", ceiling: "", escalateTo: "",
+  reopen: "",
   week: { ...OFFICE_WEEK }, moveTicketsTo: "",
   ruleName: "", ruleDesk: "", rulePrecedence: "100", ruleNote: "", ruleOn: true,
   ruleChannels: [], ruleCategories: [], rulePriorities: [], ruleLanguages: [], ruleRegions: [],
@@ -400,6 +405,7 @@ export default function ControlDepartmentsPage() {
     answer: d.first_response_minutes === null ? "" : String(d.first_response_minutes),
     fix: d.resolve_minutes === null ? "" : String(d.resolve_minutes),
     ceiling: d.max_open_tickets === null ? "" : String(d.max_open_tickets),
+    reopen: d.reopen_days === null ? "" : String(d.reopen_days),
     escalateTo: d.escalation_department_id ?? "",
     week: { ...(d.business_hours ?? SHUT_WEEK) }
   });
@@ -534,6 +540,7 @@ export default function ControlDepartmentsPage() {
     const mine = panel;
     const num = (v: string) => (v.trim() ? Number(v.trim()) : null);
     const answer = num(draft.answer), fix = num(draft.fix), ceiling = num(draft.ceiling);
+    const reopen = num(draft.reopen);
     const bad: string[] = [];
     if (answer !== null && (!Number.isInteger(answer) || answer < 5 || answer > 4320))
       bad.push("A first answer is between 5 and 4320 minutes, or empty for no clock.");
@@ -541,6 +548,9 @@ export default function ControlDepartmentsPage() {
       bad.push("A resolution is between 15 and 20160 minutes, or empty for no clock.");
     if (ceiling !== null && (!Number.isInteger(ceiling) || ceiling < 1 || ceiling > 500))
       bad.push("The number of calls a desk will hold is between 1 and 500, or empty for no ceiling.");
+    if (reopen !== null && (!Number.isInteger(reopen) || reopen < 1 || reopen > 90))
+      bad.push("The days a settled call can be reopened is between 1 and 90, or empty to let "
+        + "anybody with the duty reopen it whenever the caller comes back.");
     if (answer !== null && fix !== null && answer > fix)
       bad.push(`An answer in ${answer} minutes cannot sit outside a fix in ${fix}.`);
     const week: Week = { ...draft.week };
@@ -569,6 +579,7 @@ export default function ControlDepartmentsPage() {
     (async () => {
       const j = await write("PUT", `/${mine!.deptId}/terms`, {
         firstResponseMinutes: answer, resolveMinutes: fix, maxOpenTickets: ceiling,
+        reopenDays: reopen,
         escalationDepartmentId: draft.escalateTo || null,
         businessHours: shipped,
         reason: draft.reason.trim()
@@ -582,6 +593,8 @@ export default function ControlDepartmentsPage() {
         `open ${weekWords(j.business_hours)} (Dar es Salaam)`,
         j.max_open_tickets === null ? "no ceiling on how many it holds"
           : `${j.max_open_tickets} live call(s) before it is full`,
+        j.reopen_days === null ? "a settled call can be reopened at any time"
+          : `a settled call reopens here for ${j.reopen_days} calendar day(s)`,
         j.escalation_department_id
           ? `work it cannot answer goes up to ${deptById(j.escalation_department_id)?.name ?? "the desk above"}`
           : "nothing escalates above it"
@@ -1133,6 +1146,14 @@ export default function ControlDepartmentsPage() {
                                 style={{ borderColor: "var(--line)", background: "var(--milk)", color: "var(--ink)" }} />
                             </label>
                             <label className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                              Days a settled call can be reopened
+                              <input type="number" min={1} max={90} value={draft.reopen}
+                                onChange={(e) => setDraft({ ...draft, reopen: e.target.value })}
+                                placeholder="empty = at any time"
+                                className="mt-4 w-full rounded-input border px-10 py-6 text-sm"
+                                style={{ borderColor: "var(--line)", background: "var(--milk)", color: "var(--ink)" }} />
+                            </label>
+                            <label className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
                               Desk above it when it cannot answer
                               <select value={draft.escalateTo}
                                 onChange={(e) => setDraft({ ...draft, escalateTo: e.target.value })}
@@ -1152,6 +1173,16 @@ export default function ControlDepartmentsPage() {
                               a hand-over to it is refused until room appears.
                             </p>
                           )}
+                          <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                            {draft.reopen
+                              ? `The reopen window is counted in calendar days, not the desk's working `
+                                + `minutes: a call finished here stays reopenable for ${draft.reopen.trim()} `
+                                + "day(s), and after that the register refuses the reopen and says to log "
+                                + "the caller's second contact as its own incidence."
+                              : "With no window written, a settled call on this desk can be reopened at "
+                                + "any time by anybody holding the duty — which is honest about a desk "
+                                + "that never said how long it stands behind its own answer."}
+                          </p>
                           {(() => {
                             const target = departments.find((o) => o.id === draft.escalateTo);
                             return target?.escalation_department_id === d.id ? (

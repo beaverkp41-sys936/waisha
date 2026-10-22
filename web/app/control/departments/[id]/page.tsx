@@ -160,6 +160,7 @@ type Desk = {
   head_user_id: string | null; head_name: string | null;
   first_response_minutes: number | null; resolve_minutes: number | null;
   business_hours: Week | null; max_open_tickets: number | null; ticket_seq: number;
+  reopen_days: number | null;
   escalation_department_id: string | null; escalation_key: string | null;
   escalation_name: string | null; live_tickets: number; live_seats: number;
 };
@@ -463,6 +464,22 @@ export default function ControlDepartmentSheetPage() {
                   : atCeiling
                     ? `Full. A new call pointed here is logged but left unnumbered; an escalation still lands.`
                     : `${sheet!.headroom} place(s) before it refuses new work.`}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+                Reopen window
+              </dt>
+              <dd className="mt-4 text-sm font-semibold" style={{ color: desk.reopen_days === null ? "var(--warning)" : "var(--ink)" }}>
+                {desk.reopen_days === null ? "no window written" : `${desk.reopen_days} calendar day(s)`}
+              </dd>
+              <dd className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                {desk.reopen_days === null
+                  ? "A call settled here can be reopened at any time by anybody holding the duty — "
+                    + "the desk never said how long it stands behind its own answer."
+                  : "Counted in calendar days from the minute the call was settled, not the working "
+                    + "hours above. Past them the register refuses the reopen and tells the clerk "
+                    + "to log the caller's second contact as its own incidence."}
               </dd>
             </div>
             <div>

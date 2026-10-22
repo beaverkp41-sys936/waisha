@@ -3,11 +3,12 @@ import { pool } from "../db/pool.js";
 
 export interface Mail { to: string; subject: string; html: string; text: string; }
 
-/** Why a message went out. Mirrors the CHECK list on message_deliveries (112) — a value
- *  outside it is dropped by the writer, so a typo here loses evidence silently. */
+/** Why a message went out. Mirrors the CHECK list on message_deliveries (112, widened by 125)
+ *  and the guard inside platform_auth.record_message_delivery — a value outside it is dropped by
+ *  the writer, so a typo here loses evidence silently. */
 export type DeliveryPurpose =
   | "signup_otp" | "otp_resend" | "password_reset" | "staff_invite"
-  | "tenant_notice" | "platform_test";
+  | "tenant_notice" | "platform_test" | "sla_breach";
 
 /** Where the register should attribute a line. Both are optional: a send that happens
  *  before a company exists, or one the office runs against an address it does not hold,

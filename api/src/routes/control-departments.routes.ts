@@ -63,8 +63,11 @@ const REASON = z.string().trim().min(4).max(300);
 
 /** The words the register uses for a call, repeated here so a rule can be refused before it
  *  is written rather than sitting on the desk never matching anything. 123's own CHECKs are
- *  the backstop — a rule with 'phonecall' in it would be stored happily and route nothing. */
-const RULE_CHANNELS = ["phone_call", "whatsapp", "email", "walk_in", "portal_message", "other"] as const;
+ *  the backstop — a rule with 'phonecall' in it would be stored happily and route nothing.
+ *  125 added chat and web_form to the channels a call can arrive on; a rule list that stops
+ *  short of them would refuse the only rule that could route a web-form incidence. */
+const RULE_CHANNELS = ["phone_call", "whatsapp", "email", "walk_in", "portal_message",
+  "chat", "web_form", "other"] as const;
 const RULE_CATEGORIES = ["onboarding", "account_access", "licence_billing", "cargo_clearing",
   "transport_fleet", "marketplace_directory", "system_error", "complaint", "other"] as const;
 const RULE_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
@@ -142,10 +145,10 @@ function weekIsOpen(raw: Record<string, unknown> | null): boolean {
   });
 }
 
-/** The five figures a desk sets about itself, in the order the statement reads them. Presence
+/** The six figures a desk sets about itself, in the order the statement reads them. Presence
  *  decides: a key the desk did not send keeps what it said, a key it sent as null clears it. */
 const TERM_KEYS = ["firstResponseMinutes", "resolveMinutes", "businessHours",
-  "escalationDepartmentId", "maxOpenTickets"] as const;
+  "escalationDepartmentId", "maxOpenTickets", "reopenDays"] as const;
 
 /** 123's guards refuse with codes that mean "this row is not allowed to exist" (23514) and
  *  "this value is not the shape we asked for" (22023). Neither one is a server fault, and both
@@ -201,7 +204,7 @@ export const DEPARTMENTS_SQL = `
   select d.id, d.key, d.name, d.purpose, d.sort, d.is_active,
          d.head_user_id, h.full_name as head_name,
          d.first_response_minutes, d.resolve_minutes, d.business_hours,
-         d.max_open_tickets, d.ticket_seq::int as ticket_seq,
+         d.max_open_tickets, d.reopen_days, d.ticket_seq::int as ticket_seq,
          d.escalation_department_id, upper(e.key) as escalation_key,
          e.name as escalation_name,
          coalesce(w.live_tickets, 0)::int as live_tickets,
@@ -310,7 +313,7 @@ export const DEPARTMENT_SQL = `
   select d.id, d.key, d.name, d.purpose, d.sort, d.is_active, d.head_user_id,
          h.full_name as head_name,
          d.first_response_minutes, d.resolve_minutes, d.business_hours,
-         d.max_open_tickets, d.ticket_seq::int as ticket_seq,
+         d.max_open_tickets, d.reopen_days, d.ticket_seq::int as ticket_seq,
          d.escalation_department_id, upper(e.key) as escalation_key,
          e.name as escalation_name,
          (select count(*)::int from support_tickets t
@@ -324,15 +327,16 @@ export const DEPARTMENT_SQL = `
    where d.id = $1 and d.tenant_id = $2 and d.deleted_at is null`;
 
 /**
- * What a desk owes, when it is open to hear about it, who is above it, and how much it will
- * take before it says it is full. Params: department, tenant, actor, then five pairs of
- * "did the desk send this?" and the value it sent (a sent null clears the column).
+ * What a desk owes, when it is open to hear about it, who is above it, how much it will
+ * take before it says it is full, and how long after settling it lets a call come back.
+ * Params: department, tenant, actor, then six pairs of "did the desk send this?" and the value
+ * it sent (a sent null clears the column).
  *
- * Presence is a flag rather than a coalesce because every one of these five can honestly be
- * set to nothing: a desk that cancels its ceiling or its escalation target has to be able to
- * say so, and `coalesce($n, col)` reads a clearing as an unchanged column. Two of the writes
- * fire 123's guards — an unparseable week and a chain that comes back to itself — and the
- * handler passes their sentences through rather than re-deriving them.
+ * Presence is a flag rather than a coalesce because every one of these six can honestly be
+ * set to nothing: a desk that cancels its ceiling, its escalation target or its reopen window
+ * has to be able to say so, and `coalesce($n, col)` reads a clearing as an unchanged column. Two
+ * of the writes fire 123's guards — an unparseable week and a chain that comes back to itself —
+ * and the handler passes their sentences through rather than re-deriving them.
  */
 export const SET_DEPARTMENT_TERMS_SQL = `
   update platform_departments
@@ -343,10 +347,12 @@ export const SET_DEPARTMENT_TERMS_SQL = `
          escalation_department_id = case when $10::bool then $11::uuid
                                          else escalation_department_id end,
          max_open_tickets = case when $12::bool then $13::int else max_open_tickets end,
+         reopen_days = case when $14::bool then $15::int else reopen_days end,
          updated_by = $3
    where id = $1 and tenant_id = $2 and deleted_at is null
   returning id, key, name, first_response_minutes, resolve_minutes, business_hours,
-            escalation_department_id, max_open_tickets, ticket_seq::int as ticket_seq,
+            escalation_department_id, max_open_tickets, reopen_days,
+            ticket_seq::int as ticket_seq,
             updated_at`;
 
 /** The chain above one desk, nearest first. Params: department, tenant.
@@ -1017,13 +1023,17 @@ export async function controlDepartmentRoutes(app: FastifyInstance, _opts: unkno
       businessHours: WEEK.nullish(),
       escalationDepartmentId: z.string().uuid().nullish(),
       maxOpenTickets: z.number().int().min(1).max(500).nullish(),
+      // Calendar days, and 125 says 1 to 90 on the column. The desk is the one that has to
+      // answer a caller who rang back on day 31, so it gets to choose — but not silently.
+      reopenDays: z.number().int().min(1).max(90).nullish(),
       reason: REASON
     }).strict().parse(raw);
     const sent = TERM_KEYS.filter((k) => k in raw);
     if (!sent.length) {
       throw new ApiError("VALIDATION_FAILED",
         "Say which of the desk's terms to change — the hours, the two clocks, the desk above "
-        + "it, or the load it will accept.", 400, [{ field: "businessHours" }]);
+        + "it, the load it will accept, or how long it lets a settled call reopen.", 400,
+        [{ field: "businessHours" }]);
     }
     const tenantId = req.control.tenant_id;
 
@@ -1080,7 +1090,8 @@ export async function controlDepartmentRoutes(app: FastifyInstance, _opts: unkno
           "businessHours" in raw,
           week === null || week === undefined ? null : weekJson(week as any),
           "escalationDepartmentId" in raw, body.escalationDepartmentId ?? null,
-          "maxOpenTickets" in raw, body.maxOpenTickets ?? null
+          "maxOpenTickets" in raw, body.maxOpenTickets ?? null,
+          "reopenDays" in raw, body.reopenDays ?? null
         ]);
       } catch (err) {
         const refused = sqlRefusal(err, `${d.name}'s terms were refused by the register.`);
@@ -1116,9 +1127,16 @@ export async function controlDepartmentRoutes(app: FastifyInstance, _opts: unkno
           return above ? `Work it cannot answer goes up to ${above.name}.`
             : "Nothing is escalated above it any more.";
         }
-        return after.max_open_tickets === null
-          ? "It will not say when it is full."
-          : `It will hold ${after.max_open_tickets} live call(s) before the register says so.`;
+        if (k === "maxOpenTickets") {
+          return after.max_open_tickets === null
+            ? "It will not say when it is full."
+            : `It will hold ${after.max_open_tickets} live call(s) before the register says so.`;
+        }
+        return after.reopen_days === null
+          ? "A settled call on this desk can be reopened at any time, by anybody with the duty."
+          : `A settled call comes back to this desk for ${after.reopen_days} day(s) after it `
+            + "was finished; after that the register refuses the reopen and says to log the "
+            + "new call as its own incidence.";
       });
 
       await record(c, req, {
@@ -1127,11 +1145,12 @@ export async function controlDepartmentRoutes(app: FastifyInstance, _opts: unkno
         before: { first_response_minutes: d.first_response_minutes,
           resolve_minutes: d.resolve_minutes, business_hours: d.business_hours,
           escalation_department_id: d.escalation_department_id,
-          max_open_tickets: d.max_open_tickets },
+          max_open_tickets: d.max_open_tickets, reopen_days: d.reopen_days },
         after: { first_response_minutes: after.first_response_minutes,
           resolve_minutes: after.resolve_minutes, business_hours: after.business_hours,
           escalation_department_id: after.escalation_department_id,
-          max_open_tickets: after.max_open_tickets, changed: sent },
+          max_open_tickets: after.max_open_tickets, reopen_days: after.reopen_days,
+          changed: sent },
         reason: body.reason,
         detail: { terms: changedWords }
       });

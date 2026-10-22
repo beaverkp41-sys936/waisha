@@ -14,6 +14,7 @@ Thumbs.db
 # Layout probe output: screenshots and per-run JSON, regenerated on demand.
 .mobile-probe/
 .probe-*/
+.probe/
 # One stage's scratch: throwaway scripts, the token file they read, dev-server logs.
 api/scripts/tmp-*.ts
 tmp-*.log
