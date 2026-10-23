@@ -18,7 +18,7 @@ async function requireAuth(req: any) {
 }
 
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-/** 130's interlink says the same four pairs in SQL; the one TS author is `cargo/codes.ts`. */
+/** 130's interlink and 132's regime table say the same four pairs in SQL; the one TS author is `cargo/codes.ts`. */
 const PREFIX = FILE_PREFIX;
 const LOOSE_TYPES = ["loose_cargo", "car"];
 
@@ -32,11 +32,15 @@ const shipmentBase = containerFields.merge(z.object({
   shipmentType: z.enum(["export", "import", "transhipment", "transit"]),
   hsCode: z.string().trim().max(30).nullable().optional(),
   declarationMode: z.string().trim().max(60).nullable().optional(),
-  // The two codes 130 keeps as lists. A mode is a published number, a CPC is a four-digit one, and
-  // neither is free text: a clerk reads "mode 4" and "CPC 4200" across a counter, so a typo in
-  // either is refused rather than filed.
+  // The two codes the office keeps as lists. A mode is a published number; a CPC is whatever the
+  // classification block prints for that movement — two digits (40, 42, 10, 80), four digits the
+  // same number padded (4000, 8200), or a letter indicator (T1, T2, TR). Neither is free text: a
+  // clerk reads "mode 4" and "CPC T1" across a counter, so a typo in either is refused, not filed.
   modeCode: z.number().int().min(1).max(6).nullable().optional(),
-  cpcCode: z.string().trim().regex(/^\d{4}$/, "A CPC is four digits").nullable().optional(),
+  cpcCode: z.string().trim().toUpperCase()
+    .regex(/^([0-9]{2}|[0-9]{4}|T[12R])$/,
+      "A CPC is a code the block prints: two or four digits, or an indicator such as T1, T2 or TR")
+    .nullable().optional(),
   cargoDescription: z.string().trim().max(500).nullable().optional(),
   cbm: z.number().nonnegative().max(1_000_000).nullable().optional(),
   weightTonnes: z.number().nonnegative().max(1_000_000).nullable().optional(),

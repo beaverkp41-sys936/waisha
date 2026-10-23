@@ -1,16 +1,21 @@
 /**
- * #383/#384 — the mode of transport and the customs procedure code smoke.
+ * #383/#384 and #390-#393 — the mode of transport, the customs regime and the codes it prints.
  *
  * The office asked for the four movements with their numbers (import 4, export 1, transit 8,
  * transhipment 7), for a file to say which mode it travels by, and for a CPC section under Customs
- * that fits the movement it is filed under. Migration 130 made both lists tables; the routes make
- * them answers a clerk can pick from. This run proves the whole chain over real HTTP:
- *   1. `/cargo/codes` carries the prefixes, the six modes with the document each one travels on, and
- *      the procedures — so the form needs no copy of any of it;
- *   2. a mode and a CPC land on the file, come back with their labels, and are kept or cleared by
- *      the presence rule the rest of this API writes by;
+ * that fits the movement it is filed under. Migration 130 made both lists tables; 132 put the
+ * classification block behind them, so a movement now carries its own words, the series it is
+ * declared under and the shape of a code of that series — which is how T1, T2 and TR became
+ * declarable when 130's four-digit CHECK could only refuse them. This run proves the chain over real
+ * HTTP:
+ *   1. `/cargo/codes` carries the prefixes, the six modes with the document each one travels on, the
+ *      sixteen procedures and the regime words each movement prints — and the words it answers with
+ *      are read back out of the same rows, so the form has no copy of any of it;
+ *   2. a mode and a CPC land on the file, come back with their labels, are kept or cleared by the
+ *      presence rule the rest of this API writes by, and a code of either shape — 40 or T1, typed in
+ *      either case — is filed in the capitals the block prints it in;
  *   3. a code that contradicts the movement is refused with the box named, at the route and again in
- *      SQL, so no desk can file an 8xxx procedure on a 4xxxx file;
+ *      SQL, so no desk can file an import code on a transit file whatever shape its own code is;
  *   4. the master sheet's transport document follows the file's mode: a contradiction typed into the
  *      sheet is refused, a mode changed afterwards is said as a warning, and a note still saves.
  * Fixtures are named Codeprobe* on their own tenants and every one is wiped at the end.
@@ -118,6 +123,14 @@ async function main() {
       && typeOf("export")?.prefix === "1" && typeOf("export")?.book?.key === "transport"
       && typeOf("transit")?.prefix === "8" && typeOf("transit")?.book?.key === "transport",
     text(c.types));
+  check("each movement is handed with the block's own words: what it does and the codes it prints",
+    (c.types ?? []).length === 4 && (c.types ?? []).every((t: any) =>
+      String(t.regime_note ?? "").length > 40 && String(t.series_words ?? "").length > 3)
+      && typeOf("import")?.series_words === "codes 40 and 42"
+      && typeOf("export")?.series_words === "code 10"
+      && /general indicator TR/.test(String(typeOf("transhipment")?.series_words ?? ""))
+      && /T1 and 80/.test(String(typeOf("transit")?.series_words ?? "")),
+    text((c.types ?? []).map((t: any) => [t.value, t.series_words])));
   check("the six published modes, each with the document it travels on",
     (c.modes ?? []).length === 6 && modeOf(1)?.bill_kind === "bill_of_lading"
       && modeOf(1)?.bill_label === "Bill of lading" && modeOf(1)?.carrier_word === "Shipping line"
@@ -128,14 +141,39 @@ async function main() {
     modeOf(5)?.bill_kind === null && modeOf(5)?.bill_label === null && modeOf(5)?.carrier_word === null
       && modeOf(6)?.bill_kind === null && modeOf(6)?.carrier_word === null,
     text([modeOf(5), modeOf(6)]));
-  check("the six procedures, each bound to the movement its first digit names",
-    (c.procedures ?? []).length === 6 && procOf("4000")?.shipment_type === "import"
+  check("the sixteen procedures, each bound to the regime its code is printed under",
+    (c.procedures ?? []).length === 16 && procOf("4000")?.shipment_type === "import"
       && procOf("4200")?.shipment_type === "import" && procOf("1000")?.shipment_type === "export"
       && procOf("7000")?.shipment_type === "transhipment" && procOf("8000")?.shipment_type === "transit"
       && procOf("8200")?.shipment_type === "transit", text(c.procedures));
+  check("…and the block's short codes and transit papers are among them, under their own movement",
+    procOf("40")?.shipment_type === "import" && procOf("42")?.shipment_type === "import"
+      && procOf("10")?.shipment_type === "export" && procOf("80")?.shipment_type === "transit"
+      && procOf("T1")?.shipment_type === "transit" && procOf("T2")?.shipment_type === "transit"
+      && procOf("50")?.shipment_type === "transhipment" && procOf("60")?.shipment_type === "transhipment"
+      && procOf("70")?.shipment_type === "transhipment" && procOf("TR")?.shipment_type === "transhipment",
+    text((c.procedures ?? []).map((p: any) => [p.code, p.shipment_type])));
   check("every procedure's label is the EAC wording a counter reads",
     procOf("4000")?.label === "Direct Import for Home Consumption"
-      && procOf("8200")?.label === "Inland Container Depot / Bonded Warehouse", text(c.procedures));
+      && procOf("8200")?.label === "Inland Container Depot / Bonded Warehouse"
+      && procOf("T1")?.label === "Community Transit Paper (T1)"
+      && procOf("40")?.label === "Permanent / Definitive Entry", text(c.procedures));
+  const regimes = await oi(`select shipment_type, series_words, note, code_pattern, file_prefix
+    from customs_regime`);
+  const regimeOf = (v: string) => regimes.rows.find(r => r.shipment_type === v);
+  check("SQL: the words the API answered with are the regime rows themselves, and the digit too",
+    regimes.rowCount === 4 && (c.types ?? []).every((t: any) => {
+      const r = regimeOf(t.value);
+      return r && r.series_words === t.series_words && r.note === t.regime_note
+        && r.file_prefix === t.prefix;
+    }), text((c.types ?? []).map((t: any) => [t.value, t.prefix, t.series_words])));
+  check("SQL: every code the desk was handed fits the pattern of the regime it stands under",
+    (await oi(`select count(*)::int as n from customs_procedure_code c
+       join customs_regime r on r.shipment_type = c.shipment_type
+      where c.code !~ r.code_pattern`)).rows[0].n === 0,
+    text((await oi(`select code, shipment_type from customs_procedure_code c
+      where c.code !~ (select code_pattern from customs_regime where shipment_type = c.shipment_type)`))
+      .rows));
   check("the lists are platform reference data: B is handed the same six modes",
     (await call("/cargo/codes", tok2)).body?.modes?.length === 6);
   check("/cargo/codes is not open to an anonymous caller",
@@ -218,10 +256,18 @@ async function main() {
     shipmentType: "import", containerType: "loose_cargo", cpcCode: "400",
     consigneeName: "Codeprobe Short CPC", consignorName: "Codeprobe Sender Short"
   }));
-  check("a CPC that is not four digits is refused as a shape, not as a search",
-    looseProc.status === 400 && /four digits/i.test(text(looseProc.body)),
+  check("a CPC of no shape the block prints is refused as a shape, not as a search",
+    looseProc.status === 400 && /the block prints/i.test(text(looseProc.body)),
     `[${looseProc.status}] ${text(looseProc.body)}`);
-  check("none of the four refusals left a file behind",
+  const letterOnWrong = await call("/cargo", tok1, post({
+    shipmentType: "transhipment", containerType: "loose_cargo", cpcCode: "T1",
+    consigneeName: "Codeprobe Wrong Paper", consignorName: "Codeprobe Sender Letter"
+  }));
+  check("a transit paper cannot be filed on a transhipment movement, and the series says so",
+    letterOnWrong.status === 400 && /is a procedure for transit/.test(text(letterOnWrong.body))
+      && /codes T1 and 80/.test(text(letterOnWrong.body)) && /begins 7/.test(text(letterOnWrong.body)),
+    `[${letterOnWrong.status}] ${text(letterOnWrong.body)}`);
+  check("none of the refusals left a file behind",
     Number((await oi(`select count(*)::int as n from cargo_shipments where tenant_id = $1`, [T1]))
       .rows[0].n) === 3);
 
@@ -252,6 +298,42 @@ async function main() {
   check("a stored movement, not the form's belief, decides which CPC fits an edit",
     mismatchOnOpen.status === 400 && /is a procedure for transhipment/.test(text(mismatchOnOpen.body))
       && /begins 8/.test(text(mismatchOnOpen.body)), `[${mismatchOnOpen.status}] ${text(mismatchOnOpen.body)}`);
+
+  // ---------- 4b. The codes the block prints short, or as letters ----------
+  const toShort = await call(`/cargo/${seaId}`, tok1, put({ cpcCode: "40" }));
+  check("a two-digit code the block prints is filed on a movement that prints it",
+    toShort.status === 200
+      && (await oi(`select cpc_code from cargo_shipments where id = $1`, [seaId])).rows[0]
+        ?.cpc_code === "40", `[${toShort.status}] ${text(toShort.body)}`);
+  const shortDetail = await call(`/cargo/${seaId}`, tok1);
+  check("…and it comes back with the words of the regime that prints it",
+    shortDetail.body?.cpc_code === "40"
+      && shortDetail.body?.cpc_label === "Permanent / Definitive Entry"
+      && /home consumption/.test(String(shortDetail.body?.cpc_note ?? "")),
+    text([shortDetail.body?.cpc_code, shortDetail.body?.cpc_label]));
+  const toPaper = await call(`/cargo/${railId}`, tok1, put({ cpcCode: "t1" }));
+  const afterPaper = (await oi(`select cpc_code from cargo_shipments where id = $1`, [railId])).rows[0];
+  check("a transit paper typed in small letters is filed in the capitals the block prints",
+    toPaper.status === 200 && afterPaper?.cpc_code === "T1", `[${toPaper.status}] ${text(afterPaper)}`);
+  const paperDetail = await call(`/cargo/${railId}`, tok1);
+  check("…so the file page reads the indicator back as the paper it is",
+    paperDetail.body?.cpc_code === "T1"
+      && paperDetail.body?.cpc_label === "Community Transit Paper (T1)",
+    text([paperDetail.body?.cpc_code, paperDetail.body?.cpc_label]));
+  const paperOnSea = await call(`/cargo/${seaId}`, tok1, put({ cpcCode: "T2" }));
+  check("…but the same letters on an import file are refused with its own series named",
+    paperOnSea.status === 400 && /is a procedure for transit/.test(text(paperOnSea.body))
+      && /codes T1 and 80/.test(text(paperOnSea.body)) && /begins 4/.test(text(paperOnSea.body)),
+    `[${paperOnSea.status}] ${text(paperOnSea.body)}`);
+  const byLetter = await call("/cargo?search=T1", tok1);
+  check("a clerk can find the file by reading its indicator across a counter",
+    (byLetter.body ?? []).some((r: any) => r.id === railId), text(byLetter.body));
+  await call(`/cargo/${railId}`, tok1, put({ cpcCode: "8000" }));
+  await call(`/cargo/${seaId}`, tok1, put({ cpcCode: "4000" }));
+  const putBack = await oi(`select cpc_code from cargo_shipments where id = any($1::uuid[])`,
+    [[seaId, railId]]);
+  check("both files are put back to the codes the rest of this run reads them under",
+    putBack.rows.map(r => r.cpc_code).sort().join(",") === "4000,8000", text(putBack.rows));
 
   // ---------- 5. The register reads both codes ----------
   const register = await call("/cargo?book=clearing", tok1);
@@ -320,17 +402,28 @@ async function main() {
     mailSheet.status === 200 && mailSheet.body?.master?.bill_kind === "road_waybill",
     `[${mailSheet.status}] ${text(mailSheet.body?.message ?? "")}`);
 
-  // ---------- 7. The guard in SQL, whatever the route believes ----------
+  // ---------- 7. The guards in SQL, whatever the route believes ----------
   const guards: [string, string, string | null, string][] = [
     ["a transit file cannot be given an import procedure",
       `update cargo_shipments set cpc_code = '4000' where id = $1`, railId, "is a procedure for import"],
     ["an import file cannot be given an export procedure",
       `update cargo_shipments set cpc_code = '1000' where id = $1`, seaId, "is a procedure for export"],
+    ["an import file cannot be given a transit paper",
+      `update cargo_shipments set cpc_code = 'T2' where id = $1`, seaId, "is a procedure for transit"],
     ["a mode outside the six cannot be bound by SQL either",
       `update cargo_shipments set mode_code = 7 where id = $1`, seaId, "23503"],
     ["a procedure cannot be invented on a movement it does not name",
       `insert into customs_procedure_code (code, shipment_type, label)
-       values ('4300','export','Codeprobe Invented Procedure')`, null, "23514"]
+       values ('4300','export','Codeprobe Invented Procedure')`, null, "23514"],
+    ["the list itself refuses a number outside the series its regime prints",
+      `insert into customs_procedure_code (code, shipment_type, label)
+       values ('45','transit','Codeprobe Wrong Series')`, null, "cannot be a transit procedure"],
+    ["…and refuses a letter the block never prints",
+      `insert into customs_procedure_code (code, shipment_type, label)
+       values ('T3','transhipment','Codeprobe Wrong Indicator')`, null, "23514"],
+    ["…or a code that would belong to no regime",
+      `insert into customs_procedure_code (code, shipment_type, label)
+       values ('99','import','Codeprobe No Regime')`, null, "23514"]
   ];
   await oi("begin");
   let sp = 0;
@@ -349,7 +442,8 @@ async function main() {
   check("the guard probes left the file and the vocabulary as the desk left them",
     (await oi(`select mode_code, cpc_code from cargo_shipments where id = $1`, [seaId])).rows[0]
       ?.cpc_code === "4000"
-      && (await oi(`select count(*)::int as n from customs_procedure_code`)).rows[0].n === 6);
+      && (await oi(`select count(*)::int as n from customs_procedure_code`)).rows[0].n === 16
+      && (await oi(`select count(*)::int as n from customs_regime`)).rows[0].n === 4);
 
   // ---------- 8. A foreign tenant sees neither the codes nor the sheet ----------
   for (const p of [`/cargo/${seaId}`, `/cargo/${seaId}/master`]) {
@@ -370,10 +464,12 @@ async function main() {
   const final = await oi(
     `select s.id, s.file_number, s.shipment_type, s.mode_code, m.label as mode_label,
             m.bill_kind as mode_bill_kind, s.cpc_code, p.label as cpc_label,
+            r.code_pattern, r.file_prefix, r.series_words,
             k.bill_kind as sheet_kind
        from cargo_shipments s
        left join mode_of_transport m on m.code = s.mode_code
        left join customs_procedure_code p on p.code = s.cpc_code
+       left join customs_regime r on r.shipment_type = s.shipment_type
        left join cargo_import_masters k on k.shipment_id = s.id and k.deleted_at is null
       where s.tenant_id = $1 and s.deleted_at is null
       order by s.file_number`, [T1]);
@@ -383,9 +479,10 @@ async function main() {
   check("SQL: only the four paper-carrying modes name a document",
     rows.every(r => (r.mode_code <= 4 ? !!r.mode_bill_kind : !r.mode_bill_kind)),
     text(rows.map(r => [r.file_number, r.mode_code, r.mode_bill_kind])));
-  check("SQL: a procedure never contradicts the movement its file number names",
-    rows.every(r => String(r.cpc_code)[0] === ({ export: "1", import: "4",
-      transhipment: "7", transit: "8" } as any)[r.shipment_type]), text(rows));
+  check("SQL: every file's code fits the series its own regime prints, and its number the digit too",
+    rows.every(r => new RegExp(r.code_pattern).test(r.cpc_code)
+      && String(r.file_number)[0] === r.file_prefix),
+    text(rows.map(r => [r.file_number, r.shipment_type, r.cpc_code, r.code_pattern])));
   check("SQL: the sea file's sheet now names the air waybill the file's mode travels on",
     rows.find(r => r.id === seaId)?.sheet_kind === "air_waybill",
     text(rows.map(r => [r.file_number, r.mode_code, r.cpc_code, r.sheet_kind])));
@@ -407,10 +504,11 @@ async function main() {
     `select (select count(*) from cargo_shipments where tenant_id = any($1::uuid[]))::int as s,
             (select count(*) from cargo_import_masters where tenant_id = any($1::uuid[]))::int as m,
             (select count(*) from customs_procedure_code)::int as p,
+            (select count(*) from customs_regime)::int as g,
             (select count(*) from tenants where id = any($1::uuid[]))::int as t`, [[T1, T2]]);
   const re = residue.rows[0];
-  check("cleanup: no probe rows left and the vocabulary still holds its six codes",
-    re.s === 0 && re.m === 0 && re.t === 0 && re.p === 6, text(re));
+  check("cleanup: no probe rows left and both reference lists still hold everything they declare",
+    re.s === 0 && re.m === 0 && re.t === 0 && re.p === 16 && re.g === 4, text(re));
   console.log(`\ncargo codes smoke: ${failures === 0 ? "ALL CHECKS PASSED" : failures + " FAILURES"}`);
   await owner.end();
   process.exit(failures === 0 ? 0 : 1);

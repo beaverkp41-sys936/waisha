@@ -19,7 +19,8 @@ interface Shipment {
   consignee_name: string; consignor_name: string; eta: string | null;
   payment_status: string; stage: string; status: string;
   weight_tonnes: string | null; open_tasks: number; created_at: string;
-  /** The two codes 130's tables hold, with the words the same tables label them. */
+  /** The two codes the tables hold — a mode number and, since 132, a CPC that may be an indicator
+   *  such as T1 — with the words the same tables label them. */
   mode_code: number | null; mode_label: string | null;
   cpc_code: string | null; cpc_label: string | null;
   /** 'signed' | 'draft' | null — whether this file has 111's master sheet, and whether it is declared. */
@@ -29,13 +30,21 @@ interface Shipment {
 /**
  * The code lists, exactly as `/cargo/codes` hands them over.
  *
- * Migration 130 turned the EAC's modes of transport and customs procedure codes into tables, and
- * bound each CPC to the movement its own first digit names — the same digit the file number starts
- * on. The desk used to keep its own copy of those four pairs, which is how a clerk came to type
- * statutory words into a free-text box while the register printed a number nobody had checked.
- * Nothing here spells a prefix, a mode or a procedure out again.
+ * Migration 130 turned the EAC's modes of transport and customs procedure codes into tables. 132 put
+ * the classification block in front of them: each movement now carries the words it prints above its
+ * codes — what the movement does to the goods, and the series it is declared under, which for transit
+ * is a mix of numbers and the letters T1 and T2, so no desk can be shown a code shape it cannot file.
+ * The desk used to keep its own copy of those pairs, which is how a clerk came to type statutory words
+ * into a free-text box while the register printed a number nobody had checked. Nothing here spells a
+ * prefix, a regime or a procedure out again.
  */
-interface MovementType { value: string; label: string; prefix: string }
+interface MovementType {
+  value: string; label: string; prefix: string;
+  /** What this movement does to the goods, in the block's own words. */
+  regime_note: string | null;
+  /** The codes the block prints for it, as a sentence: "codes 40 and 42". */
+  series_words: string | null;
+}
 interface TransportMode {
   code: number; key: string; label: string; note: string | null;
   carrier_word: string | null; bill_kind: string | null; bill_label: string | null;
@@ -196,8 +205,8 @@ function CargoContent() {
   const [filterStage, setFilterStage] = useState("");
   const [filterType, setFilterType] = useState("");
   const [books, setBooks] = useState<BookMeta[]>([]);
-  // The two code lists the desk declares from. Reference data, so one pull per page: a filter
-  // change that asked again would be a second story told about the same four digits.
+  // The code lists the desk declares from. Reference data, so one pull per page: a filter change
+  // that asked again would be a second story told about the same regimes and the same codes.
   const [codes, setCodes] = useState<CodeLists | null>(null);
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -239,8 +248,11 @@ function CargoContent() {
   };
   const modes = codes?.modes ?? [];
   const chosenMode = modes.find(m => String(m.code) === form.modeCode) ?? null;
-  // A procedure belongs to the movement its first digit names, so the block offers only the
-  // procedures this file can declare under — the same rule 130's trigger refuses on the write.
+  // The regime the chosen movement belongs to, read from 132's table — the words the classification
+  // block prints above its codes, so this desk never restates what a row already says.
+  const chosenRegime = types.find(t => t.value === form.shipmentType) ?? null;
+  // A procedure belongs to the regime its code is printed under, so the block offers only the
+  // procedures this file can declare — the same rule 132's two triggers hold on the write.
   const fileProcedures = (codes?.procedures ?? []).filter(p => p.shipment_type === form.shipmentType);
   const chosenCpc = fileProcedures.find(p => p.code === form.cpcCode) ?? null;
 
@@ -270,8 +282,9 @@ function CargoContent() {
       if (e.ok) {
         setForm({
           shipmentType: j.shipment_type,
-          // The codes come back as the file holds them: a number for the mode, four digits for the
-          // procedure, each empty when the desk never gave the file one.
+          // The codes come back as the file holds them: a number for the mode, the code the block
+          // prints for the procedure — digits or an indicator such as T1 — each empty when the desk
+          // never gave the file one.
           modeCode: j.mode_code === null || j.mode_code === undefined ? "" : String(j.mode_code),
           cpcCode: j.cpc_code ?? "",
           hsCode: j.hs_code ?? "", declarationMode: j.declaration_mode ?? "",
@@ -378,10 +391,9 @@ function CargoContent() {
     setForm(f => ({ ...f, [k]: v }));
   }
 
-  // A procedure carries its movement in its own first digit, so switching the movement cannot leave
-  // the old code sitting on the file: the box would show a value it no longer offers, and 130's
-  // trigger would refuse the write. The clerk watches the code go rather than reading a failure
-  // after pressing Save.
+  // A procedure belongs to one regime, so switching the movement cannot leave the old code sitting on
+  // the file: the box would show a value it no longer offers, and 132's two triggers would refuse the
+  // write. The clerk watches the code go rather than reading a failure after pressing Save.
   function chooseType(next: string) {
     setForm(f => ({
       ...f, shipmentType: next,
@@ -643,12 +655,27 @@ function CargoContent() {
                 <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
                   A file stays in the book its number was cut from — to move it, open a new one.
                 </p>
-              ) : prefix ? (
-                <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
-                  {`Its number begins ${prefix}, and so does every customs procedure this file can declare under.`}
-                </p>
               ) : null}
             </>)}
+            {/* The regime the chosen movement belongs to, printed from 132's own table: what the
+                movement does to the goods, the codes the block declares it under, and the digit its
+                files start on. The series is data and not a shape typed here, which is how a transit
+                paper can show T1 and T2 beside the number 80 that means the same movement. */}
+            {chosenRegime?.regime_note && (
+              <div className="col-span-2 rounded-input border px-12 py-10"
+                style={{ borderColor: "var(--brand)",
+                  background: "color-mix(in srgb, var(--brand) 6%, transparent)" }}>
+                <p className="text-xs font-bold" style={{ color: "var(--ink)" }}>
+                  {chosenRegime.series_words
+                    ? `${chosenRegime.label} — declared under ${chosenRegime.series_words}`
+                    : chosenRegime.label}
+                </p>
+                <p className="mt-6 text-xs" style={{ color: "var(--ink-soft)" }}>
+                  {chosenRegime.regime_note}{" "}
+                  {prefix && `Its number begins ${prefix}, and section 5 offers only the codes this regime prints.`}
+                </p>
+              </div>
+            )}
             {field("Mode of transport", <>
               <select value={form.modeCode} onChange={e => set("modeCode", e.target.value)}
                 className={inputCls} style={inputStyle}>
@@ -762,9 +789,10 @@ function CargoContent() {
 
           {sec("5. Customs", <>
             {/* The procedure this file declares under, headed on its own and offered by its code:
-                the desk quotes "4000" to the customs officer, never a sentence it typed for itself.
-                The four movements' codes are cut from the same digit as the file number, so the list
-                is filtered to this file's movement — the rule 130's trigger holds on the write. */}
+                the desk quotes "4000" or "T1" to the customs officer, never a sentence it typed for
+                itself. Each movement's codes are the series 132's regime row prints for it, so the
+                list is filtered to this file's movement — the rule the two SQL triggers hold on the
+                write. */}
             <div className="col-span-2 rounded-input border px-12 py-10"
               style={{ borderColor: "var(--line)", background: "var(--milk)" }}>
               <p className="text-[11px] font-bold uppercase tracking-[0.14em]"
@@ -773,7 +801,7 @@ function CargoContent() {
               </p>
               <p className="mt-6 text-xs" style={{ color: "var(--ink-soft)" }}>
                 {fileProcedures.length
-                  ? `${typeLabel(form.shipmentType)} files declare under the ${fileProcedures.length} procedure${fileProcedures.length === 1 ? "" : "s"} whose code opens with ${prefix}.`
+                  ? `${typeLabel(form.shipmentType)} is declared under ${chosenRegime?.series_words ?? `codes beginning ${prefix}`} — pick from the ${fileProcedures.length} procedure${fileProcedures.length === 1 ? "" : "s"} the list prints for it.`
                   : "The procedures load with the file's own code lists."}
               </p>
               <select value={form.cpcCode} onChange={e => set("cpcCode", e.target.value)}
