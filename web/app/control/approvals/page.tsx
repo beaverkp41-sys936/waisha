@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { AnnouncementTicker } from "@/components/AnnouncementTicker";
 import { ControlNav } from "@/components/ControlNav";
+import { categoryWord } from "../customers/data-requests";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
@@ -12,7 +13,9 @@ interface ApprovalRow {
   reason: string; approval_status: string;
   payload: { tenant_id?: string; reason_code?: string; note?: string;
     request_id?: string; ref?: string; ticket_ref?: string; amount?: string;
-    currency?: string; pay_back?: string; company_name?: string; reason?: string };
+    currency?: string; pay_back?: string; company_name?: string; reason?: string;
+    kind?: string; register_tenant_id?: string; company_tenant_id?: string;
+    closed_at?: string; categories?: string[] };
   payload_sha256: string;
   proposed_name: string | null; proposed_role: string | null; proposed_at: string;
   decided_name: string | null; decided_role: string | null;
@@ -20,7 +23,8 @@ interface ApprovalRow {
   applied_at: string | null;
   result: { action_id?: string; new_status?: string; sessions_revoked?: number | null;
     request_id?: string; ref?: string; amount?: string; currency?: string;
-    pay_back?: string; request_status?: string } | null;
+    pay_back?: string; request_status?: string;
+    reached?: Record<string, number>; kept?: { key: string; label: string; rows: number }[] } | null;
   expires_at: string;
 }
 interface Counts {
@@ -47,10 +51,23 @@ interface SpentRefund {
   ticket_ref?: string; company_name: string; request_status: string;
   approval_id: string; raised_by?: string; released_by?: string;
 }
+/**
+ * The answer to a spent erasure signature: what the mask reached and what it left, counted inside
+ * the transaction that ran it. `reached` is keyed by category and `kept` is the register's own
+ * list of the twelve things an erasure cannot touch, so the desk that signed reads the same
+ * numbers the Customers desk reads back off the paper.
+ */
+interface SpentErasure {
+  request_id: string; ref: string; company_tenant_id: string;
+  categories: string[]; reached: Record<string, number>;
+  kept: { key: string; label: string; rows: number }[];
+  request_status: string; erased_by: string; erased_name?: string;
+  approval_id: string; payload_sha256?: string;
+}
 
 const ACTIONS: [string, string][] = [
   ["", "Any act"], ["tenant.block", "A proposed block"], ["tenant.close", "A proposed close"],
-  ["service.refund", "A proposed refund"]
+  ["service.refund", "A proposed refund"], ["customer.erase", "A proposed erasure"]
 ];
 const TABS: [string, string][] = [
   ["pending", "Waiting"], ["applied", "Done"], ["rejected", "Refused"],
@@ -66,11 +83,35 @@ const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { dateStyle:
 const seat = (name: string | null, role: string | null) =>
   name ? `${name}${role ? ` (${role})` : ""}` : (role ?? "a platform seat");
 const isRefund = (r: ApprovalRow) => r.action === "service.refund";
+/** An erasure is a third act on the same board: it names no company state and no figure, but a
+ *  list of categories the mask will blank out. Its target is a `data_request`, so the board's
+ *  `target_name` is the uuid behind the paper — and nobody signs a uuid. */
+const isErase = (r: ApprovalRow) => r.action === "customer.erase";
 /** What the row is about, said the way a seat can act on it. A refund paper's target_name is
  *  the uuid behind the request, and no one signs a uuid — the armed tap and the export both
  *  have to carry the ref the caller was quoted. */
 const subject = (r: ApprovalRow) =>
-  isRefund(r) ? r.payload?.ref ?? r.target_name : r.target_name;
+  isRefund(r) || isErase(r) ? r.payload?.ref ?? r.target_name : r.target_name;
+/** The rows on the board whose subject is a paper rather than a company. */
+const isPaper = (r: ApprovalRow) => isRefund(r) || isErase(r);
+
+/** The list a signature is spent against, read off the payload the proposer's own function hashed. */
+const categoryList = (c?: string[]) =>
+  !c || c.length === 0 ? "no category was named" : c.map(categoryWord).join(", ");
+
+/** One line for the receipt: what each category gave up, then the two totals the mask counted in
+ *  the same transaction that wrote the answer. Both the body this desk is handed after a signature
+ *  and the fields the register kept on the row call the second list `kept`, so a receipt that adds
+ *  up to nothing is this page reading the wrong key, not a mask that left nothing behind. */
+function erasureWords(e: { reached?: Record<string, number> | null;
+  kept?: { rows: number }[] | null }): string {
+  const per = Object.entries(e.reached ?? {})
+    .map(([k, v]) => `${categoryWord(k)} — ${Number(v || 0)} row(s)`).join(" · ");
+  const reached = Object.values(e.reached ?? {}).reduce((a, b) => a + Number(b || 0), 0);
+  const kept = (e.kept ?? []).reduce((a, b) => a + Number(b?.rows || 0), 0);
+  return `${per || "the mask reached no row"} — ${reached} row(s) blanked, and ${kept} row(s) the `
+    + "register holds that an erasure cannot reach";
+}
 
 /** Left as it was, or already shut? The badge has to answer without reading the sentence. */
 function statusTone(s: string) {
@@ -89,7 +130,7 @@ export default function ApprovalsPage() {
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [canDecide, setCanDecide] = useState(false);
+  const [canDecide, setCanDecide] = useState<boolean | null>(null);
   const [csvNote, setCsvNote] = useState<string | null>(null);
   const [sign, setSign] = useState<string | null>(null);
   const [note, setNote] = useState("");
@@ -97,6 +138,7 @@ export default function ApprovalsPage() {
   const [busy, setBusy] = useState(false);
   const [spent, setSpent] = useState<Applied | null>(null);
   const [spentRefund, setSpentRefund] = useState<SpentRefund | null>(null);
+  const [spentErasure, setSpentErasure] = useState<SpentErasure | null>(null);
 
   const LIMIT = 30;
 
@@ -122,21 +164,25 @@ export default function ApprovalsPage() {
     } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => {
-    (async () => {
+  /** Whether this seat holds the duty that spends a signature. A probe that never answered is not
+   *  the same fact as a seat that was read and found to lack the duty, and the desk says different
+   *  things about the two — so the answer is kept as three states, not one. */
+  const probeDuty = useCallback(async () => {
+    try {
       const a = await fetch(`${API}/api/v1/control/auth/permissions`, { credentials: "include" });
-      if (a.ok) {
-        const j = await a.json();
-        setCanDecide((j.permissions ?? []).includes("control.approvals.decide"));
-      }
-    })();
+      if (!a.ok) { setCanDecide(null); return; }
+      const j = await a.json();
+      setCanDecide((j.permissions ?? []).includes("control.approvals.decide"));
+    } catch { setCanDecide(null); }
   }, []);
+
+  useEffect(() => { probeDuty(); }, [probeDuty]);
 
   useEffect(() => { load(status, action, q, offset); }, [status, action, q, offset, load]);
 
   function openRow(id: string) {
     setSign(sign === id ? null : id); setNote(""); setArmed(null);
-    setSpent(null); setSpentRefund(null);
+    setSpent(null); setSpentRefund(null); setSpentErasure(null);
   }
 
   /**
@@ -146,10 +192,12 @@ export default function ApprovalsPage() {
    *
    * Approving is not a note on a form: the definer applies the ban in the same transaction
    * that spends the signature, so this is the press that shuts a company out and the reason
-   * the second tap is armed.
+   * the second tap is armed. A refund paper is released by the same press, and an erasure is
+   * run by it — the mask has no undo, and no second desk to correct it from.
    */
   async function decide(row: ApprovalRow, decision: "approve" | "reject") {
-    setBusy(true); setError(null); setSpent(null); setSpentRefund(null);
+    setBusy(true); setError(null);
+    setSpent(null); setSpentRefund(null); setSpentErasure(null);
     try {
       const res = await fetch(`${API}/api/v1/control/approvals/${row.id}/${decision}`, {
         method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
@@ -171,6 +219,7 @@ export default function ApprovalsPage() {
       }
       if (decision === "approve") {
         if (row.action === "service.refund") setSpentRefund(j as SpentRefund);
+        else if (row.action === "customer.erase") setSpentErasure(j as SpentErasure);
         else setSpent(j as Applied);
         setNote("");
       } else {
@@ -235,6 +284,10 @@ export default function ApprovalsPage() {
           company&apos;s register. A refund paper is raised on the <Link href="/control/service"
             className="underline" style={{ color: "var(--adm-accent)" }}>Service desk</Link> and signed
           here, and the figure the second seat signs is read out of the paper, not typed into this page.
+          An erasure paper is raised on the <Link href="/control/customers"
+            className="underline" style={{ color: "var(--adm-accent)" }}>Customers desk</Link>, and signing
+          it runs the mask in this same call — the categories on the row below are what the register blanks
+          out, and there is no undo and no notice to the caller, because the paper itself is the answer.
           The seat that raised a proposal cannot sign it, and a proposal nobody signs lapses after a week.
         </p>
 
@@ -290,6 +343,25 @@ export default function ApprovalsPage() {
           </div>
         )}
 
+        {spentErasure && (
+          <div role="status" className="mb-16 rounded-input px-12 py-8 text-sm"
+            style={{ background: "color-mix(in srgb, var(--gold) 12%, transparent)",
+              borderLeft: "4px solid var(--gold)", color: "var(--ink)" }}>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em]">
+              Signed and masked · {spentErasure.ref} · {spentErasure.request_status}
+            </p>
+            <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+              {erasureWords(spentErasure)}
+            </p>
+            <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+              Read it back on the{" "}
+              <Link href="/control/customers" className="underline"
+                style={{ color: "var(--adm-accent)" }}>Customers desk</Link>. Nobody is emailed that their
+              data went: the paper on the register is the answer, and the mask has no undo.
+            </p>
+          </div>
+        )}
+
         <div className="mb-16 flex flex-wrap items-center gap-8">
           {TABS.map(([v, l]) => (
             <button key={v} type="button" onClick={() => { setOffset(0); setStatus(v); setSign(null); }}
@@ -339,9 +411,11 @@ export default function ApprovalsPage() {
             <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
               {status === "pending"
                 ? <>A ban raised on the <Link href="/control/tenants" className="underline"
-                  style={{ color: "var(--adm-accent)" }}>Tenants</Link> desk and a refund raised on the{" "}
+                  style={{ color: "var(--adm-accent)" }}>Tenants</Link> desk, a refund raised on the{" "}
                   <Link href="/control/service" className="underline"
-                    style={{ color: "var(--adm-accent)" }}>Service</Link> desk both appear here the moment
+                    style={{ color: "var(--adm-accent)" }}>Service</Link> desk and an erasure raised on the{" "}
+                  <Link href="/control/customers" className="underline"
+                    style={{ color: "var(--adm-accent)" }}>Customers</Link> desk all appear here the moment
                   they are proposed, and stay until a second seat signs them or a week passes.</>
                 : "Try Everything, or widen the search."}
             </p>
@@ -353,8 +427,10 @@ export default function ApprovalsPage() {
           const waiting = r.approval_status === "pending";
           // A refund paper is a different act on the same register: it names a figure and a
           // call rather than a company and a notice, and the sentence beside it has to say
-          // what is being signed instead of borrowing the ban's words.
+          // what is being signed instead of borrowing the ban's words. An erasure is a third:
+          // it names a list of categories and blanks them, and no one is told it happened.
           const refund = isRefund(r);
+          const erase = isErase(r);
           const figure = r.payload?.amount
             ? `${new Intl.NumberFormat("en-GB").format(Number(r.payload.amount))} ${r.payload.currency ?? ""}`
             : null;
@@ -373,13 +449,23 @@ export default function ApprovalsPage() {
                     {actionLabel(r.action)}
                   </h2>
                   <p className="mt-8 break-words text-sm font-semibold" style={{ color: "var(--ink)" }}>
-                    {refund && r.payload?.ref
+                    {isPaper(r) && r.payload?.ref
                       ? `${r.payload.ref} · ${r.payload.company_name ?? "a caller"}`
                       : r.target_name}
                   </p>
                   <p className="mt-4 text-[10px] uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
                     {r.target_kind} · {r.target_id}
                   </p>
+                  {erase && (
+                    <p className="mt-8 text-xs" style={{ color: "var(--ink)" }}>
+                      The mask blanks {categoryList(r.payload?.categories)}.
+                      <span className="block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                        {r.payload?.closed_at
+                          ? `the account was shut ${new Date(r.payload.closed_at).toLocaleDateString("en-GB", { dateStyle: "medium" })}`
+                          : "this account is not shut — the register will refuse the mask"}
+                      </span>
+                    </p>
+                  )}
                 </div>
                 <div className="text-right">
                   <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
@@ -405,24 +491,31 @@ export default function ApprovalsPage() {
                   company's own register carries the receipt. A refund paper is never sent
                   anywhere: the paper is the record, and the money is paid from it. */}
               <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
-                {refund
-                  ? <>The paper asks to pay <span className="font-semibold"
-                    style={{ color: "var(--ink)" }}>{figure ?? "a figure"}</span> back by{" "}
-                    <span className="font-semibold" style={{ color: "var(--ink)" }}>
-                      {r.payload?.pay_back ?? "the channel on the paper"}
-                    </span>{" "}
-                    {r.payload?.ticket_ref ? `on the call ${r.payload.ticket_ref}` : ""}
-                    {r.payload?.reason ? ` — “${r.payload.reason}”` : ""}.</>
-                  : r.approval_status === "applied"
-                    ? <>The note that went with the effect: {r.payload?.note || "—"} — whether it
-                      reached anyone is on{" "}
-                      <Link href="/control/tenants" className="underline"
-                        style={{ color: "var(--adm-accent)" }}>the company's register</Link>.</>
-                    : r.approval_status === "pending" || r.approval_status === "approved"
-                      ? `The company would be told: ${r.payload?.note || "—"}`
-                      : `Never sent. The note would have read: ${r.payload?.note || "—"}`}
+                {erase
+                  ? <>Nothing is posted, messaged or emailed about this act: the paper on the{" "}
+                    <Link href="/control/customers" className="underline"
+                      style={{ color: "var(--adm-accent)" }}>Customers register</Link> is the answer the
+                    caller is owed, and what the mask left behind is counted there. The categories above are
+                    read out of the hashed payload the proposer&apos;s own function wrote, not typed into
+                    this page.</>
+                  : refund
+                    ? <>The paper asks to pay <span className="font-semibold"
+                      style={{ color: "var(--ink)" }}>{figure ?? "a figure"}</span> back by{" "}
+                      <span className="font-semibold" style={{ color: "var(--ink)" }}>
+                        {r.payload?.pay_back ?? "the channel on the paper"}
+                      </span>{" "}
+                      {r.payload?.ticket_ref ? `on the call ${r.payload.ticket_ref}` : ""}
+                      {r.payload?.reason ? ` — “${r.payload.reason}”` : ""}.</>
+                    : r.approval_status === "applied"
+                      ? <>The note that went with the effect: {r.payload?.note || "—"} — whether it
+                        reached anyone is on{" "}
+                        <Link href="/control/tenants" className="underline"
+                          style={{ color: "var(--adm-accent)" }}>the company's register</Link>.</>
+                      : r.approval_status === "pending" || r.approval_status === "approved"
+                        ? `The company would be told: ${r.payload?.note || "—"}`
+                        : `Never sent. The note would have read: ${r.payload?.note || "—"}`}
               </p>
-              {!refund && (
+              {!isPaper(r) && (
                 <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
                   For {reasonLabel(r.payload?.reason_code)}
                 </p>
@@ -443,17 +536,31 @@ export default function ApprovalsPage() {
                   Applied {when(r.applied_at)}
                   {r.result?.new_status ? ` · company is now ${r.result.new_status}` : ""}
                   {r.result?.sessions_revoked ? ` · ${r.result.sessions_revoked} sessions revoked` : ""}
-                  {r.result?.request_status
-                    ? ` · paper ${r.result.ref ?? r.result.request_id} is now ${r.result.request_status}`
-                      + ` — the office has agreed to pay it, not paid it`
-                    : ""}
+                  {r.result?.request_status && erase
+                    ? ` · ${r.result.ref ?? "the paper"} is now ${r.result.request_status} — `
+                      + erasureWords({ reached: r.result.reached, kept: r.result.kept })
+                    : r.result?.request_status
+                      ? ` · paper ${r.result.ref ?? r.result.request_id} is now ${r.result.request_status}`
+                        + ` — the office has agreed to pay it, not paid it`
+                      : ""}
                 </p>
               )}
 
-              {waiting && !canDecide && (
+              {waiting && canDecide === false && (
                 <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
                   Your seat can read this register but not sign it. Ask a platform seat that can sign a
-                  ban — the same duty signs a refund.
+                  ban — the same duty signs a refund or an erasure.
+                </p>
+              )}
+
+              {waiting && canDecide === null && !loading && (
+                <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
+                  The duties this seat holds could not be read, so this desk will not offer a signature
+                  it cannot check.
+                  {" "}<button type="button" onClick={() => probeDuty()}
+                    className="font-semibold underline" style={{ color: "var(--adm-accent)" }}>
+                    Read them again
+                  </button>
                 </p>
               )}
 
@@ -462,8 +569,9 @@ export default function ApprovalsPage() {
                   className="mt-12 rounded-input border px-16 py-10 text-xs font-semibold"
                   style={{ borderColor: "var(--adm-accent)", color: "var(--ink)" }}>
                   {refund ? "Sign or refuse this refund"
-                    : r.action === "tenant.close" ? "Sign or refuse this close"
-                      : "Sign or refuse this block"}
+                    : erase ? "Sign or refuse this erasure"
+                      : r.action === "tenant.close" ? "Sign or refuse this close"
+                        : "Sign or refuse this block"}
                 </button>
               )}
 
@@ -491,9 +599,11 @@ export default function ApprovalsPage() {
                           background: "color-mix(in srgb, var(--danger) 14%, transparent)", color: "var(--ink)" }
                         : { borderColor: "var(--danger)", color: "var(--ink)" }}>
                       {armed === `sign-${r.id}`
-                        ? `Tap again to ${refund ? "release" : r.action === "tenant.close" ? "close" : "block"} ${subject(r)}`
+                        ? `Tap again to ${refund ? "release" : erase ? "mask"
+                          : r.action === "tenant.close" ? "close" : "block"} ${subject(r)}`
                         : `Sign and ${refund ? "release the paper"
-                          : r.action === "tenant.close" ? "close the account" : "block access"}`}
+                          : erase ? "run the mask, which cannot be undone"
+                            : r.action === "tenant.close" ? "close the account" : "block access"}`}
                     </button>
                     <button type="button" disabled={busy || note.trim().length < 4}
                       onClick={() => decide(r, "reject")}

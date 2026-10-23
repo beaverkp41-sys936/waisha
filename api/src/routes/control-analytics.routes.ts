@@ -106,7 +106,11 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       // own words but cannot certify anything. `merge` (128) declares two accounts one account and
       // is deliberately not `manage`; `disconnect` (128) is who is in a building and the cut.
       "control.customers.view", "control.customers.verify", "control.customers.manage",
-      "control.customers.merge", "control.customers.disconnect"];
+      "control.customers.merge", "control.customers.disconnect",
+      // The data register (129). `gdpr` opens the copy and the preview; `erase` raises an erasure
+      // and asks for a signature it cannot spend. A held duty that is not probed here is a tab
+      // that never appears, which is how 067's control.staff.view behaved for three roles.
+      "control.customers.gdpr", "control.customers.erase"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });
 

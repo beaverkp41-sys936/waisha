@@ -8,6 +8,12 @@ import {
   CHECK_STATE_LABELS, EXPIRING_KINDS, KIND_LABELS, KIND_SHAPES, OPEN_STATES, TIMELINE_SOURCES,
   expiresOnKind, isOpenState, referenceLooksRight, referenceTail, type CheckKind
 } from "./checks";
+import {
+  ASKED_IN_EXAMPLES, BOARD_CHIPS, CATEGORIES, CATEGORY_LABELS, DATA_REQUEST_KINDS, EXPORT_SECTION_COUNT,
+  KIND_SENTENCES, REASON_FLOOR, REQUEST_STATUSES, STATUS_EDGE, STATUS_LABELS,
+  categoriesAllowedFor, categoryList, categoryWord, erasedCount, isOpenRequest, kindWord as drKindWord,
+  maskWords, shaWords, statusWord as drStatusWord, type DataRequestKind
+} from "./data-requests";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
@@ -50,6 +56,16 @@ const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
  * **A cut-off ends sessions, not an account.** An access token is a signed key with no row behind
  * it, so it stays usable for up to fifteen minutes; the desk says so in the same breath as the
  * count, and points at the two-seat block on the tenants desk for anything shorter.
+ *
+ * And one thing 129 added, which is why this desk has a sixth tab:
+ *
+ * **A copy is handed over, an erasure is signed.** When a caller asks what the platform holds about
+ * them, this desk raises the paper, reads the preview the mask itself will read, and hands the
+ * archive over — the bytes leaving as a hashed bundle, the register counting every hand-off. When
+ * they ask for it to be taken away, the desk may only write the paper and ask a second seat to sign
+ * it: the mask runs from `/control/approvals`, in the transaction that spends a signature the
+ * proposer cannot give. Those two acts sit behind `control.customers.gdpr` and
+ * `control.customers.erase`, and the tab does not appear for a desk holding neither.
  */
 
 // ---------- the vocabulary (web/app/control/customers/checks.ts mirrors the API and the table) ----------
@@ -63,9 +79,10 @@ const stateWord = (s: string | null | undefined) =>
 
 /** The acts that cannot be taken back on the other side of the button: a terminal answer, a note
  *  withdrawn, a label taken off or retired, a number copied onto a screen, a pair of accounts
- *  declared one account, and every session on an account ended. These ask for a second press;
- *  everything else writes on the first. */
-const ARMS: Panel["kind"][] = ["answer", "void", "retire", "off", "reveal", "claim", "voidclaim", "cut"];
+ *  declared one account, every session on an account ended, a signature asked for on an erasure and
+ *  an ask refused. These ask for a second press; everything else writes on the first. */
+const ARMS: Panel["kind"][] = ["answer", "void", "retire", "off", "reveal", "claim", "voidclaim",
+  "cut", "sig", "refuse"];
 const armKey = (p: Panel) => `${p.kind}:${p.id ?? ""}:${p.tagId ?? ""}`;
 
 const EXPIRING_WORDS = EXPIRING_KINDS.map((k) => KIND_LABELS[k].toLowerCase()).join(", or ");
@@ -235,16 +252,66 @@ type Access = {
   cut_offs: { sessions_cut: number; last_at: string | null }; clock: string;
 };
 
+// ---------- 129: the copy and the erasure ----------
+
+/** One paper on the data-request register, as `data_requests_board` rows it. The two counters a
+ *  supervisory question is actually about — what the mask reached and what it was told to leave —
+ *  travel with the row, so a desk never has to open a paper to know what it did. */
+type RequestRow = {
+  id: string; ref: string; kind: string; request_status: string; categories: string[] | null;
+  reason: string; asked_in: string | null; company_id: string; company_name: string;
+  company_closed_at: string | null; raised_at: string; raised_name: string | null;
+  approval_status: string | null; approval_expires_at: string | null; payload_sha256: string | null;
+  signed_name: string | null; erased_at: string | null; erased_name: string | null;
+  erased_rows: Record<string, number> | null; kept: { key: string; label: string; rows: number }[] | null;
+  deliveries: number; delivered_at: string | null; bundle_sha256: string | null;
+  bundle_bytes: number | null; refused_at: string | null; refused_note: string | null;
+  total?: number;
+};
+type RequestCounts = {
+  all: number; raised: number; pending_signature: number; delivered: number; erased: number;
+  refused: number; export: number; erase: number;
+};
+/** The whole paper, read through `data_request_detail` — what a second seat is shown before signing
+ *  and what this desk reads back after a download. `status` is the paper's own state. */
+type Paper = {
+  status: string; id: string; ref: string; kind: string; categories: string[] | null;
+  reason: string; asked_in: string | null;
+  company: { id: string; name: string; type: string; account_status: string; closed_at: string | null };
+  raised_at: string; raised_name: string | null; raised_role: string | null;
+  approval_id: string | null; approval_status: string | null; approval_proposed_name: string | null;
+  approval_expires_at: string | null; payload_sha256: string | null;
+  signed_name: string | null; signed_at: string | null; signed_note: string | null;
+  erased_at: string | null; erased_name: string | null;
+  erased: Record<string, number> | null;
+  keeps: { key: string; label: string; rows: number; because: string }[] | null;
+  bundle_sha256: string | null; bundle_bytes: number | null; bundle_entries: number | null;
+  deliveries: number; delivered_at: string | null; delivered_name: string | null;
+  refused_at: string | null; refused_note: string | null; refused_name: string | null;
+  open_slot: boolean; clock: string;
+};
+/** What a request would touch, read live off the registers by `data_request_preview`. The same two
+ *  questions the mask will ask, in the mask's own words — the desk raises a paper from this screen. */
+type DataPreview = {
+  status: string; kind: string;
+  company: { id: string; name: string; type: string; account_status: string; closed_at: string | null };
+  eligible: boolean; refusal: string | null;
+  masks: Record<string, Record<string, number>>;
+  keeps: { key: string; label: string; rows: number; because: string }[];
+  sessions_live: number; clock: string;
+};
+
 // ---------- tabs ----------
 
-type Tab = "board" | "checks" | "notes" | "tags" | "claims";
+type Tab = "board" | "checks" | "notes" | "tags" | "claims" | "requests";
 const TABS: [Tab, string][] = [
   ["board", "Accounts"], ["checks", "Checks"], ["notes", "The office's notes"], ["tags", "Labels"],
-  ["claims", "Duplicate claims"]
+  ["claims", "Duplicate claims"], ["requests", "Copies and erasures"]
 ];
 /** The export takes the register's own name for the tab (`board` is the accounts register). */
 const EXPORT_REGISTER: Record<Tab, string> = {
-  board: "accounts", checks: "checks", notes: "notes", tags: "tags", claims: "claims"
+  board: "accounts", checks: "checks", notes: "notes", tags: "tags", claims: "claims",
+  requests: "requests"
 };
 
 // ---------- forms ----------
@@ -253,21 +320,28 @@ type Draft = {
   accountQuery: string; accountId: string; kind: CheckKind; status: string; reference: string;
   expiresOn: string; answer: string; reason: string; text: string; labelName: string;
   labelColour: string; labelNote: string; tagId: string; loserQuery: string; loserId: string;
+  // 129: the ask's own kind, how the caller reached the office, the categories it ticks, and the
+  // search box that finds a shut account (the ask needs one because an erasure only applies to a
+  // closed account, while a copy is owed whether the account trades or not).
+  askKind: DataRequestKind; askedIn: string; cats: string[]; closedQuery: string;
 };
 const EMPTY_DRAFT: Draft = {
   accountQuery: "", accountId: "", kind: "national_id", status: "awaiting", reference: "",
   expiresOn: "", answer: "approved", reason: "", text: "", labelName: "", labelColour: "#0e7490",
-  labelNote: "", tagId: "", loserQuery: "", loserId: ""
+  labelNote: "", tagId: "", loserQuery: "", loserId: "",
+  askKind: "export", askedIn: "", cats: [], closedQuery: ""
 };
 type Panel = {
   kind: "raise" | "paper" | "answer" | "reveal" | "note" | "edit" | "void" | "label"
-    | "wear" | "off" | "retire" | "claim" | "voidclaim" | "cut";
+    | "wear" | "off" | "retire" | "claim" | "voidclaim" | "cut" | "ask" | "sig" | "refuse";
   id?: string; companyId?: string; companyName?: string; ref?: string; tagId?: string;
   tagName?: string; checkKind?: CheckKind; lineStatus?: string; hasReference?: boolean;
   expiresOn?: string | null; body?: string;
   // 128: the pair a claim is being raised on, and the claim or account a withdrawal is about.
   loserName?: string; loserId?: string; carried?: string[]; live?: number;
   borrowedViews?: number; seats?: number;
+  // 129: the paper a signature is being asked for or a refusal written on, and what it is about.
+  requestKind?: string; requestStatus?: string; categories?: string[]; openSlot?: boolean;
 };
 
 const box = "mt-4 w-full rounded-input border px-10 py-8 text-sm";
@@ -322,6 +396,15 @@ export default function ControlCustomersPage() {
   const [kCounts, setKCounts] = useState<ClaimCounts | null>(null);
   const [kFilter, setKFilter] = useState({ status: "", q: "", limit: "30", offset: "0" });
 
+  // 129: the data-request register, the paper open on the desk and what an ask would touch.
+  const [rRows, setRRows] = useState<RequestRow[]>([]);
+  const [rCounts, setRCounts] = useState<RequestCounts | null>(null);
+  const [rFilter, setRFilter] = useState({ status: "", kind: "", q: "", limit: "30", offset: "0" });
+  const [paper, setPaper] = useState<Paper | null>(null);
+  const [paperFor, setPaperFor] = useState<string | null>(null);
+  const [dpreview, setDpreview] = useState<DataPreview | null>(null);
+  const [dpBusy, setDpBusy] = useState(false);
+
   const [dossier, setDossier] = useState<Dossier | null>(null);
   const [dossierFor, setDossierFor] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
@@ -347,14 +430,26 @@ export default function ControlCustomersPage() {
   const seq = useRef(0);
   // The claim form's preview has its own counter: it is re-read every time a half of the pair
   // changes, and a late answer about a pair the clerk has already changed must not be the one on
-  // screen — the button is gated on it.
+  // screen — the button is gated on it. The data-request form reads the same rule.
   const pseq = useRef(0);
+  const qseq = useRef(0);
+  // A paper is read on its own counter too. Raising a new one re-reads the register, and that
+  // refresh still names the paper open *before* the write — if its answer is allowed to land after
+  // the new paper has been put on the desk, the clerk is left looking at the previous ask while the
+  // notice below tells them to go and sign this one.
+  const dseq = useRef(0);
 
   const canView = perms.includes("control.customers.view");
   const canManage = perms.includes("control.customers.manage");
   const canVerify = perms.includes("control.customers.verify");
   const canMerge = perms.includes("control.customers.merge");
   const canDisconnect = perms.includes("control.customers.disconnect");
+  // 129's two keys. `gdpr` opens the register, the preview and the copy — an archive holding the
+  // account's contact book, its drivers and the office's notes, which is not a duty to hand to the
+  // desk that answers the phone. `erase` raises the erasure and asks for a signature; spending one
+  // belongs to whoever holds `control.approvals.decide`, and never to the seat that asked.
+  const canGdpr = perms.includes("control.customers.gdpr");
+  const canErase = perms.includes("control.customers.erase");
 
   // ---------- reads ----------
 
@@ -401,6 +496,12 @@ export default function ControlCustomersPage() {
       if (kFilter.q.trim()) p.set("search", kFilter.q.trim());
       p.set("limit", kFilter.limit); p.set("offset", kFilter.offset);
       path = "duplicates"; words = "The claim register did not answer.";
+    } else if (which === "requests") {
+      if (rFilter.status) p.set("status", rFilter.status);
+      if (rFilter.kind) p.set("kind", rFilter.kind);
+      if (rFilter.q.trim()) p.set("search", rFilter.q.trim());
+      p.set("limit", rFilter.limit); p.set("offset", rFilter.offset);
+      path = "data-requests"; words = "The data-request register did not answer.";
     } else {
       if (tFilter.status) p.set("status", tFilter.status);
       if (tFilter.q.trim()) p.set("search", tFilter.q.trim());
@@ -422,8 +523,11 @@ export default function ControlCustomersPage() {
     if (which === "claims") {
       setKRows(j.claims ?? []); setKCounts(j.counts ?? null); setError(null); return;
     }
+    if (which === "requests") {
+      setRRows(j.rows ?? []); setRCounts(j.counts ?? null); setError(null); return;
+    }
     setTRows(j.rows ?? []); setTCounts(j.counts ?? null); setError(null);
-  }, [bFilter, cFilter, nFilter, tFilter, kFilter]);
+  }, [bFilter, cFilter, nFilter, tFilter, kFilter, rFilter]);
 
   const readDossier = useCallback(async (companyId: string) => {
     const res = await fetch(`${API}/api/v1/control/customers/${companyId}/dossier`,
@@ -508,6 +612,53 @@ export default function ControlCustomersPage() {
     setError(null);
   }, []);
 
+  /** One paper, whole. The same read a second seat is shown before signing and the one the desk
+   *  reads back after a download, so every number on the screen is the register's own — the detail
+   *  is built by `data_request_detail`, not by anything this page added up. */
+  const readPaper = useCallback(async (id: string) => {
+    const key = ++dseq.current;
+    const res = await fetch(`${API}/api/v1/control/customers/data-requests/${id}`,
+      { credentials: "include" });
+    if (key !== dseq.current) return;
+    if (res.status === 401) { window.location.href = "/control/login"; return; }
+    if (res.status === 403) { setForbidden(true); return; }
+    if (!res.ok) {
+      setPaper(null); setPaperFor(null);
+      setError(errorMessage(await res.json().catch(() => ({})), "That paper did not answer."));
+      return;
+    }
+    const j = await res.json();
+    if (key !== dseq.current) return;
+    if (j?.status === "not_found" || !j?.id) {
+      setPaper(null); setPaperFor(null);
+      setError("The register has never held a paper under that number.");
+      return;
+    }
+    setPaper(j); setPaperFor(id); setError(null);
+  }, []);
+
+  /** What an ask would touch, read by the same definer the mask reads. An erasure is never raised
+   *  from a description of one: the form waits for this answer because the signature a second seat
+   *  gives is taken against exactly these counts. */
+  const readDataPreview = useCallback(async (key: number, companyId: string, kind: string) => {
+    setDpBusy(true);
+    try {
+      const res = await fetch(
+        `${API}/api/v1/control/customers/${companyId}/data-preview?kind=${encodeURIComponent(kind)}`,
+        { credentials: "include" });
+      if (key !== qseq.current) return;
+      if (res.status === 401) { window.location.href = "/control/login"; return; }
+      if (res.status === 403) { setForbidden(true); setDpreview(null); return; }
+      if (!res.ok) {
+        setDpreview(null);
+        setPanelError(errorMessage(await res.json().catch(() => ({})),
+          "The register would not say what that ask would touch."));
+        return;
+      }
+      setDpreview(await res.json());
+    } finally { if (key === qseq.current) setDpBusy(false); }
+  }, []);
+
   useEffect(() => {
     (async () => {
       const m = await fetch(`${API}/api/v1/control/auth/me`, { credentials: "include" });
@@ -521,10 +672,14 @@ export default function ControlCustomersPage() {
 
   useEffect(() => {
     if (!canView) return;
+    // The register is behind its own duty. A desk holding only the view duty would take a 403 from
+    // it, and `at()` would read that as "this whole tab is forbidden" — losing five working registers
+    // to the sixth one's key. The tab is not offered either, so this is a guard, not a screen.
+    if (tab === "requests" && !canGdpr) return;
     const key = ++seq.current;
     const t = setTimeout(() => { load(tab, key); }, 260);
     return () => clearTimeout(t);
-  }, [tab, canView, load]);
+  }, [tab, canView, canGdpr, load]);
 
   // A claim is raised on a pair the register has looked at, so the form asks the question the
   // moment both halves are named and again when either changes. The button waits for the answer.
@@ -536,6 +691,18 @@ export default function ControlCustomersPage() {
     const t = setTimeout(() => { readPreview(key, survivor, loser); }, 300);
     return () => clearTimeout(t);
   }, [panel?.kind, draft.accountId, draft.loserId, readPreview]);
+
+  // An ask is raised from the counts the mask itself will read, so the form asks the register the
+  // moment an account is named and again when the kind changes — a copy and an erasure answer
+  // differently, and the second seat signs against the answer, not against a description of it.
+  useEffect(() => {
+    if (panel?.kind !== "ask") { setDpreview(null); return; }
+    const company = panel.companyId ?? draft.accountId;
+    if (!company) { setDpreview(null); return; }
+    const key = ++qseq.current;
+    const t = setTimeout(() => { readDataPreview(key, company, draft.askKind); }, 300);
+    return () => clearTimeout(t);
+  }, [panel?.kind, panel?.companyId, draft.accountId, draft.askKind, readDataPreview]);
 
   const refresh = useCallback(() => {
     const key = ++seq.current;
@@ -549,8 +716,11 @@ export default function ControlCustomersPage() {
     // A seat list is only honest as of the second it was read. After a write, re-read it rather
     // than let a clerk believe a session that just ended is still open.
     if (accessFor) readAccess(accessFor);
+    // Same rule for a paper: the counters on it are what the mask reached and how many times a copy
+    // was handed over, and both change underneath the desk that just acted.
+    if (paperFor) readPaper(paperFor);
   }, [tab, load, loadFacets, dossierFor, tlSource, readDossier, readTimeline, wearersTag,
-    accessFor, readAccess]);
+    accessFor, readAccess, paperFor, readPaper]);
 
   /** A row is opened, not navigated to: the dossier is the only place an account's own facts, its
    *  checks, notes and labels are all together, and it is where every act on them is started. */
@@ -581,6 +751,72 @@ export default function ControlCustomersPage() {
   function toggleSeats(companyId: string) {
     if (accessFor === companyId) { setAccessFor(null); setAccess(null); setLastCut(null); return; }
     readAccess(companyId);
+  }
+
+  /** The paper opens and closes by its own number, like a seat list: it is the register's read of one
+   *  row, and a desk that has finished with it should not be left looking at a second copy of the
+   *  counters the board already carries. */
+  function openPaper(id: string) {
+    if (paperFor === id) { setPaper(null); setPaperFor(null); return; }
+    readPaper(id);
+  }
+
+  /**
+   * Hand the copy over.
+   *
+   * The archive is the answer the caller is owed, so it goes to disk and is never rendered here —
+   * a page that printed an account's contact book would be a second place PII exists, which is the
+   * one thing this register is meant to reduce. What the desk shows afterwards is read back off the
+   * row: the definer stamps the SHA and the hand-over count only once the last byte has left, so the
+   * re-read is the register's own statement that the copy was received, not this page's belief that
+   * a download finished.
+   */
+  async function handOver(p: Paper) {
+    setBusy(true); setError(null); setPanelError(null);
+    try {
+      const res = await fetch(`${API}/api/v1/control/customers/data-requests/${p.id}/bundle`,
+        { method: "POST", credentials: "include" });
+      if (res.status === 401) { window.location.href = "/control/login"; return; }
+      if (res.status === 403) { setForbidden(true); return; }
+      // Everything the register can still refuse is refused with a status code before a byte of the
+      // archive exists, so a JSON body here is a refusal rather than a broken file.
+      const type = res.headers.get("content-type") ?? "";
+      if (!res.ok || type.includes("json")) {
+        setError(errorMessage(await res.json().catch(() => ({})),
+          "The register would not hand that copy over."));
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `data-copy-${p.ref.replace(/[^A-Za-z0-9-]/g, "")}.zip`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      let fresh: Paper | null = null;
+      try {
+        const r = await fetch(`${API}/api/v1/control/customers/data-requests/${p.id}`,
+          { credentials: "include" });
+        if (r.ok) fresh = await r.json();
+      } catch { /* the file has already left; the stamp is read the next time the paper is opened */ }
+      if (fresh?.id) {
+        ++dseq.current;
+        setPaper(fresh); setPaperFor(fresh.id);
+        setNotice(fresh.bundle_sha256
+          ? `${fresh.deliveries} hand-over(s) on ${fresh.ref}${fresh.deliveries > 1
+            ? " — the SHA below is still the first one, because a re-download cannot change what the "
+            + "register says the caller was handed" : ""}: ${size(fresh.bundle_bytes)} in ${fresh.bundle_entries} file(s), `
+            + `SHA-256 ${shaWords(fresh.bundle_sha256)}. The archive is in your downloads. A TIN, phone or `
+            + "NIDA in plain text exists only inside it — no read on this desk returns one."
+          : `${fresh.ref} left this desk as ${size(blob.size)}, but the register has not stamped it. An `
+            + "abandoned download is not a copy anybody received — hand it over again before you tell the "
+            + "caller it was sent.");
+        load("requests", ++seq.current);
+      } else {
+        setNotice(`The file was handed over, but the register did not answer when the stamp was read back. `
+          + "Open the paper again before you tell the caller it was sent.");
+      }
+    } finally { setBusy(false); }
   }
 
   /** The account picker every write is opened from. A clerk finds an account by the name it trades
@@ -643,7 +879,7 @@ export default function ControlCustomersPage() {
     const p = panel;
     if (!p) return;
     const company = p.companyId ?? draft.accountId;
-    if (["raise", "note", "wear", "off", "claim"].includes(p.kind) && !company) {
+    if (["raise", "note", "wear", "off", "claim", "ask"].includes(p.kind) && !company) {
       setPanelError("Pick the account first — nothing on this register is written without one.");
       return;
     }
@@ -740,6 +976,56 @@ export default function ControlCustomersPage() {
         }
         return;
       }
+      case "ask": {
+        // The definer answers with the row *and* the preview of it, so the paper the desk now sees is
+        // built from the same read the second seat will be asked to sign — no arithmetic of ours in
+        // between the register and the screen.
+        const j = await send(`${company}/data-requests`, {
+          kind: draft.askKind,
+          ...(draft.askKind === "erase" ? { categories: draft.cats } : {}),
+          reason: draft.reason.trim(),
+          ...(draft.askedIn.trim() ? { askedIn: draft.askedIn.trim() } : {})
+        });
+        if (j?.request?.id) {
+          // The register was refreshed by the write itself, and that read is still about the paper
+          // open a moment ago. Discard it before naming the new one, or the desk shows the old ask
+          // under a notice about the new one.
+          ++dseq.current;
+          setPaper(j.request); setPaperFor(j.request.id);
+          const n = (j.request.categories ?? []).length;
+          setNotice(draft.askKind === "export"
+            ? `${j.request.ref} is on the register: a copy of everything the sections hold about `
+            + `${j.request.company?.name ?? "that account"}. Nothing was taken and nothing changed — the `
+            + `answer leaves when this desk hands the archive over, and the row counts every hand-off.`
+            : `${j.request.ref} is on the register with ${n} category(ies) named — ${categoryList(j.request.categories)}. `
+            + "This desk has written the paper and cannot run the mask: a second seat signs it on Approvals, "
+            + "against the hash of exactly these counts.");
+        } else if (j) {
+          setNotice("The paper is on the register.");
+        }
+        return;
+      }
+      case "sig": {
+        const j = await send(`data-requests/${p.id}/erase-signature`, { reason: draft.reason.trim() });
+        if (j) {
+          setNotice(`A signature is asked for on ${j.ref ?? p.ref}: ${categoryList(j.categories)}, hashed as `
+            + `${shaWords(j.payload_sha256)}, expiring ${day(j.expires_at)}. It is not yours to give — `
+            + "129 keeps the seat that raised a paper off the seat that spends its signature, so the mask "
+            + "runs from Approvals under a different name.");
+          readPaper(p.id!);
+        }
+        return;
+      }
+      case "refuse": {
+        const j = await send(`data-requests/${p.id}/refuse`, { note: draft.reason.trim() });
+        if (j) {
+          setNotice(`${j.ref ?? p.ref} is refused, with ${j.refused_name ?? "this seat"}'s name on it and `
+            + `these words kept beside it: “${draft.reason.trim()}”. The row stays and the account's open `
+            + "slot is freed, so the same person can be answered properly next month.");
+          readPaper(p.id!);
+        }
+        return;
+      }
     }
   }
 
@@ -768,14 +1054,23 @@ export default function ControlCustomersPage() {
       && panel?.companyId === next.companyId && panel?.tagId === next.tagId;
     setPanelError(null); setArmed(null); setRevealed(null); setPreview(null);
     if (next.kind === "raise" || next.kind === "wear" || next.kind === "note") setAccounts(null);
-    if (next.kind === "claim") { setClosed(null); if (!next.companyId) searchAccounts(""); }
-    setDraft({ ...EMPTY_DRAFT, ...seed });
+    if (next.kind === "claim" || next.kind === "ask") setClosed(null);
+    if (next.kind === "ask") setDpreview(null);
+    if (next.kind === "claim" && !next.companyId) searchAccounts("");
+    setDraft({ ...EMPTY_DRAFT, askKind: next.requestKind === "erase" ? "erase" : "export", ...seed });
     if (closing) { setPanel(null); return; }
     setPanel(next);
     if (next.kind === "wear") loadLibrary();
     if (next.kind === "raise" && !next.companyId) searchAccounts("");
-    if (next.kind === "claim" && next.companyId) searchAccounts(next.companyName ?? "");
+    // An ask can be raised on either half of the register: a copy is owed whether the account trades
+    // or not, and an erasure only ever applies to one the office has shut. So both lists are read,
+    // and the account is named from whichever one holds it.
+    if ((next.kind === "claim" || next.kind === "ask") && next.companyId) searchAccounts(next.companyName ?? "");
     if (next.kind === "claim") searchClosed("");
+    if (next.kind === "ask") {
+      if (!next.companyId) searchAccounts("");
+      searchClosed("");
+    }
     requestAnimationFrame(() =>
       document.getElementById("customers-form")?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
   }
@@ -800,6 +1095,10 @@ export default function ControlCustomersPage() {
       } else if (tab === "claims") {
         if (kFilter.status) p.set("status", kFilter.status);
         if (kFilter.q.trim()) p.set("search", kFilter.q.trim());
+      } else if (tab === "requests") {
+        if (rFilter.status) p.set("status", rFilter.status);
+        if (rFilter.kind) p.set("kind", rFilter.kind);
+        if (rFilter.q.trim()) p.set("search", rFilter.q.trim());
       } else {
         if (tFilter.status) p.set("status", tFilter.status);
         if (tFilter.q.trim()) p.set("search", tFilter.q.trim());
@@ -817,7 +1116,10 @@ export default function ControlCustomersPage() {
       URL.revokeObjectURL(url);
       setNotice(tab === "tags"
         ? "The file is the label history — which account wore what, who put it on and who took it off — "
-        : `The ${tab === "board" ? "account board" : tab === "claims" ? "claim register, both halves named" : tab}`
+        : `The ${tab === "board" ? "account board"
+          : tab === "claims" ? "claim register, both halves named"
+            : tab === "requests" ? "data-request register, one line per paper with what it reached and what it kept"
+              : tab}`
           + " was exported with the filters on screen.");
     } finally { setExporting(false); }
   }
@@ -860,6 +1162,15 @@ export default function ControlCustomersPage() {
           && !previewBusy && !!preview && preview.eligible;
       case "voidclaim": return !!p.id && draft.reason.trim().length >= 8;
       case "cut": return !!p.companyId && draft.reason.trim().length >= 8;
+      // The ask is gated on the preview for the same reason a claim is gated on its preview: the
+      // answer comes from `data_request_preview`, which is the function the mask itself reads. A
+      // paper raised against counts the register has not given is a signature asked for blind.
+      case "ask":
+        return (!!p.companyId || !!draft.accountId) && !dpBusy && !!dpreview && dpreview.eligible
+          && (!categoriesAllowedFor(draft.askKind) || draft.cats.length > 0)
+          && draft.reason.trim().length >= REASON_FLOOR;
+      case "sig": return !!p.id && !!p.openSlot && draft.reason.trim().length >= REASON_FLOOR;
+      case "refuse": return !!p.id && !!p.openSlot && draft.reason.trim().length >= REASON_FLOOR;
     }
   }
 
@@ -915,6 +1226,33 @@ export default function ControlCustomersPage() {
       return "Say on the register why every session is being ended. Three weeks from now, when the account "
         + "says it was cut twice, this is the sentence that answers it.";
     }
+    if (p.kind === "ask") {
+      if (!p.companyId && !draft.accountId) return "Name the account the ask is about. A paper with no company "
+        + "on it cannot be answered, and cannot be traced back when a supervisory office asks who it was for.";
+      if (dpBusy) return "Asking the register what this would touch…";
+      if (!dpreview) return "The register has not answered what this ask would touch. Search the account again — "
+        + "a paper is never raised on a preview it refused to read.";
+      if (!dpreview.eligible) return dpreview.refusal ?? "The register will not accept this ask on that account.";
+      if (categoriesAllowedFor(draft.askKind) && draft.cats.length === 0) {
+        return "Tick what an erasure takes away. A mask that names nothing is a refusal wearing a form, so the "
+          + "register asks for at least one of the ten — and a copy carries no menu at all.";
+      }
+      if (draft.reason.trim().length < REASON_FLOOR) {
+        return `Say what the caller asked for and why, in ${REASON_FLOOR} characters or more. These words are `
+          + "quoted back when someone asks how this answer was reached, and a second seat reads them before signing.";
+      }
+    }
+    if ((p.kind === "sig" || p.kind === "refuse") && !p.openSlot) {
+      return "That paper is already answered. A signature is asked for, or a refusal written, on an ask that is "
+        + "still open — an erased or delivered row is history and stays that way.";
+    }
+    if ((p.kind === "sig" || p.kind === "refuse") && draft.reason.trim().length < REASON_FLOOR) {
+      return p.kind === "sig"
+        ? "Say what is being signed for. The sentence goes on the approval paper a second seat reads, and it is "
+          + `kept whether or not they sign. ${REASON_FLOOR} characters.`
+        : "Say why the ask is refused, in the words the caller will be quoted. Eight characters, because the "
+          + "refusal is the answer and an answer has to be arguable.";
+    }
     return "The register will take this — press the button.";
   }
 
@@ -948,6 +1286,13 @@ export default function ControlCustomersPage() {
               reading a live seat list or cutting every session off needs{" "}
               <code>control.customers.disconnect</code>. A desk without them still sees the board, the
               checks, the notes and the labels — it simply cannot claim a duplicate or sign anybody out.
+            </p>
+            <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+              A copy and an erasure stand behind two more keys again, because answering them changes what the
+              registers hold: reading that register, its preview and handing an archive over needs{" "}
+              <code>control.customers.gdpr</code>, and writing an erasure paper or refusing one needs{" "}
+              <code>control.customers.erase</code>. Neither of them runs the mask — that is a second seat&apos;s
+              signature, on <Link href="/control/approvals" className="underline">Approvals</Link>.
             </p>
             <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
               A ban, a price or a refund is not on this desk at all: those need a second seat&apos;s
@@ -1204,6 +1549,11 @@ export default function ControlCustomersPage() {
             )}
           </section>
         )}
+
+        {/* ---------------- one paper, whole ---------------- */}
+        {paper && <PaperBlock p={paper} panel={panel} canGdpr={canGdpr} canErase={canErase} busy={busy}
+          openPanel={openPanel} openDossier={openDossier} handOver={handOver}
+          close={() => { setPaper(null); setPaperFor(null); }} readAgain={() => readPaper(paper.id)} />}
 
         {/* ---------------- the form every act opens ---------------- */}
         {panel && (
@@ -1626,6 +1976,249 @@ export default function ControlCustomersPage() {
               </>
             )}
 
+            {/* ---------------- 129: the ask, what it touches, and the signature it asks for ---------------- */}
+            {panel.kind === "ask" && (
+              <>
+                {!panel.companyId && (
+                  <AccountPicker draft={draft} setDraft={setDraft} rows={accounts} busy={pickerBusy}
+                    search={searchAccounts} onPick={(a) => setDraft({ ...draft, accountId: a.id })} />
+                )}
+                {!panel.companyId && (
+                  <fieldset className="mt-14 rounded-card border p-12" style={{ borderColor: "var(--line)" }}>
+                    <legend className="px-8 text-[11px] font-semibold uppercase tracking-[0.12em]"
+                      style={{ color: "var(--ink-soft)" }}>
+                      …or an account this office has shut
+                    </legend>
+                    <p className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                      A copy is owed whether the account trades or not, and an erasure can only be raised on one
+                      that has been shut — so both halves of the register have to be findable from here.
+                    </p>
+                    <div className="mt-8 flex flex-wrap gap-10">
+                      <input value={draft.closedQuery} aria-label="Search shut accounts"
+                        onChange={(e) => setDraft({ ...draft, closedQuery: e.target.value })}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); searchClosed(draft.closedQuery); } }}
+                        placeholder="The name it was shut under"
+                        className="min-w-[220px] flex-1 rounded-input border px-12 py-8 text-sm" style={boxStyle} />
+                      <button type="button" className={headBtn} style={miniStyle} disabled={closedBusy}
+                        onClick={() => searchClosed(draft.closedQuery)}>
+                        {closedBusy ? "Reading…" : "Find"}
+                      </button>
+                    </div>
+                    {closed === null ? (
+                      <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                        The shut accounts the office closed most recently. Press Find to search the rest by name.
+                      </p>
+                    ) : closed.length === 0 ? (
+                      <p className="mt-8 text-[11px]" style={{ color: "var(--ink)" }}>
+                        No shut account matches that name. The live list above is the other half.
+                      </p>
+                    ) : (
+                      <ul className="mt-8 max-h-[200px] overflow-y-auto">
+                        {closed.map((c) => (
+                          <li key={c.id} className={line}>
+                            <button type="button"
+                              onClick={() => setDraft({ ...draft, accountId: c.id, closedQuery: c.name })}
+                              className="w-full border-0 bg-transparent p-0 text-left"
+                              style={{ background: c.id === draft.accountId ? "color-mix(in srgb, var(--adm-accent) 12%, transparent)" : undefined }}>
+                              <p className="text-xs font-semibold" style={{ color: "var(--ink)" }}>{c.name}</p>
+                              <p className="text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                                {c.type} · shut {day(c.deleted_at)}
+                              </p>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </fieldset>
+                )}
+                {panel.companyId && (
+                  <p className="mt-12 text-xs" style={{ color: "var(--ink)" }}>
+                    The ask is about <span className="font-semibold">{panel.companyName}</span>. Close this form
+                    to raise a paper on a different account.
+                  </p>
+                )}
+
+                <fieldset className="mt-14 rounded-card border p-12" style={{ borderColor: "var(--line)" }}>
+                  <legend className="px-8 text-[11px] font-semibold uppercase tracking-[0.12em]"
+                    style={{ color: "var(--ink-soft)" }}>
+                    What was asked for
+                  </legend>
+                  <div className="grid gap-10" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
+                    {DATA_REQUEST_KINDS.map((k) => (
+                      <label key={k} className="flex min-h-[36px] items-start gap-8 text-sm" style={{ color: "var(--ink)" }}>
+                        <input type="radio" name="askKind" checked={draft.askKind === k}
+                          onChange={() => setDraft({ ...draft, askKind: k, cats: [] })} />
+                        <span>
+                          {drKindWord(k)}
+                          <span className="block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                            {KIND_SENTENCES[k]}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                    {categoriesAllowedFor(draft.askKind)
+                      ? "An erasure has to name what it takes. The ten words below are the whole list the mask "
+                        + "knows, in the order it walks them."
+                      : `A copy is not a menu: the archive is written in ${EXPORT_SECTION_COUNT} sections and its `
+                        + "manifest says what each one withheld. Choosing the parts would be choosing what to hide."}
+                  </p>
+                </fieldset>
+
+                {dpBusy && (
+                  <p role="status" className="mt-14 text-sm" style={{ color: "var(--ink-soft)" }}>
+                    Asking the register what this would touch…
+                  </p>
+                )}
+                {dpreview && !dpBusy && (
+                  <div className="mt-14 grid gap-12">
+                    <div className="rounded-card border p-14"
+                      style={{
+                        borderColor: dpreview.eligible ? "var(--success)" : "var(--warning)",
+                        background: dpreview.eligible ? "var(--milk)"
+                          : "color-mix(in srgb, var(--warning) 8%, transparent)"
+                      }}>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em]"
+                        style={{ color: dpreview.eligible ? "var(--success)" : "var(--danger)" }}>
+                        {dpreview.eligible
+                          ? draft.askKind === "export"
+                            ? "The register would answer this with a copy"
+                            : "The register would accept this erasure"
+                          : "This ask cannot be raised yet"}
+                      </p>
+                      <p className="mt-6 text-xs" style={{ color: "var(--ink)" }}>
+                        {dpreview.company.name} — {dpreview.company.type},{" "}
+                        {dpreview.company.closed_at
+                          ? `shut ${day(dpreview.company.closed_at)}`
+                          : label(ACCOUNT_STATES, dpreview.company.account_status)}
+                        {dpreview.sessions_live > 0 && draft.askKind === "erase"
+                          ? ` · ${dpreview.sessions_live} session(s) still open on it` : ""}
+                      </p>
+                      {!dpreview.eligible && (
+                        <p className="mt-8 text-[11px]" style={{ color: "var(--ink)" }}>
+                          {dpreview.refusal ?? "The register gave no reason."}
+                        </p>
+                      )}
+                      <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                        Read at {when(dpreview.clock)} by the same function the mask runs, so the counts under
+                        these words are the counts the signature is taken against — nothing here is this desk&apos;s
+                        arithmetic.
+                      </p>
+                    </div>
+
+                    <Block head={draft.askKind === "export"
+                      ? "What the copy carries, category by category"
+                      : "Tick what the mask takes — the counts are the register's"}
+                      hint={draft.askKind === "export"
+                        ? "All ten go into the archive. A value stored encrypted is decrypted for the copy alone and never for a screen."
+                        : "A category with nought rows can still be ticked — the register then reports that it reached nothing there."}>
+                      <ul className="mt-6 grid gap-8">
+                        {CATEGORIES.map((c) => (
+                          <li key={c} className="flex items-start gap-8">
+                            {categoriesAllowedFor(draft.askKind) && (
+                              <input type="checkbox" aria-label={`Erase ${c}`} checked={draft.cats.includes(c)}
+                                onChange={(e) => setDraft({
+                                  ...draft,
+                                  cats: e.target.checked
+                                    ? CATEGORIES.filter((x) => draft.cats.includes(x as string) || x === c) as string[]
+                                    : draft.cats.filter((x) => x !== c)
+                                })} />
+                            )}
+                            <span className="min-w-0">
+                              <span className="text-[11px] font-semibold" style={{ color: "var(--ink)" }}>
+                                {categoryWord(c)}
+                              </span>
+                              <span className="block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                                {maskWords(dpreview.masks?.[c])}
+                              </span>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </Block>
+
+                    <Block head="What stays whatever is ticked"
+                      hint="Twelve things an erasure cannot reach — the answers a check already signed, the office's own notes, the money, and the audit register itself. These are the register's words, not this desk's promise.">
+                      <ul className="mt-6 grid gap-6">
+                        {dpreview.keeps.map((k) => (
+                          <li key={k.key} className="text-[11px]" style={{ color: "var(--ink)" }}>
+                            <span className="font-semibold">{k.rows}</span> · {k.label}
+                            <span className="block" style={{ color: "var(--ink-soft)" }}>{k.because}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </Block>
+                  </div>
+                )}
+
+                <div className="mt-14 grid gap-14" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                  <label className={`${labelText} block`} style={{ color: "var(--ink-soft)" }}>
+                    How the caller reached the office — 3 to 80 characters
+                    <input value={draft.askedIn} list="asked-in" maxLength={80} className={box} style={boxStyle}
+                      placeholder="walked in with a letter"
+                      onChange={(e) => setDraft({ ...draft, askedIn: e.target.value })} />
+                    <datalist id="asked-in">
+                      {ASKED_IN_EXAMPLES.map((w) => <option key={w} value={w} />)}
+                    </datalist>
+                  </label>
+                  <p className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                    Kept on the row, because &quot;who asked, and how&quot; is the first thing a supervisory
+                    office reads when it checks an answer was given to the right person.
+                  </p>
+                </div>
+                <label className={`${labelText} mt-14 block`} style={{ color: "var(--ink-soft)" }}>
+                  What was asked for, and why — {REASON_FLOOR} to 600 characters, kept forever
+                  <textarea value={draft.reason} rows={3} className={box} style={boxStyle}
+                    placeholder="the caller asked, on the phone, for every record held under their NIDA — read back and agreed"
+                    onChange={(e) => setDraft({ ...draft, reason: e.target.value })} />
+                </label>
+              </>
+            )}
+
+            {panel.kind === "sig" && (
+              <>
+                <p className="mt-12 text-xs" style={{ color: "var(--ink)" }}>
+                  <span className="font-semibold">{panel.ref}</span> on{" "}
+                  <span className="font-semibold">{panel.companyName}</span> — an erasure of{" "}
+                  {categoryList(panel.categories)}, {panel.categories?.length ?? 0} category(ies).
+                </p>
+                <p className="mt-8 text-[11px]" style={{ color: "var(--warning)" }}>
+                  Nothing is masked by pressing this. The register writes a proposal and a hash of what it read,
+                  and the mask only runs when a seat that is not this one approves it on{" "}
+                  <Link href="/control/approvals" className="underline">Approvals</Link> — the paper carries these
+                  counts, and the signature is against the hash of them.
+                </p>
+                <label className={`${labelText} mt-14 block`} style={{ color: "var(--ink-soft)" }}>
+                  What the second seat is being asked to sign for
+                  <textarea value={draft.reason} rows={3} className={box} style={boxStyle}
+                    placeholder="Article 17 request received by email; the account was closed on the tenants desk on 3 March; masks the seat, session and call records only"
+                    onChange={(e) => setDraft({ ...draft, reason: e.target.value })} />
+                </label>
+              </>
+            )}
+
+            {panel.kind === "refuse" && (
+              <>
+                <p className="mt-12 text-xs" style={{ color: "var(--ink)" }}>
+                  <span className="font-semibold">{panel.ref}</span> — {drKindWord(panel.requestKind)} on{" "}
+                  <span className="font-semibold">{panel.companyName}</span>.
+                </p>
+                {panel.requestStatus && (
+                  <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                    The paper says {drStatusWord(panel.requestStatus)} now. Refusing it is an answer, not a
+                    deletion: the row stays and the reason below is quoted back to the caller.
+                  </p>
+                )}
+                <label className={`${labelText} mt-14 block`} style={{ color: "var(--ink-soft)" }}>
+                  Why the ask is refused — the words the caller will be given
+                  <textarea value={draft.reason} rows={3} className={box} style={boxStyle}
+                    placeholder="the request asked for a competitor's cargo records, which are another account's data — refused under Article 17(3)"
+                    onChange={(e) => setDraft({ ...draft, reason: e.target.value })} />
+                </label>
+              </>
+            )}
+
             <div className="mt-16 flex flex-wrap items-center gap-12">
               <button type="button" disabled={!formReady() || busy} onClick={async () => {
                 // The label and the caption below both promise a second press; every irreversible act
@@ -1660,7 +2253,9 @@ export default function ControlCustomersPage() {
 
         {/* ---------------- the tabs ---------------- */}
         <div className="mt-28 flex flex-wrap items-center gap-10">
-          {TABS.map(([k, v]) => (
+          {/* The sixth register is not offered to a seat that cannot open it — the tab loads a queue
+              the API would answer with a 403, and an empty queue reads as an empty register. */}
+          {TABS.filter(([k]) => k !== "requests" || canGdpr).map(([k, v]) => (
             <button key={k} type="button" onClick={() => { setTab(k); setPanel(null); }}
               className={headBtn}
               style={tab === k
@@ -2118,6 +2713,167 @@ export default function ControlCustomersPage() {
               ]))}
             />
             <Pager filter={kFilter} setFilter={setKFilter} total={kRows[0]?.total ?? 0} />
+          </section>
+        )}
+
+        {tab === "requests" && (
+          <section className="mt-20">
+            <div className="flex flex-wrap gap-12">
+              <input value={rFilter.q} aria-label="Search data requests"
+                onChange={(e) => setRFilter({ ...rFilter, q: e.target.value, offset: "0" })}
+                placeholder="DR number, the account, or what the caller asked for"
+                className="min-w-[220px] flex-1 rounded-input border px-12 py-8 text-sm" style={boxStyle} />
+              <select value={rFilter.status} aria-label="Filter by state of the paper"
+                onChange={(e) => setRFilter({ ...rFilter, status: e.target.value, offset: "0" })}
+                className="rounded-input border px-12 py-8 text-sm" style={boxStyle}>
+                <option value="">Any state of the paper</option>
+                {REQUEST_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+              </select>
+              <select value={rFilter.kind} aria-label="Filter by kind of ask"
+                onChange={(e) => setRFilter({ ...rFilter, kind: e.target.value, offset: "0" })}
+                className="rounded-input border px-12 py-8 text-sm" style={boxStyle}>
+                <option value="">Either kind of ask</option>
+                {DATA_REQUEST_KINDS.map((k) => <option key={k} value={k}>{drKindWord(k)}</option>)}
+              </select>
+              {canGdpr && (
+                <button type="button" onClick={() => openPanel({ kind: "ask" })} className={headBtn}
+                  style={{ borderColor: "var(--adm-accent)", color: "var(--ink)" }}>
+                  {panel?.kind === "ask" ? "Close the form" : "Answer an ask"}
+                </button>
+              )}
+            </div>
+            {rCounts && (
+              <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
+                {rCounts.all} paper(s) ever raised · {rCounts.raised} nothing done ·{" "}
+                {rCounts.pending_signature} waiting on a second seat · {rCounts.delivered} copies handed over ·{" "}
+                {rCounts.erased} masked · {rCounts.refused} refused. The register holds {rCounts.export} copy
+                and {rCounts.erase} erasure paper(s).
+              </p>
+            )}
+            <div className="mt-12 flex flex-wrap gap-8">
+              {BOARD_CHIPS.map((c) => {
+                const on = c.sends.status ? rFilter.status === c.sends.status
+                  : c.sends.kind ? rFilter.kind === c.sends.kind
+                    : !rFilter.status && !rFilter.kind;
+                return (
+                  <button key={c.key} type="button" className={mini}
+                    style={on ? {
+                      borderColor: "var(--adm-accent)", color: "var(--ink)",
+                      background: "color-mix(in srgb, var(--adm-accent) 14%, transparent)"
+                    } : miniStyle}
+                    onClick={() => setRFilter({
+                      ...rFilter, offset: "0",
+                      status: on && c.sends.status ? "" : c.sends.status ?? rFilter.status,
+                      kind: on && c.sends.kind ? "" : c.sends.kind ?? rFilter.kind
+                    })}>
+                    {c.label} · {rCounts?.[c.key as keyof RequestCounts] ?? "—"}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+              The eight numbers are the board&apos;s own counts over the whole register, and each one is the filter
+              it sends back — a paper counted under a word the row does not hold would read nought forever. Two
+              acts sit behind two duties here: reading the register and handing a copy over cost{" "}
+              <code>control.customers.gdpr</code>, and writing an erasure or refusing one costs{" "}
+              <code>control.customers.erase</code>. Neither one runs the mask — that is a second seat&apos;s
+              signature on <Link href="/control/approvals" className="underline">Approvals</Link>.
+            </p>
+            <List loading={rRows.length === 0 && !rCounts} empty={rRows.length === 0 && !!rCounts}
+              emptyWords="No paper on this register with that filter. An empty queue after a chip is the chip, not an empty register — clear it and read again."
+              head={["The paper", "What was asked", "Account", "State", "What the answer did", ""]}
+              rows={rRows.map((r) => ([
+                <span key="a">
+                  <button type="button" className="border-0 bg-transparent p-0 text-left"
+                    style={{ color: "var(--ink)" }} onClick={() => openPaper(r.id)}>
+                    <span className="text-xs font-semibold">{r.ref}</span>
+                    <span className="block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                      {drKindWord(r.kind)} · raised {day(r.raised_at)}
+                    </span>
+                  </button>
+                  <span className="mt-4 block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                    by {r.raised_name ?? "—"}
+                  </span>
+                </span>,
+                <span key="b" className="break-words text-[11px]" style={{ color: "var(--ink)" }}>
+                  {r.reason}
+                  <span className="mt-4 block" style={{ color: "var(--ink-soft)" }}>
+                    asked in: {r.asked_in ?? "not written down"}
+                  </span>
+                  {(r.categories ?? []).length > 0 && (
+                    <span className="mt-4 block">
+                      {r.categories!.map((c) => <Chip key={c} edge="var(--adm-accent)">{c}</Chip>)}
+                    </span>
+                  )}
+                </span>,
+                <span key="c">
+                  <button type="button" className="border-0 bg-transparent p-0 text-left"
+                    style={{ color: "var(--ink)" }} onClick={() => openDossier(r.company_id, r.company_name)}>
+                    <span className="text-xs font-semibold">{r.company_name}</span>
+                  </button>
+                  <span className="block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                    {r.company_closed_at ? `shut ${day(r.company_closed_at)}` : "still trading"}
+                  </span>
+                </span>,
+                <span key="d" className="whitespace-nowrap">
+                  <Chip edge={STATUS_EDGE[r.request_status] ?? "var(--line)"}>
+                    {drStatusWord(r.request_status)}
+                  </Chip>
+                  {r.approval_status && (
+                    <span className="mt-4 block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                      paper {r.approval_status}
+                      {r.approval_expires_at ? ` · expires ${day(r.approval_expires_at)}` : ""}
+                    </span>
+                  )}
+                </span>,
+                <span key="e" className="break-words text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                  {r.request_status === "delivered" && (
+                    <>
+                      {r.deliveries} hand-over(s) · {size(r.bundle_bytes)} · SHA {shaWords(r.bundle_sha256)}
+                      <span className="block">
+                        {r.delivered_at ? `received ${when(r.delivered_at)}` : "stamped without a received time"}
+                      </span>
+                    </>
+                  )}
+                  {r.request_status === "erased" && (
+                    <>
+                      masked {when(r.erased_at)} by {r.erased_name ?? "—"} ·{" "}
+                      {Object.values(r.erased_rows ?? {}).reduce((a, b) => a + Number(b || 0), 0)} row(s) reached
+                      <span className="block">
+                        {(r.kept ?? []).length} register(s) kept — {(r.kept ?? []).filter((k) => k.rows > 0)
+                          .reduce((a, b) => a + b.rows, 0)} row(s) untouched
+                      </span>
+                    </>
+                  )}
+                  {r.request_status === "refused" && (
+                    <>
+                      refused {day(r.refused_at)}
+                      <span className="block" style={{ color: "var(--ink)" }}>“{(r.refused_note ?? "").slice(0, 140)}”</span>
+                    </>
+                  )}
+                  {r.request_status === "pending_signature" && (
+                    <>waiting on a seat that did not raise it · hash {shaWords(r.payload_sha256)}
+                      <span className="block">signed by: {r.signed_name ?? "nobody yet"}</span>
+                    </>
+                  )}
+                  {r.request_status === "raised" && "nothing has been handed over or masked yet"}
+                </span>,
+                <span key="f" className="flex flex-wrap gap-8">
+                  <button type="button" className={mini} style={miniStyle} onClick={() => openPaper(r.id)}>
+                    {paperFor === r.id ? "Close the paper" : "Read the paper"}
+                  </button>
+                  {!isOpenRequest(r.request_status) && (
+                    <button type="button" className={mini} style={miniStyle}
+                      onClick={() => openPanel({
+                        kind: "ask", companyId: r.company_id, companyName: r.company_name, requestKind: r.kind
+                      }, { accountId: r.company_id, askKind: r.kind as DataRequestKind, closedQuery: r.company_name })}>
+                      Answer them again
+                    </button>
+                  )}
+                </span>
+              ]))}
+            />
+            <Pager filter={rFilter} setFilter={setRFilter} total={rRows[0]?.total ?? 0} />
           </section>
         )}
       </main>
@@ -2581,6 +3337,215 @@ function DossierBlock({ d, panel, openPanel, close, canManage, canVerify, busy, 
   );
 }
 
+// ---------- the paper ----------
+
+/**
+ * One data request, whole (129).
+ *
+ * Every number here comes from `data_request_detail`, which is the same read a second seat is shown
+ * before signing and the same read this desk goes back to after a download — so the counters beside
+ * the words are the register&apos;s and not a second copy of them. What the block deliberately does
+ * not do is show a value: the archive carries the plain TIN, phone and NIDA, and a desk that printed
+ * one into a screen would have made the erasure&apos;s own point moot.
+ */
+function PaperBlock({ p, panel, canGdpr, canErase, busy, openPanel, openDossier, handOver, close,
+  readAgain }: {
+    p: Paper; panel: Panel | null; canGdpr: boolean; canErase: boolean; busy: boolean;
+    openPanel: (next: Panel, seed?: Partial<Draft>) => void;
+    openDossier: (id: string, name: string) => void;
+    handOver: (p: Paper) => void; close: () => void; readAgain: () => void;
+  }) {
+  const cats = (p.categories ?? []) as string[];
+  const reached = Object.values(p.erased ?? {}).reduce((a, b) => a + Number(b || 0), 0);
+  const kept = (p.keeps ?? []).reduce((a, b) => a + b.rows, 0);
+  const sigOpen = p.kind === "erase" && p.open_slot && canErase;
+  const refuseOpen = p.open_slot && (p.kind === "erase" ? canErase : canGdpr);
+  const handOpen = p.kind === "export" && p.status !== "refused";
+  return (
+    <section className="mt-20 rounded-card border p-20"
+      style={{ borderColor: STATUS_EDGE[p.status] ?? "var(--line)", background: "var(--surface)" }}>
+      <div className="flex flex-wrap items-start justify-between gap-12">
+        <div className="min-w-0">
+          <h2 className="text-sm font-bold uppercase tracking-[0.12em]" style={{ color: "var(--ink)" }}>
+            {p.ref} — {drKindWord(p.kind)} on {p.company.name}
+          </h2>
+          <p className="mt-6 flex flex-wrap items-center gap-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+            <Chip edge={STATUS_EDGE[p.status] ?? "var(--line)"}>{drStatusWord(p.status)}</Chip>
+            raised {when(p.raised_at)} by {p.raised_name ?? "—"}
+            {p.raised_role ? ` (${p.raised_role})` : ""} · read at {when(p.clock)}
+          </p>
+        </div>
+        <button type="button" className={headBtn} style={miniStyle} onClick={close}>
+          Close the paper
+        </button>
+      </div>
+
+      <div className="mt-16 grid gap-12">
+        <Block head="What was asked, and by whom"
+          hint="Kept on the row forever, because this is the sentence a supervisory office reads first.">
+          <p className="mt-6 text-xs break-words" style={{ color: "var(--ink)" }}>{p.reason}</p>
+          <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+            reached the office: {p.asked_in ?? "not written down"} ·{" "}
+            <button type="button" className="border-0 bg-transparent p-0 text-left underline"
+              style={{ color: "var(--ink)" }} onClick={() => openDossier(p.company.id, p.company.name)}>
+              {p.company.name}
+            </button>{" "}
+            ({p.company.type}, {p.company.closed_at
+              ? `shut ${day(p.company.closed_at)}`
+              : label(ACCOUNT_STATES, p.company.account_status)})
+          </p>
+          {cats.length > 0 && (
+            <p className="mt-8 flex flex-wrap gap-6">
+              {cats.map((c) => <Chip key={c} edge="var(--adm-accent)">{categoryWord(c)}</Chip>)}
+            </p>
+          )}
+          {p.kind === "export" && cats.length === 0 && (
+            <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+              A copy carries every category — {EXPORT_SECTION_COUNT} sections and a manifest that says what
+              each one withheld. Choosing the parts would be choosing what to hide.
+            </p>
+          )}
+        </Block>
+
+        {p.status === "erased" && (
+          <Block head="What the mask reached"
+            hint="Counted in the transaction that wrote the answer, per category, in the register's own numbers.">
+            <ul className="mt-6 grid gap-6">
+              {CATEGORIES.filter((c) => cats.includes(c)).map((c) => (
+                <li key={c} className={line}>
+                  <span className="text-[11px]" style={{ color: "var(--ink)" }}>
+                    <span className="font-semibold tabular-nums">{erasedCount(p.erased, c) ?? 0}</span> row(s) —{" "}
+                    {categoryWord(c)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-8 text-[11px]" style={{ color: "var(--ink)" }}>
+              {reached} row(s) masked in all, and {kept} row(s) the register was told to leave —{" "}
+              {(p.keeps ?? []).map((k) => `${k.rows} ${k.label.toLowerCase()}`).join(", ")}.
+              Erased {when(p.erased_at)} by {p.erased_name ?? "—"}.
+            </p>
+          </Block>
+        )}
+
+        {(p.keeps ?? []).length > 0 && p.status !== "erased" && (
+          <Block head="What an erasure here could not touch"
+            hint="The twelve keeps the same function that answered the preview carries, in the register's words.">
+            <ul className="mt-6 grid gap-6">
+              {(p.keeps ?? []).map((k) => (
+                <li key={k.key} className="text-[11px]" style={{ color: "var(--ink)" }}>
+                  <span className="font-semibold tabular-nums">{k.rows}</span> · {k.label}
+                  <span className="block" style={{ color: "var(--ink-soft)" }}>{k.because}</span>
+                </li>
+              ))}
+            </ul>
+          </Block>
+        )}
+
+        {p.kind === "erase" && (
+          <Block head="The signature it is waiting on"
+            hint="Written on 121's approval register by this desk, spent by a different seat on Approvals.">
+            <p className="mt-6 text-[11px]" style={{ color: "var(--ink)" }}>
+              paper {p.approval_status ?? "not proposed yet"}
+              {p.approval_proposed_name ? ` · proposed by ${p.approval_proposed_name}` : ""}
+              {p.approval_expires_at ? ` · lapses ${day(p.approval_expires_at)}` : ""}
+            </p>
+            <p className="mt-6 text-[11px] break-all" style={{ color: "var(--ink-soft)" }}>
+              {p.payload_sha256
+                ? `signed against the hash ${shaWords(p.payload_sha256)} of the account, its closed date `
+                  + "and these categories — the mask re-reads it before it touches a column."
+                : "No hash sits on it yet: asking a second seat to sign writes one over the account, its "
+                  + "closed date and these categories, and the mask re-reads it before it touches a column."}
+            </p>
+            {p.signed_name && (
+              <p className="mt-6 text-[11px]" style={{ color: "var(--success)" }}>
+                signed {when(p.signed_at)} by {p.signed_name}
+                {p.signed_note ? ` — “${p.signed_note}”` : ""}
+              </p>
+            )}
+            <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+              Nothing here can spend it. The seat that raised the paper is refused by the register itself,
+              so the decision is made on <Link href="/control/approvals" className="underline">Approvals</Link>.
+            </p>
+          </Block>
+        )}
+
+        {p.kind === "export" && (
+          <Block head="The copy, and every time it left"
+            hint="The hash is of the bytes as they left the socket, stamped once — a download nobody finished is not a copy anybody received.">
+            <p className="mt-6 text-[11px] break-all" style={{ color: "var(--ink)" }}>
+              {p.bundle_sha256
+                ? <>SHA-256 {shaWords(p.bundle_sha256)} · {size(p.bundle_bytes)} in {p.bundle_entries ?? "—"} file(s)</>
+                : "Nothing has been handed over yet — the register has no bytes to hash."}
+            </p>
+            <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+              {p.deliveries} hand-over(s)
+              {p.delivered_at ? ` · last one ${when(p.delivered_at)} by ${p.delivered_name ?? "—"}` : ""}
+            </p>
+          </Block>
+        )}
+
+        {p.status === "refused" && (
+          <Block head="The refusal the caller was given">
+            <p className="mt-6 text-xs break-words" style={{ color: "var(--ink)" }}>“{p.refused_note ?? "—"}”</p>
+            <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+              refused {when(p.refused_at)} by {p.refused_name ?? "—"}. The row stays, and the account&apos;s open
+              slot of this kind is free again.
+            </p>
+          </Block>
+        )}
+      </div>
+
+      <div className="mt-16 flex flex-wrap gap-10">
+        {handOpen && canGdpr && (
+          <button type="button" className={headBtn} disabled={busy}
+            style={{ borderColor: "var(--success)", color: "var(--success)" }}
+            onClick={() => handOver(p)}>
+            {busy ? "Writing…" : p.deliveries > 0 ? "Hand the copy over again" : "Hand the copy over"}
+          </button>
+        )}
+        {sigOpen && (
+          <button type="button" className={headBtn}
+            style={{ borderColor: "var(--adm-accent)", color: "var(--ink)" }}
+            onClick={() => openPanel({
+              kind: "sig", id: p.id, ref: p.ref, companyId: p.company.id, companyName: p.company.name,
+              categories: cats, openSlot: p.open_slot, requestKind: p.kind, requestStatus: p.status
+            })}>
+            {panel?.kind === "sig" && panel.id === p.id ? "Close the form" : "Ask a second seat to sign"}
+          </button>
+        )}
+        {refuseOpen && (
+          <button type="button" className={headBtn}
+            style={{ borderColor: "var(--danger)", color: "var(--danger)" }}
+            onClick={() => openPanel({
+              kind: "refuse", id: p.id, ref: p.ref, companyId: p.company.id, companyName: p.company.name,
+              categories: cats, openSlot: p.open_slot, requestKind: p.kind, requestStatus: p.status
+            })}>
+            {panel?.kind === "refuse" && panel.id === p.id ? "Close the form" : "Refuse the ask"}
+          </button>
+        )}
+        {!p.open_slot && canGdpr && (
+          <button type="button" className={headBtn} style={miniStyle}
+            onClick={() => openPanel({
+              kind: "ask", companyId: p.company.id, companyName: p.company.name,
+              requestKind: p.kind === "erase" ? "erase" : "export"
+            }, { accountId: p.company.id, askKind: p.kind as DataRequestKind, closedQuery: p.company.name })}>
+            Raise a new paper on this account
+          </button>
+        )}
+        <button type="button" className={headBtn} style={miniStyle} onClick={readAgain}>
+          Read it again
+        </button>
+      </div>
+      <p className="mt-12 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+        The plain numbers are not on this screen. A TIN, phone or NIDA is decrypted only into the archive a
+        caller is handed, and this desk shows the counts and the hash rather than the values — which is the
+        whole point of an erasure register.
+      </p>
+    </section>
+  );
+}
+
 // ---------- small pieces ----------
 
 function TrustCell({ t }: { t: Trust | null }) {
@@ -2753,7 +3718,10 @@ function panelTitle(p: Panel) {
     wear: `Mark an account${who}`, off: `Take “${p.tagName ?? "the label"}” off${who}`,
     claim: "Declare a duplicate",
     voidclaim: `Withdraw the claim on ${p.loserName ? `“${p.loserName}”` : "that pair"}`,
-    cut: `Cut every session off${who}`
+    cut: `Cut every session off${who}`,
+    ask: `Answer a caller's ask${who}`,
+    sig: `Ask a second seat to sign ${p.ref ?? "the erasure"}`,
+    refuse: `Refuse ${p.ref ?? "that ask"}${who}`
   }[p.kind];
 }
 
@@ -2801,6 +3769,19 @@ function panelHint(p: Panel) {
       return "Every live seat on this account is signed out at once, whatever device it was opened on. Nothing "
         + "is deleted: the sessions the office cut off stay in the register with the reason and the hand that "
         + "cut them, and the account can sign in again on its own.";
+    case "ask":
+      return "One paper for either answer, and the counts below are read by the same function the mask reads. "
+        + "A copy is handed over by this desk and every hand-off is counted on the row; an erasure is only "
+        + "written here, and the mask runs from Approvals under a seat that did not raise it. A copy carries "
+        + "no menu — withholding part of an Article 15 answer is not this desk's to decide.";
+    case "sig":
+      return "This writes a proposal and a hash of what the register read, and then stops. The seat that signs "
+        + "cannot be the seat that asked — 121's rule, kept by the register rather than by this page — and the "
+        + "signature lapses after seven days. Nothing is masked until somebody else gives it.";
+    case "refuse":
+      return "A refusal is not a delete. The paper stays, these words stay with it, and the account's open slot "
+        + "of that kind is freed — so the same person can be answered properly next month instead of having to "
+        + "start a new register somewhere else.";
   }
 }
 
@@ -2810,9 +3791,10 @@ function submitWords(k: Panel["kind"]) {
     reveal: "Read the number", note: "Write it", edit: "Rewrite it", void: "Withdraw the note",
     label: "Add it to the library", retire: "Retire the label", wear: "Mark the account",
     off: "Take it off",
-    // A claim and a cut-off are the two acts on this desk that a clerk cannot take back from the
-    // screen, so the button says what is being written rather than a verb.
+    // A claim, a cut-off, a signature asked for and a refusal are the acts on this desk that a clerk
+    // cannot take back from the screen, so each button says what is being written rather than a verb.
     claim: "Declare them one account", voidclaim: "Withdraw the claim",
-    cut: "Cut every session off"
+    cut: "Cut every session off",
+    ask: "Write the paper", sig: "Ask for the signature", refuse: "Refuse the ask"
   }[k];
 }

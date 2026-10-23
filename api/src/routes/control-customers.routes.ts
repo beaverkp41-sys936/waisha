@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { once } from "node:events";
+import type { ServerResponse } from "node:http";
 import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 import { z } from "zod";
@@ -6,12 +9,17 @@ import { enforceRateLimit } from "../security/ratelimit.js";
 import { writeAudit } from "../audit/audit.js";
 import { ApiError } from "../util/errors.js";
 import { decryptField, encryptField, searchHash } from "../util/crypto.js";
+import { ZipWriter } from "../export/zip.js";
 import { requireControl } from "./control.routes.js";
 import { requireControlPermission } from "./control-analytics.routes.js";
 import {
   ANSWERS, CHECK_KINDS, CHECK_STATES, KIND_LABELS, OPEN_STATES, REFERENCE_MAX,
   EXPIRING_WORDS, normaliseReference, expiresOnKind, referenceTail, type CheckKind
 } from "../customers/checks.js";
+import {
+  CATEGORIES, DATA_REQUEST_KINDS, HEX_PLAIN_NAMES, REQUEST_STATUSES,
+  type DataCategory, type DataRequestKind
+} from "../customers/data-request.js";
 
 /**
  * The Customers desk (127 and 128; task #342) — who an account is, what the office has looked at,
@@ -72,6 +80,13 @@ const MANAGE = "control.customers.manage";
  *  "somebody else is in my account" must be able to end it without opening a second desk. */
 const MERGE = "control.customers.merge";
 const DISCONNECT = "control.customers.disconnect";
+/** 129's two duties, and the split is the whole design of the tab. `gdpr` reads the register, opens
+ *  a preview and hands a copy over — a bundle that holds the account's contact book, its drivers
+ *  and the office's notes about it, which is not a duty for the desk that answers the phone.
+ *  `erase` raises an erasure paper and asks for the signature; spending it is `control.approvals
+ *  .decide` on another desk, held by a different seat. */
+const GDPR = "control.customers.gdpr";
+const ERASE = "control.customers.erase";
 
 const SENTENCE = z.string().trim().min(8).max(600);
 const NOTE_BODY = z.string().trim().min(4).max(2000);
@@ -118,7 +133,7 @@ function guardRefusal(err: unknown, fallback: string, clash?: string): ApiError 
     return new ApiError("CONFLICT", fallback, 409);
   }
   const line = raw.split("\n")[0]
-    .replace(/^(customer_verifications|customer_notes|customer_tags|customer_taggings|customer_duplicate_claims|documents):\s*/i, "");
+    .replace(/^(customer_verifications|customer_notes|customer_tags|customer_taggings|customer_duplicate_claims|customer_data_requests|documents):\s*/i, "");
   return new ApiError("CONFLICT", line || fallback, 409);
 }
 
@@ -142,6 +157,13 @@ function definerRefusal(j: any): ApiError | null {
         + `is not one the office has (${String(j.id ?? "").slice(0, 8)}).`, 404);
     }
     if (j.claim) return new ApiError("NOT_FOUND", "That claim is not on the register.", 404);
+    // 129's doors name the paper they were asked about rather than a side of a pair, because a
+    // data request is one row: the desk typed its number into a box and the register has not seen it.
+    if (j.request) {
+      return new ApiError("NOT_FOUND",
+        `No data request ${String(j.request).slice(0, 8)} on the register. It was never raised, or `
+        + "it belongs to another office.", 404);
+    }
     return new ApiError("NOT_FOUND",
       `No account ${String(j.company_id ?? "").slice(0, 8)} on the platform.`, 404);
   }
@@ -556,6 +578,106 @@ const CLAIM_EXPORT_SQL = `
           or c.reason ilike '%' || $3 || '%')
    order by c.raised_at desc`;
 
+// ---------- the data-request register (129) ----------
+
+/** Every door on 129 is a definer that answers in JSON, so the route holds no SQL over these
+ *  tables at all. Params are in the order each function declares them. */
+/** Params: register, status|null|'all', kind|null|'all', search|null, limit, offset. */
+const DATA_REQUESTS_SQL =
+  "select platform_auth.data_requests_board($1,$2,$3,$4,$5,$6) as b";
+/** Params: request. */
+const DATA_REQUEST_SQL = "select platform_auth.data_request_detail($1) as d";
+/** Params: company, kind. */
+const DATA_PREVIEW_SQL = "select platform_auth.data_request_preview($1,$2) as p";
+/** Params: register, company, kind, categories, reason, asked_in, actor, role, ip. */
+const RAISE_REQUEST_SQL =
+  "select platform_auth.raise_data_request($1,$2,$3,$4,$5,$6,$7,$8,$9) as j";
+/** Params: request, reason, actor, role, ip, ua. */
+const PROPOSE_ERASURE_SQL =
+  "select platform_auth.propose_data_erasure($1,$2,$3,$4,$5,$6) as j";
+/** Params: request, note, actor, role, ip, ua. */
+const REFUSE_REQUEST_SQL =
+  "select platform_auth.refuse_data_request($1,$2,$3,$4,$5,$6) as j";
+/** Params: request, register. The copy is one read: 129's own words on why. */
+const DATA_EXPORT_SQL = "select platform_auth.data_export($1,$2) as e";
+/** Params: request, actor, role, ip, sha256, bytes, entries. */
+const STAMP_DELIVERY_SQL =
+  "select platform_auth.mark_data_request_delivered($1,$2,$3,$4,$5,$6,$7) as j";
+
+/** One section of the copy, exactly as `data_export` hands it over. */
+type CopySection = {
+  key: string; label?: string; held?: number; truncated?: boolean;
+  withheld?: string; rows?: Record<string, unknown>[];
+};
+
+/** The register's category counts, flattened for a spreadsheet cell: `account=1 seats=12`. */
+const pairsCell = (j: unknown) => {
+  if (!j || typeof j !== "object") return "";
+  return Object.entries(j as Record<string, unknown>)
+    .map(([k, v]) => `${k}=${String(v ?? 0)}`).join(" ");
+};
+
+/** The keeps record, flattened to the keys it names — the count per key is in the JSON the desk
+ *  already returned, and a CSV cell that holds twelve sentences is a cell nobody reads. */
+const keepsCell = (j: unknown) => {
+  if (!Array.isArray(j)) return "";
+  return j.map((k: any) => k?.key).filter(Boolean).join(" ");
+};
+
+/**
+ * A stored value, read back from the hex the definer was forced to hand over.
+ *
+ * The key lives in the API and not in Postgres, so `data_export` can only carry ciphertext (its
+ * own comment says so). This is the one place the plain value appears, in the bundle a data subject
+ * is owed — never in a response body, a log line or an audit row. `null` means the column is empty;
+ * `undefined` means the bytes did not decrypt with this deployment's key, which the README states
+ * rather than hides, because a blank cell in a copy is exactly the thing a supervisory authority
+ * asks about.
+ */
+function readPlain(hex: unknown): string | null | undefined {
+  if (hex === null || hex === undefined) return null;
+  const s = String(hex);
+  if (!/^[0-9a-f]{8,}$/i.test(s)) return undefined;
+  try {
+    return decryptField(Buffer.from(s, "hex"));
+  } catch {
+    return undefined;
+  }
+}
+
+/** A section's rows with every `*_hex` column replaced by the value it hides, under the name a
+ *  subject reads. An unknown `*_hex` key is kept and counted as unread rather than dropped: the
+ *  manifest would otherwise claim a field the bundle never carried. */
+function plainRows(rows: Record<string, unknown>[], unread: string[]) {
+  return rows.map((row) => {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) {
+      const plainName = HEX_PLAIN_NAMES[key as keyof typeof HEX_PLAIN_NAMES];
+      if (!plainName) {
+        if (key.endsWith("_hex")) unread.push(key);
+        out[key] = value;
+        continue;
+      }
+      const plain = readPlain(value);
+      if (plain === undefined) unread.push(key);
+      out[plainName] = plain ?? null;
+    }
+    return out;
+  });
+}
+
+/** Header order a sheet is written in: the union of the keys, in the order they first appear. */
+function keysOf(rows: Record<string, unknown>[]): string[] {
+  const seen = new Set<string>();
+  for (const r of rows) for (const k of Object.keys(r)) seen.add(k);
+  return [...seen];
+}
+
+/** A folder name out of a label a person typed into a migration. Anything that is not a letter or
+ *  a digit is a dash, so an entry name cannot carry `../` into the archive (`safeEntryPath` in
+ *  113's writer refuses those, and a name that never needed refusing is better). */
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
 function csvCell(v: unknown): string {
   if (v === null || v === undefined) return "";
   let s = v instanceof Date ? v.toISOString() : String(v);
@@ -565,12 +687,18 @@ function csvCell(v: unknown): string {
   return `"${s.replace(/"/g, '""')}"`;
 }
 
+/** A column name is this file's own word, not a value somebody typed, so it is written bare: a
+ *  quoted header is what makes a spreadsheet show `"ref"` in the first row and a script looking for
+ *  a column named `ref` find nothing. A name that does carry a comma or a quote still gets the cell
+ *  treatment, because at that point it is not a name. */
+const csvHead = (h: string) => (/[",\r\n]/.test(h) ? csvCell(h) : h);
+
 const csv = (head: string[], rows: Record<string, unknown>[]): string => [
-  head.map(csvCell).join(","),
+  head.map(csvHead).join(","),
   ...rows.map((r) => head.map((h) => csvCell(r[h])).join(","))
 ].join("\r\n");
 
-const REGISTERS = ["accounts", "checks", "notes", "tags", "claims"] as const;
+const REGISTERS = ["accounts", "checks", "notes", "tags", "claims", "requests"] as const;
 
 /** The board walks the definer a page at a time, so an export carries the whole filtered queue and
  *  not the twenty-five rows a screen asked for. Params: register, search, tin|null, status|null,
@@ -587,6 +715,116 @@ async function boardRows(tenant: string, search: string | null, tin: string | nu
     if (page.length < 100) break;
   }
   return out;
+}
+
+/** The data-request board, walked a page at a time for the same reason as the one above: a clerk
+ *  who exports the register wants every ask the office is holding, not the thirty on the screen.
+ *  Params: register, status|null|'all', kind|null|'all', search|null. */
+async function requestRows(tenant: string, status: string | null, kind: string | null,
+  search: string | null) {
+  const out: Record<string, unknown>[] = [];
+  for (let offset = 0; offset < 2000; offset += 100) {
+    const { rows } = await pool.query(DATA_REQUESTS_SQL,
+      [tenant, status, kind, search, 100, offset]);
+    const page = (rows[0]?.b?.rows ?? []) as Record<string, unknown>[];
+    out.push(...page);
+    if (page.length < 100) break;
+  }
+  return out;
+}
+
+/** 129's two definers record the device the ask was made from, the same column 121 caps at 300
+ *  characters. It is a header, so it is capped here rather than trusted. */
+const uaOf = (req: any) => String(req.headers?.["user-agent"] ?? "").slice(0, 300) || null;
+
+/**
+ * The one file in the copy that needs no software to read.
+ *
+ * Article 15 asks for a structured, machine-readable copy, and the CSV and JSON beside it are that.
+ * Seventeen sheets are not an answer to the person who asked "what do you hold on me", so the README
+ * states the request the archive answers, the minute the bytes were taken, what each part holds and
+ * every cap the register applied — read out of the manifest rather than the definer's sections, so
+ * the counts a person sees here cannot disagree with the files they are checking them against.
+ */
+function dataCopyReadme(
+  e: Record<string, any>, manifest: Record<string, unknown>[],
+  unread: string[], generatedAt: Date): string {
+  const req = (e.request ?? {}) as Record<string, any>;
+  const company = (e.company ?? {}) as Record<string, any>;
+  const cap = Number(e.cap ?? 0);
+  const when = generatedAt.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  const rows = manifest as { key: string; label: string; held: number; rows_written: number;
+    truncated: boolean; withheld: string | null; csv: string; json: string }[];
+  const lines: string[] = [
+    "Waisha — a copy of the data held about this account",
+    "".padEnd(52, "="),
+    "",
+    `Copy made          ${when}`,
+    `Request            ${req.ref ?? "—"}`,
+    `Account            ${company.name ?? "—"}${company.type ? ` (${company.type})` : ""}`,
+    `Account ID         ${company.id ?? "—"}`,
+    company.closed_at
+      ? `Account closed     ${String(company.closed_at).slice(0, 16).replace("T", " ")} UTC`
+      : "Account closed     not closed — this copy is of a live account",
+    `Raised             ${req.raised_at ? String(req.raised_at).slice(0, 16).replace("T", " ") + " UTC" : "—"} by ${req.raised_by ?? "the office"}`,
+    `Asked in           ${req.asked_in ?? "the office did not record how the ask arrived"}`,
+    `Reason on the file ${req.reason ?? "—"}`,
+    "",
+    "HOW THIS ARCHIVE IS PUT TOGETHER",
+    "".padEnd(34, "-"),
+    "Every part of the copy is here twice: a .csv that opens in a spreadsheet and a .json that",
+    "carries the same rows exactly as the register answered them. Both are under sections/.",
+    "Nothing was chosen out of the answer. Where a part could not be carried whole, the line",
+    "below says so and gives the number the register actually holds.",
+    // The ceiling is the definer's own, carried out with the rows — a README that promised a cap
+    // the SQL does not apply would be a document lying about the copy.
+    ...(cap > 0 ? [
+      `No part of this copy carries more than ${cap} rows. Where the register holds more than`,
+      `that, the line below says "cut at ${cap}" and gives the number actually held, and the`,
+      "remainder is still on the register — ask for it by the request number above."
+    ] : []),
+    "",
+    `WHAT IS IN IT (${rows.length} parts)`,
+    "".padEnd(24, "-")
+  ];
+  rows.forEach((s, i) => {
+    const held = Number(s.held ?? 0);
+    const written = Number(s.rows_written ?? 0);
+    const state = s.truncated
+      ? `${written} of ${held} rows (cut at ${cap})`
+      : held === written ? `${written} row${written === 1 ? "" : "s"}`
+        : `${written} of ${held} rows`;
+    lines.push(`${String(i + 1).padStart(2, " ")}. ${s.label} — ${state}`);
+    if (s.withheld) lines.push(`    Held back: ${String(s.withheld).replace(/\s+/g, " ").trim()}`);
+    if (held === 0) lines.push("    Nothing on this register for this part.");
+  });
+
+  lines.push("", "ENCRYPTED VALUES", "".padEnd(16, "-"));
+  if (unread.length === 0) {
+    lines.push("The account's TIN, the phone numbers, the NIDA numbers and the identity numbers on");
+    lines.push("the office's checks are stored encrypted. They are opened here, in plain text, and");
+    lines.push("written into the sheets under those names.");
+  } else {
+    lines.push("These columns were handed to the copy still encrypted and could not be opened with");
+    lines.push(`this deployment's key: ${[...new Set(unread)].join(", ")}. Their cells are empty.`);
+    lines.push("Say so to the office and quote the request number above — an empty cell in a copy");
+    lines.push("is a thing that has to be answered, not a gap to be quietly accepted.");
+  }
+
+  lines.push("", "CHECKING THIS COPY", "".padEnd(16, "-"));
+  lines.push("manifest.json   every part, its row count, its cap and what it withheld.");
+  lines.push("SHA256SUMS.txt  the checksum of every file above. From inside the unzipped archive:");
+  lines.push("                  sha256sum -c SHA256SUMS.txt");
+  lines.push("The platform keeps the SHA-256 of this whole archive against the request number, so");
+  lines.push("a copy produced later can be proved to be — or not be — the one handed over now.");
+
+  lines.push("", "IF SOMETHING IS MISSING OR WRONG", "".padEnd(29, "-"));
+  lines.push("Quote the request number above to the office. Rectification is Article 16 and needs no");
+  lines.push("form. Erasure is Article 17: it is raised as its own request on this register, it names");
+  lines.push("the categories it reaches, and inside the platform a second person has to sign it");
+  lines.push("before any value is masked. Refusing an ask is also written on the register, with the");
+  lines.push("reason, so the answer a caller was given can be read back later.");
+  return lines.join("\n") + "\n";
 }
 
 /** A trust number flattened enough for a spreadsheet: the score, the band and the factors as one
@@ -1428,8 +1666,379 @@ export async function controlCustomersRoutes(app: FastifyInstance, _opts: unknow
   });
 
   // ============================================================
-  // the CSV every tab is asked to carry
+  // the data-request register (129) — the copy and the erasure
   // ============================================================
+  //
+  // A data subject rang, wrote, or walked in with a letter, and the office has to answer with a
+  // document rather than a opinion. 129 keeps the register and does the two hard things in SQL: it
+  // reads the copy (`data_export`) and it runs the mask (`apply_data_erasure`). What is here is the
+  // desk around that — the duty, the limiter, the sentence, and the streaming of 17 sections onto a
+  // socket without holding them in memory twice.
+  //
+  // Three rules this tab keeps:
+  //
+  // **The handler adds no check the register already makes.** Whether the account is closed,
+  // whether an erasure named something, whether a copy carries a category list, whether a paper is
+  // already open, whether a signature is spent or lapsed or signed by the seat holding it — all of
+  // it is a definer's answer or a trigger's sentence, and each one goes out in the register's own
+  // words (409, or 404 when the row simply is not there). A route that re-tested "is the account
+  // closed" would be a second opinion nobody asked for, and the first one to drift.
+  //
+  // **A copy leaves as bytes, and the bytes are hashed on the way out.** `data_export` hands back
+  // ciphertext hex for every encrypted column because the key is not in the database, so this route
+  // is the one place a plain TIN, phone or NIDA is written — into the archive the subject is owed,
+  // never into a response body, a log or an audit row. The bundle's SHA-256 is of the whole ZIP as
+  // it left the socket, and it is stamped only once every byte has been handed over — a download the
+  // caller closed halfway is not a copy anybody received — but before the response closes, so the
+  // desk that watches its own file land reads a hand-over and not a register one step behind.
+  //
+  // **An erasure is not this desk's act.** `erase-signature` writes a proposal and a hash and stops.
+  // The mask runs from `/control/approvals`, in the transaction that spends a signature a *different*
+  // seat gave, and 121's register is what refuses the one who asked. That is why this file has no
+  // `apply_data_erasure` statement at all.
+
+  /** Refusing an ask is the answer to the paper it is written on: the seat that may raise an
+   *  erasure is the seat that may say no to one, and the same for a copy. */
+  const dutyForKind = (kind: string) => (kind === "erase" ? ERASE : GDPR);
+
+  /** The paper, read through the definer, because a route may not decide what a register row is
+   *  from a body it was handed. Params: request. */
+  const dataRequest = async (id: string) => {
+    const { rows } = await pool.query(DATA_REQUEST_SQL, [id]);
+    const d = rows[0]?.d;
+    if (!d || d.status === "not_found") {
+      // The definer's `not_found` is the only answer it gives for an id it cannot see, so the
+      // sentence has to hold both causes a clerk can be standing in: a number that was mistyped,
+      // and a number the office never wrote down. It must not claim the paper is another desk's —
+      // the register is platform-wide, and a wrong accusation is worse than a bare 404.
+      throw new ApiError("NOT_FOUND",
+        `No data request ${String(d?.request ?? id).slice(0, 8)} — this register has never raised `
+        + "a paper under that number.", 404);
+    }
+    return d as Record<string, any>;
+  };
+
+  /** Params: register, status|null, kind|null, search|null, limit, offset. */
+  app.get("/control/customers/data-requests", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, GDPR);
+    await enforceRateLimit(`customers-data-requests:${req.control.user_id}`, 120, 60);
+    const q = z.object({
+      status: z.enum([...REQUEST_STATUSES, "all"]).optional(),
+      kind: z.enum([...DATA_REQUEST_KINDS, "all"]).optional(),
+      search: SEARCH, limit: LIMIT, offset: OFFSET
+    }).parse(req.query ?? {});
+    const { rows } = await pool.query(DATA_REQUESTS_SQL, [
+      tenantOf(req), q.status && q.status !== "all" ? q.status : null,
+      q.kind && q.kind !== "all" ? q.kind : null, q.search || null, q.limit, q.offset]);
+    const b = rows[0]?.b ?? { rows: [], counts: {} };
+    return { ...b, clock: new Date().toISOString() };
+  });
+
+  /**
+   * One paper, whole.
+   *
+   * The detail is what a second seat reads before signing and what the desk reads back after a
+   * download: the categories, the reason the caller gave, who raised it, the hash the signature is
+   * against, the rows the mask reached and the twelve keeps entries that say what it did not. All of
+   * it is one definer's read, so the counters beside the numbers are the ones on the board.
+   */
+  app.get("/control/customers/data-requests/:id", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, GDPR);
+    await enforceRateLimit(`customers-data-request:${req.control.user_id}`, 120, 60);
+    return await dataRequest(uuidOf(req.params.id, "data request"));
+  });
+
+  /**
+   * What a request would touch, before anybody raises it.
+   *
+   * `data_request_preview` answers the same two questions the mask will ask — what is there, and
+   * what stays — out of the live registers, in the words the row itself will carry. A desk raises an
+   * erasure from this screen and not from a description of one, which is the reason the counts come
+   * from SQL rather than from a list of tables in the page. Reading it costs `gdpr` and nothing
+   * else: a preview writes no row, promises nothing, and the seat that will sign a paper has to be
+   * able to see it.
+   */
+  app.get("/control/customers/:id/data-preview", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, GDPR);
+    await enforceRateLimit(`customers-data-preview:${req.control.user_id}`, 120, 60);
+    const company = uuidOf(req.params.id, "account");
+    const q = z.object({ kind: z.enum(DATA_REQUEST_KINDS) }).parse(req.query ?? {});
+    const { rows } = await pool.query(DATA_PREVIEW_SQL, [company, q.kind]);
+    const p = rows[0]?.p;
+    const refusal = definerRefusal(p);
+    if (refusal) throw refusal;
+    return p;
+  });
+
+  /**
+   * Raise the ask.
+   *
+   * One route for both kinds, because the register is one table and the difference between a copy
+   * and an erasure is a CHECK and a duty rather than two code paths. The definer answers with the
+   * row *and* the preview of it, so the desk that raised the paper is looking at the same counts the
+   * second seat will be asked to sign — no page of its own arithmetic in between.
+   *
+   * That preview is why an erasure costs both duties rather than only `erase`: a paper about a mask
+   * carries the counts of what the mask reaches, and a seat that may not read the register may not
+   * be handed them. 129 seeds the pair onto the same two roles, so nothing in the office is narrowed
+   * by the rule — it is only unable to raise a paper it cannot see.
+   */
+  app.post("/control/customers/:id/data-requests", { preHandler: [requireControl] },
+    async (req: any, reply) => {
+      const body = z.object({
+        kind: z.enum(DATA_REQUEST_KINDS),
+        categories: z.array(z.enum(CATEGORIES)).max(CATEGORIES.length).optional(),
+        reason: SENTENCE,
+        askedIn: z.string().trim().min(3).max(80).optional()
+      }).strict().parse(req.body);
+      await requireControlPermission(req, GDPR);
+      if (body.kind === "erase") await requireControlPermission(req, ERASE);
+      await enforceRateLimit(`customers-data-raise:${req.control.user_id}`, 12, 3600);
+      const company = uuidOf(req.params.id, "account");
+      const tenant = tenantOf(req);
+      // A copy that arrived with a menu is the desk asking to withhold part of an Article 15
+      // answer. The register refuses it (129's own sentence), and a body that cannot even name the
+      // words is a client bug, so that half is caught here where it can be answered with a list.
+      const seen = new Set(body.categories ?? []);
+      for (const c of seen) {
+        if (!CATEGORIES.includes(c as DataCategory)) {
+          throw new ApiError("VALIDATION_FAILED",
+            `Nothing on this register erases "${c}". The categories are: ${CATEGORIES.join(", ")}.`,
+            400, [{ field: "categories" }]);
+        }
+      }
+      let made;
+      try {
+        made = await pool.query(RAISE_REQUEST_SQL, [
+          tenant, company, body.kind, [...seen], body.reason, body.askedIn ?? null,
+          req.control.user_id, role(req), req.ip]);
+      } catch (e) {
+        throw guardRefusal(e, "The register refused that request.",
+          "That account already has an open request of this kind. Hand the copy over, erase it, or "
+          + "refuse it before raising another.") ?? e;
+      }
+      const j = made.rows[0]?.j;
+      const refusal = definerRefusal(j);
+      if (refusal) throw refusal;
+      return reply.code(201).send(j);
+    });
+
+  /**
+   * Say no, with the reason the caller will be quoted.
+   *
+   * A refusal is not a delete: the row stays, the register keeps the note, and the open slot is
+   * freed so the office can answer the same person properly next month. An erasure paper with a
+   * signature still waiting on it is answered first — 126's order for a refund paper, kept because
+   * the failure it prevents is the same one: a desk refusing a paper while a colleague's "yes" is
+   * still open on the board.
+   *
+   * Both duties again, in this order: the paper is read through the register's own door, so the
+   * read duty is asked for before anything is fetched rather than after a row is already in hand.
+   */
+  app.post("/control/customers/data-requests/:id/refuse", { preHandler: [requireControl] },
+    async (req: any) => {
+      const id = uuidOf(req.params.id, "data request");
+      await requireControlPermission(req, GDPR);
+      const before = await dataRequest(id);
+      await requireControlPermission(req, dutyForKind(String(before.kind)));
+      await enforceRateLimit(`customers-data-refuse:${req.control.user_id}`, 12, 3600);
+      const body = z.object({ note: SENTENCE }).strict().parse(req.body);
+      const { rows } = await pool.query(REFUSE_REQUEST_SQL,
+        [id, body.note, req.control.user_id, role(req), req.ip, uaOf(req)]);
+      const j = rows[0]?.j;
+      const refusal = definerRefusal(j);
+      if (refusal) throw refusal;
+      return { ...j, company_name: before.company?.name ?? null };
+    });
+
+  /**
+   * Ask a second seat to sign the erasure.
+   *
+   * This is the whole of what this desk may do with an erasure. `propose_data_erasure` reads the
+   * account, the categories and the closed date out of the row, hashes what it read, and writes a
+   * `customer.erase` proposal against that hash — so the bytes the second seat signs are provably
+   * this paper, and the mask that runs later re-checks the hash before it touches a column. The
+   * paper moves to `pending_signature` and nothing else happens until somebody who is not the
+   * proposer presses approve on `/control/approvals`.
+   */
+  app.post("/control/customers/data-requests/:id/erase-signature",
+    { preHandler: [requireControl] }, async (req: any, reply) => {
+      const id = uuidOf(req.params.id, "data request");
+      await requireControlPermission(req, GDPR);
+      const before = await dataRequest(id);
+      await requireControlPermission(req, ERASE);
+      await enforceRateLimit(`customers-data-propose:${req.control.user_id}`, 12, 3600);
+      if (before.kind !== "erase") {
+        throw new ApiError("VALIDATION_FAILED",
+          `${before.ref} is a copy, and a copy asks for no signature — it hands over what the `
+          + "registers already hold. An erasure is raised as its own request.", 400,
+          [{ field: "kind" }]);
+      }
+      const body = z.object({ reason: SENTENCE }).strict().parse(req.body);
+      const { rows } = await pool.query(PROPOSE_ERASURE_SQL,
+        [id, body.reason, req.control.user_id, role(req), req.ip, uaOf(req)]);
+      const j = rows[0]?.j;
+      const refusal = definerRefusal(j);
+      if (refusal) throw refusal;
+      return reply.code(201).send({ ...j, reason: body.reason,
+        categories: before.categories ?? [], company_name: before.company?.name ?? null });
+    });
+
+  /**
+   * Hand the copy over.
+   *
+   * Seventeen sections, one folder each as CSV and as JSON, a README a person can read without
+   * software, a manifest that states every cap and every withheld field, and a checksum list. The
+   * archive is written onto the socket as it is assembled — the same reason 113's batch export
+   * streams: a company with four hundred sign-ins and four hundred cargo files is not a Buffer.
+   *
+   * Two things make this a write rather than a download. The row is stamped with the SHA-256 of the
+   * bytes that actually left, the first time only (so a re-download cannot move the evidence of what
+   * the subject was handed), and the register counts every hand-over. Both happen after the socket
+   * closes, because a download the caller abandoned half way is not a copy anybody received.
+   */
+  app.post("/control/customers/data-requests/:id/bundle",
+    { preHandler: [requireControl] }, async (req: any, reply) => {
+      await requireControlPermission(req, GDPR);
+      await enforceRateLimit(`customers-data-bundle:${req.control.user_id}`, 6, 3600);
+      const id = uuidOf(req.params.id, "data request");
+      const tenant = tenantOf(req);
+
+      // Everything that can still be answered with a status code is answered here, before a byte
+      // of the archive exists: a half-written download is worse than a refusal, and the definer's
+      // own `refused` / `not an export` sentences are the desk's answer.
+      const read = await pool.query(DATA_EXPORT_SQL, [id, tenant]);
+      const e = read.rows[0]?.e;
+      const refusal = definerRefusal(e);
+      if (refusal) throw refusal;
+
+      const sections = (e.sections ?? []) as CopySection[];
+      const ref = String(e.request?.ref ?? id);
+      const generatedAt = new Date();
+      const unread: string[] = [];
+
+      reply.hijack();
+      const res: ServerResponse = reply.raw;
+      const headers: Record<string, string> = {
+        "Content-Type": "application/zip",
+        "Content-Disposition": `attachment; filename="data-copy-${ref.replace(/[^A-Za-z0-9-]/g, "")}.zip"`,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff"
+      };
+      for (const [key, value] of Object.entries(reply.getHeaders())) {
+        if (/^access-control-/i.test(key) && value !== undefined) headers[key] = String(value);
+      }
+      res.writeHead(200, headers);
+
+      const zip = new ZipWriter();
+      const digest = createHash("sha256");
+      const manifest: Record<string, unknown>[] = [];
+      /** The checksum of every file that actually left, under the name it was filed. A subject is
+       *  told to run `sha256sum -c` against this list, so a list of the manifest rows' JSON would be
+       *  a verification step that verifies nothing — and an entry abandoned half way through an
+       *  aborted download is not in it, because that file is not in the archive either. */
+      const sums: { name: string; sha: string }[] = [];
+      let aborted = false;
+      let failure: string | null = null;
+      const stop = new AbortController();
+      res.on("close", () => { if (!res.writableEnded) { aborted = true; stop.abort(); } });
+
+      const put = async (name: string, data: Buffer) => {
+        if (aborted) return name;
+        const entry = zip.add(name, data);
+        for (const chunk of entry.chunks) {
+          if (aborted || res.writableEnded) return entry.name;
+          digest.update(chunk);
+          if (!res.write(chunk)) await once(res, "drain", { signal: stop.signal }).catch(() => {});
+        }
+        sums.push({ name: entry.name, sha: createHash("sha256").update(data).digest("hex") });
+        return entry.name;
+      };
+
+      try {
+        for (let i = 0; i < sections.length; i++) {
+          if (aborted) break;
+          const s = sections[i];
+          const rows = plainRows(s.rows ?? [], unread);
+          const head = keysOf(rows);
+          const stem = `sections/${String(i + 1).padStart(2, "0")}-${slug(s.key)}`;
+          const csvName = await put(`${stem}.csv`,
+            Buffer.from(csv(head, rows), "utf8"));
+          const jsonName = await put(`${stem}.json`,
+            Buffer.from(JSON.stringify({ key: s.key, label: s.label ?? s.key,
+              held: s.held ?? rows.length, truncated: s.truncated === true,
+              withheld: s.withheld ?? null, rows }, null, 2), "utf8"));
+          manifest.push({ key: s.key, label: s.label ?? s.key, held: s.held ?? rows.length,
+            rows_written: rows.length, truncated: s.truncated === true,
+            withheld: s.withheld ?? null, csv: csvName, json: jsonName });
+        }
+
+        const readme = dataCopyReadme(e, manifest, unread, generatedAt);
+        const readmeName = await put("README.txt", Buffer.from(readme, "utf8"));
+        await put("manifest.json", Buffer.from(JSON.stringify({
+          request: e.request, company: e.company, cap: e.cap ?? null, generated_at: generatedAt,
+          sections: manifest, encrypted_values_unread: [...new Set(unread)],
+          readme: readmeName, checksums: "SHA256SUMS.txt"
+        }, null, 2), "utf8"));
+        // Written last, because an archive cannot carry the checksum of its own checksum list.
+        await put("SHA256SUMS.txt",
+          Buffer.from(sums.map((s) => `${s.sha}  ${s.name}`).join("\n") + "\n", "utf8"));
+
+        for (const chunk of zip.finish()) {
+          if (aborted || res.writableEnded) break;
+          digest.update(chunk);
+          if (!res.write(chunk)) await once(res, "drain", { signal: stop.signal }).catch(() => {});
+        }
+      } catch (err: any) {
+        failure = String(err?.message ?? err).slice(0, 300);
+        req.log.error({ err }, "data copy failed");
+      }
+
+      if (!res.writableEnded) {
+        // The stamp goes on the row *before* the response is closed. Every byte has already been
+        // handed to the socket, so a download the caller abandoned still records nothing — but a
+        // desk that reloads the paper the moment the file lands reads a hand-over rather than a
+        // register that has never heard of it. Stamping after `end()` made the register one read
+        // behind its own download, which is exactly the window a clerk stands in.
+        let stamp: Record<string, any> | null = null;
+        const archiveSha = digest.digest("hex");
+        if (!aborted && !failure) {
+          try {
+            const r = await pool.query(STAMP_DELIVERY_SQL, [
+              id, req.control.user_id, role(req), req.ip, archiveSha,
+              BigInt(zip.bytesWritten), zip.entryCount]);
+            stamp = (r.rows[0]?.j ?? null) as Record<string, any> | null;
+          } catch (err: any) {
+            req.log.error({ err }, "data copy stamp failed");
+          }
+        }
+        const delivered = stamp?.status === "ok";
+        if (!delivered) {
+          // The definer writes the register's own audit row when it stamps a hand-over. This is the
+          // other case — an incomplete one, which is exactly the act a later question about the copy
+          // would need a record of, and the reason the branch exists rather than a second row always.
+          try {
+            await withTenant(tenant, (c) => writeAudit(c, {
+              tenantId: tenant, actorUserId: req.control.user_id, actorRole: role(req),
+              ip: req.ip, userAgent: req.headers["user-agent"] ?? null, requestId: req.requestId,
+              entity: "customer_data_requests", entityId: id,
+              action: "control.customers.data_bundle_incomplete",
+              before: { ref, status: e.request?.status ?? null },
+              after: { ref, sections: manifest.length, entries: zip.entryCount,
+                bytes: zip.bytesWritten, aborted, failure, sha256: archiveSha,
+                stamp: stamp?.message ?? stamp?.status ?? null,
+                company_name: e.company?.name ?? null }
+            }));
+          } catch (err: any) {
+            req.log.error({ err }, "data copy audit failed");
+          }
+        }
+        req.log.info({ request: id, sections: manifest.length, entries: zip.entryCount,
+          bytes: zip.bytesWritten, aborted, failure, delivered }, "data copy streamed");
+        res.end();
+      }
+    });
+
 
   app.get("/control/customers/export", { preHandler: [requireControl] }, async (req: any, reply) => {
     await requireControlPermission(req, VIEW);
@@ -1452,7 +2061,9 @@ export async function controlCustomersRoutes(app: FastifyInstance, _opts: unknow
       checks: [...CHECK_STATES, "open"], notes: ["live", "withdrawn"], tags: ["live", "retired"],
       // The two words the claim register itself uses, so a filter that reads like the table's own
       // `status` column cannot quietly mean something else in the file.
-      claims: ["declared", "voided"]
+      claims: ["declared", "voided"],
+      // 129's five words, taken from the same vocabulary the board filters on.
+      requests: [...REQUEST_STATUSES]
     };
     const state = !q.status || q.status === "all" ? null : q.status;
     if (state && !STATES[q.register].includes(state)) {
@@ -1461,7 +2072,15 @@ export async function controlCustomersRoutes(app: FastifyInstance, _opts: unknow
         [{ field: "status" }]);
     }
     const kind = !q.kind || q.kind === "all" ? null : q.kind;
-    if (kind && !CHECK_KINDS.includes(kind as CheckKind)) {
+    // Two registers carry a `kind`, and they do not share a word list: a check is a licence or an
+    // ID, a data request is a copy or an erasure. Asking the checks register for `export` would
+    // otherwise be an empty file, which 126 already learned is a lie a desk believes.
+    if (kind && q.register === "requests" && !DATA_REQUEST_KINDS.includes(kind as DataRequestKind)) {
+      throw new ApiError("VALIDATION_FAILED",
+        `No data request is of the kind "${kind}". The register has: ${DATA_REQUEST_KINDS.join(", ")}.`,
+        400, [{ field: "kind" }]);
+    }
+    if (kind && q.register !== "requests" && !CHECK_KINDS.includes(kind as CheckKind)) {
       throw new ApiError("VALIDATION_FAILED",
         `No check is of the kind "${kind}". The register has: ${CHECK_KINDS.join(", ")}.`, 400,
         [{ field: "kind" }]);
@@ -1496,13 +2115,27 @@ export async function controlCustomersRoutes(app: FastifyInstance, _opts: unknow
         "removed_by_name", "removed_at"];
       rows = (await withTenant(tenant,
         (c) => c.query(TAG_EXPORT_SQL, [tenant, state, q.search || null]))).rows;
-    } else {
+    } else if (q.register === "claims") {
       // A claim is a sentence about two accounts, so the file carries both names and the day the
       // extra one was shut — the three things a desk needs to check the claim still holds.
       head = ["survivor_name", "loser_name", "loser_closed_at", "status", "reason",
         "carried_kinds", "raised_name", "raised_at", "voided_name", "voided_at", "void_reason"];
       rows = (await withTenant(tenant,
         (c) => c.query(CLAIM_EXPORT_SQL, [tenant, state, q.search || null]))).rows;
+    } else {
+      // The data-request register, walked a page at a time out of the board definer. `kept` and
+      // `erased_rows` are the two columns a supervisory question is actually about — what the mask
+      // reached, and what it was told to leave — so both are flattened rather than dropped, and the
+      // bundle's SHA is carried so a copy produced later can be compared with the one handed over.
+      head = ["ref", "kind", "request_status", "company_name", "company_closed_at", "categories",
+        "asked_in", "reason", "raised_name", "raised_at", "approval_status", "signed_name",
+        "payload_sha256", "delivered_at", "deliveries", "bundle_sha256", "bundle_bytes",
+        "erased_at", "erased_name", "erased_rows", "kept", "refused_at", "refused_note"];
+      rows = (await requestRows(tenant, state, kind, q.search || null)).map((r) => ({
+        ...r,
+        categories: ((r.categories as string[] | null) ?? []).join(" "),
+        erased_rows: pairsCell(r.erased_rows), kept: keepsCell(r.kept)
+      }));
     }
     // The account export is the one register whose rows are read through a definer rather than a
     // statement of their own, and the board's own filters are the desk's; nothing here re-counts.

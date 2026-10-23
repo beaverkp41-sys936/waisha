@@ -43,15 +43,17 @@ export const DECIDE = "control.approvals.decide";
 /** Raising a proposal costs the duty the act itself would have cost. */
 const TENANTS_MANAGE = "control.tenants.manage";
 const REFUND_MANAGE = "control.payments.manage";
+const CUSTOMERS_ERASE = "control.customers.erase";
 
 /**
  * What can be signed, and what signing it does.
  *
  * A kind with no apply path here would be a signature that can never be spent, so the
  * registry is deliberately exhaustive: every entry names the effect its released signature
- * buys. Two effects exist today because the platform has two kinds of thing the rule covers
- * — a company's access, and money going back out — and a third kind joins by naming its own
- * definer rather than by restating the transaction below.
+ * buys. Three effects exist today because the platform has three kinds of thing the rule
+ * covers — a company's access, money going back out, and a person's data leaving the
+ * registers — and a fourth joins by naming its own definer rather than by restating the
+ * transaction below.
  *
  * `proposable` is the one field the desk cannot ignore. A refund paper's payload is the
  * figure and the call it belongs to, and those are read out of the row by
@@ -64,7 +66,7 @@ export interface ApprovalKind {
   /** Which duty the proposing seat must hold. */
   proposeDuty: string;
   /** What a released signature is spent on. */
-  effect: "tenant_action" | "refund_release";
+  effect: "tenant_action" | "refund_release" | "data_erasure";
   /** The `tenant_actions` verb a ban releases into. */
   tenantAction?: "block" | "close";
   /** Whether this desk may raise it at all. */
@@ -88,6 +90,14 @@ export const KINDS: Record<string, ApprovalKind> = {
   "service.refund": {
     action: "service.refund", label: "Release a refund to a caller",
     proposeDuty: REFUND_MANAGE, effect: "refund_release", proposable: false
+  },
+  // Raised from the Customers desk against one erasure paper (129): `propose_data_erasure`
+  // reads the account, its closed date and the category list out of the row and hashes what
+  // it read. The mask is the whole of the effect — a personal data erasure is not a state a
+  // caller is emailed about, so the notice stays on the ban branch with the mail provider.
+  "customer.erase": {
+    action: "customer.erase", label: "Erase an account's personal data",
+    proposeDuty: CUSTOMERS_ERASE, effect: "data_erasure", proposable: false
   }
 };
 
@@ -116,6 +126,9 @@ export const SETTLE_SQL = "select platform_auth.settle_approval($1,$2::jsonb) as
 /** Params: approval, actor, role, ip. 126's refund effect, read out of the paper's own row. */
 export const REFUND_APPLY_SQL =
   "select platform_auth.apply_refund_release($1,$2,$3,$4) as r";
+/** Params: approval, actor, role, ip. 129's mask, which re-reads the categories off the payload. */
+export const ERASE_APPLY_SQL =
+  "select platform_auth.apply_data_erasure($1,$2,$3,$4) as r";
 /** Params: status, action, search, limit, offset. */
 export const BOARD_SQL = "select platform_auth.approvals_board($1,$2,$3,$4,$5) as b";
 /** Params: id. */
@@ -247,15 +260,16 @@ export async function reject(req: any, id: string, note: string) {
  * proposer beside them. The trigger reads that pair and lets the row through only if a
  * real, matching, second-seat proposal stands behind it.
  *
- * The two effects share the order and nothing else after it. A refund paper is finished
- * inside the transaction — the row itself is the receipt, and there is no caller to email
- * about a signature — so the notice, its cached gate clearing and its delivery receipt all
- * stay on the ban branch, where 078 put them for the reason that still holds: a mail
- * provider that is down must never leave a company two people agreed to shut still trading.
+ * The effects share the order and nothing else after it. A refund paper and an erasure are both
+ * finished inside the transaction — the row itself is the receipt, and there is no caller to email
+ * about a signature — so the notice, its cached gate clearing and its delivery receipt all stay on
+ * the ban branch, where 078 put them for the reason that still holds: a mail provider that is down
+ * must never leave a company two people agreed to shut still trading.
  */
 type Spent =
-  | { kind: ApprovalKind; tenant: AppliedAction; refund?: undefined }
-  | { kind: ApprovalKind; tenant?: undefined; refund: Record<string, unknown> };
+  | { kind: ApprovalKind; tenant: AppliedAction; refund?: undefined; erasure?: undefined }
+  | { kind: ApprovalKind; tenant?: undefined; refund: Record<string, unknown>; erasure?: undefined }
+  | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure: Record<string, unknown> };
 
 export async function releaseAndApply(req: any, id: string, note: string) {
   const a = actor(req);
@@ -292,6 +306,26 @@ export async function releaseAndApply(req: any, id: string, note: string) {
           request_status: eff.request_status, released_by: eff.released_by
         })]);
         return { kind, refund: eff };
+      }
+
+      if (kind.effect === "data_erasure") {
+        const res = await run(c, ERASE_APPLY_SQL, [id, a.id, a.role, a.ip]);
+        const eff = res.r as (Record<string, any> | undefined);
+        if (!eff) throw new ApiError("UPSTREAM_ERROR", "The erasure could not be recorded.", 502);
+        // The mask re-reads the payload hash, the account's closed date and the paper's own state
+        // before it touches a column. Any "no" from it rolls the whole thing back: a signature that
+        // erased nothing must not be recorded as one that did.
+        if (eff.status !== "ok") {
+          throw new ApiError(eff.status === "not_found" ? "NOT_FOUND" : "CONFLICT",
+            eff.message ?? "The paper changed under this signature. Nothing was erased.",
+            eff.status === "not_found" ? 404 : 409);
+        }
+        await run(c, SETTLE_SQL, [id, JSON.stringify({
+          request_id: eff.request_id, ref: eff.ref, company_tenant_id: eff.company_tenant_id,
+          categories: eff.categories, reached: eff.reached, kept: eff.kept,
+          request_status: eff.request_status, erased_by: eff.erased_by
+        })]);
+        return { kind, erasure: eff };
       }
 
       const payload = cl.r.payload as { tenant_id: string; reason_code: string; note: string };
@@ -331,6 +365,11 @@ export async function releaseAndApply(req: any, id: string, note: string) {
 
   if (spent.kind.effect === "refund_release") {
     return { ...spent.refund, approval_id: id };
+  }
+  // The subject of an erasure is not emailed that their data is gone — the register row is the
+  // answer, and the desk that raised the paper reads it back from there.
+  if (spent.kind.effect === "data_erasure") {
+    return { ...spent.erasure, approval_id: id };
   }
 
   const applied = spent.tenant!;
