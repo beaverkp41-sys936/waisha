@@ -14,8 +14,9 @@ import {
 } from "../customers/checks.js";
 
 /**
- * The Customers desk (127; task #342) — who an account is, what the office has looked at, and
- * what all of that is worth at the moment the question is asked.
+ * The Customers desk (127 and 128; task #342) — who an account is, what the office has looked at,
+ * what all of that is worth at the moment the question is asked, and, since 128, what the office
+ * says when two accounts turn out to be one company or somebody else is signed in as you.
  *
  * The office already had three of the six things this module is asked for. A ban and its two
  * signatures are 078's and 121's, on `/control/tenants` and `/control/approvals`; the exit is
@@ -49,6 +50,14 @@ import {
  * be edited, and re-checking an account opens a new line beside the old one rather than replacing
  * it. That is what makes it answerable, which is what a second signature is for.
  *
+ * 128 adds two more acts, and both obey the same rule rather than bending it. A duplicate is
+ * **claimed**, never merged: the trigger will not accept a claim whose extra account is still live,
+ * so the closure that has to come first is 078's two-seat act, and this desk only records what that
+ * act already decided. And a cut-off ends sessions without shutting anybody out of the platform —
+ * the person whose session ended signs in again, and the act that would stop them coming back is
+ * still a block on the tenants desk. Neither needed a second signature: one is downstream of a
+ * closure that had two, and the other is a minute-old answer to "somebody else has my password".
+ *
  * The register is platform-owned, exactly as 101's and 126's are: `req.control.tenant_id` is the
  * office's tenant and the account a line is about sits beside it in `company_tenant_id`. Nothing
  * here reads a caller's phone number or password — an account is found by name, email or TIN.
@@ -57,6 +66,12 @@ import {
 const VIEW = "control.customers.view";
 const VERIFY = "control.customers.verify";
 const MANAGE = "control.customers.manage";
+/** 128's two duties. `merge` is kept apart from `manage` on purpose: the seat that can annotate an
+ *  account is not thereby able to record that two accounts were one, because a claim leans on a
+ *  closure that took two signatures elsewhere. `disconnect` is the cut-off, and the agent who takes
+ *  "somebody else is in my account" must be able to end it without opening a second desk. */
+const MERGE = "control.customers.merge";
+const DISCONNECT = "control.customers.disconnect";
 
 const SENTENCE = z.string().trim().min(8).max(600);
 const NOTE_BODY = z.string().trim().min(4).max(2000);
@@ -68,6 +83,9 @@ const SEARCH = z.string().trim().max(140).optional();
  *  JavaScript Date on the way in. Parsed at noon in the web for the same reason (094). */
 const DAY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "give the day as YYYY-MM-DD");
 const UUID = z.string().uuid();
+/** `?closed=1` asks the picker for the accounts behind their tombstones. A flag rather than a
+ *  boolean because a query string carries neither, and `z.coerce.boolean()` reads "false" as true. */
+const CLOSED = z.enum(["1", "0"]).optional();
 
 function uuidOf(value: unknown, what: string): string {
   const r = UUID.safeParse(value);
@@ -100,8 +118,35 @@ function guardRefusal(err: unknown, fallback: string, clash?: string): ApiError 
     return new ApiError("CONFLICT", fallback, 409);
   }
   const line = raw.split("\n")[0]
-    .replace(/^(customer_verifications|customer_notes|customer_tags|customer_taggings|documents):\s*/i, "");
+    .replace(/^(customer_verifications|customer_notes|customer_tags|customer_taggings|customer_duplicate_claims|documents):\s*/i, "");
   return new ApiError("CONFLICT", line || fallback, 409);
+}
+
+/**
+ * 128's definers answer in the same three shapes — `ok`, `invalid` with a sentence written for the
+ * person at the desk, `not_found` naming which side of a pair (or which claim, or which account)
+ * the register has never seen. Mapping them once here is what keeps five routes from each inventing
+ * its own HTTP code for the same refusal, and a definer's sentence is the only words a clerk acting
+ * on a claim will ever read, so they go out unchanged.
+ */
+function definerRefusal(j: any): ApiError | null {
+  if (!j || typeof j !== "object") return null;
+  if (j.status === "ok") return null;
+  if (j.status === "invalid") {
+    return new ApiError("CONFLICT", String(j.message ?? "The register refused that."), 409);
+  }
+  if (j.status === "not_found") {
+    if (j.side === "survivor" || j.side === "loser") {
+      return new ApiError("NOT_FOUND",
+        `${j.side === "survivor" ? "The account that would carry on" : "The account named as the extra one"} `
+        + `is not one the office has (${String(j.id ?? "").slice(0, 8)}).`, 404);
+    }
+    if (j.claim) return new ApiError("NOT_FOUND", "That claim is not on the register.", 404);
+    return new ApiError("NOT_FOUND",
+      `No account ${String(j.company_id ?? "").slice(0, 8)} on the platform.`, 404);
+  }
+  return new ApiError("CONFLICT",
+    String(j.message ?? "The register gave an answer this desk cannot read."), 409);
 }
 
 /** A reference the desk typed, checked against the kind it belongs to, and cut into the two halves
@@ -145,20 +190,35 @@ const ACCOUNTS_SQL = `
    order by t.created_at desc
    limit 25`;
 
+/** The picker a duplicate claim chooses its extra account from. Params: search.
+ *
+ *  The live list above cannot serve this: a claim's loser is by definition already closed, so a
+ *  clerk told to name the duplicate would be choosing from a list the account is not on. Nothing
+ *  here is per-register — a tombstone is the same tombstone in every desk's eyes — and no check
+ *  count is carried, because the account is shut and 128 refuses a claim on a survivor that is. */
+const CLOSED_ACCOUNTS_SQL = `
+  select t.id, t.name, t.type, t.status as account_status, t.slug, t.created_at, t.deleted_at
+    from tenants t
+   where t.type in ('transporter','shipper','seeker') and t.deleted_at is not null
+     and ($1::text is null or t.name ilike '%' || $1 || '%' or t.slug ilike '%' || $1 || '%')
+   order by t.deleted_at desc
+   limit 25`;
+
 // ---------- the check queue ----------
 
 /** Params: register, state|null|'open', kind|null, search|null, limit, offset.
  *  Only the tail and a boolean leave this statement — never `reference_encrypted`. `open` is
  *  answered inside the statement rather than by filtering the page afterwards, because a desk that
  *  asked for open lines and got 30 rows of which four were open would read `total` as the number
- *  of open lines, and it is not. */
+ *  of open lines, and it is not. The `::int` is what makes the desk's `total: number` true: pg
+ *  answers a bare `count(*)` as a bigint and JSON hands the page a string. */
 const CHECKS_SQL = `
   select c.id, c.kind, c.status, c.reference_tail,
          to_char(c.expires_on, 'YYYY-MM-DD') as expires_on, c.reason, c.document_id,
          c.raised_at, ru.full_name as raised_name, c.decided_at, du.full_name as decided_name,
          c.company_tenant_id, t.name as company_name, t.type as company_type,
          (c.reference_encrypted is not null) as has_reference,
-         count(*) over () as total
+         count(*) over ()::int as total
     from customer_verifications c
     join tenants t on t.id = c.company_tenant_id
     left join users ru on ru.id = c.raised_by
@@ -269,7 +329,7 @@ const NOTE_LIST_SQL = `
   select n.id, n.body, n.created_at, n.edited_at, n.voided_at, n.void_reason,
          n.author, n.company_tenant_id, u.full_name as author_name,
          vu.full_name as voided_by_name, t.name as company_name, t.type as company_type,
-         count(*) over () as total
+         count(*) over ()::int as total
     from customer_notes n
     join tenants t on t.id = n.company_tenant_id
     left join users u on u.id = n.author
@@ -294,7 +354,7 @@ const TAG_LIBRARY_SQL = `
   select g.id, g.name, g.colour, g.note, g.created_at, g.deleted_at,
          count(*) filter (where t.deleted_at is null)::int as live,
          count(*)::int as worn,
-         count(*) over () as total
+         count(*) over ()::int as total
     from customer_tags g
     left join customer_taggings t on t.tag_id = g.id
    where g.tenant_id = $1
@@ -368,6 +428,70 @@ const TAG_ON_ACCOUNT_SQL = `
    where g.tenant_id = $1 and g.company_tenant_id = $2 and g.tag_id = $3
      and g.deleted_at is null`;
 
+// ---------- 128: the claims register, read ----------
+
+/**
+ * The claim register read back. Both halves are joined by name because a claim is only legible
+ * with both: "closed account X is the extra one of Y". Params: register, state|null, search|null,
+ * limit, offset. `state` means the same here as in the CSV, so a chip on the tab and the file
+ * beside it cannot disagree.
+ */
+const CLAIM_LIST_SQL = `
+  select c.id, c.status, c.reason, c.carried_kinds, c.raised_at, c.voided_at, c.void_reason,
+         ru.full_name as raised_name, vu.full_name as voided_name,
+         s.id as survivor_id, s.name as survivor_name, s.type as survivor_type,
+         s.status as survivor_status,
+         l.id as loser_id, l.name as loser_name, l.type as loser_type,
+         l.status as loser_status, l.deleted_at as loser_closed_at,
+         count(*) over ()::int as total
+    from customer_duplicate_claims c
+    join tenants s on s.id = c.survivor_tenant_id
+    join tenants l on l.id = c.loser_tenant_id
+    left join users ru on ru.id = c.raised_by
+    left join users vu on vu.id = c.voided_by
+   where c.tenant_id = $1
+     and ($2::text is null or c.status = $2)
+     and ($3::text is null or s.name ilike '%' || $3 || '%' or l.name ilike '%' || $3 || '%'
+          or c.reason ilike '%' || $3 || '%')
+   order by c.raised_at desc
+   limit $4 offset $5`;
+
+/** How many claims the register holds, in each state, so a tab can say what it filtered out of.
+ *  Params: register. */
+const CLAIM_COUNTS_SQL = `
+  select count(*)::int as all,
+         count(*) filter (where c.status = 'declared')::int as standing,
+         count(*) filter (where c.status = 'voided')::int as withdrawn,
+         count(*) filter (where c.status = 'declared' and c.carried_kinds <> '{}')::int as carried
+    from customer_duplicate_claims c where c.tenant_id = $1`;
+
+/** One claim with both accounts, for the void route's before-shape. Params: register, claim. */
+const CLAIM_ONE_SQL = `
+  select c.id, c.status, c.reason, c.carried_kinds, c.raised_at, c.raised_by, c.voided_at,
+         c.void_reason, s.name as survivor_name, l.name as loser_name, l.deleted_at as loser_closed_at
+    from customer_duplicate_claims c
+    join tenants s on s.id = c.survivor_tenant_id
+    join tenants l on l.id = c.loser_tenant_id
+   where c.tenant_id = $1 and c.id = $2`;
+
+/** The claim that already stands on a closed account, whichever survivor holds it. The partial
+ *  unique index is the guard, but a 23505 answers with an index name; the desk needs the sentence
+ *  that ends the conversation — this account is already somebody's extra one, and here is who.
+ *  Params: register, loser. */
+const CLAIM_STANDING_SQL = `
+  select c.id, c.status, to_char(c.raised_at, 'YYYY-MM-DD') as raised_day,
+         s.id as survivor_id, s.name as survivor_name
+    from customer_duplicate_claims c
+    join tenants s on s.id = c.survivor_tenant_id
+   where c.tenant_id = $1 and c.loser_tenant_id = $2 and c.status = 'declared'`;
+
+/** The open lines a survivor holds, so a claim's carry can be read back after the write instead of
+ *  being taken on trust from the definer's own count. Params: register, company. */
+const OPEN_KINDS_SQL = `
+  select distinct c.kind from customer_verifications c
+   where c.tenant_id = $1 and c.company_tenant_id = $2
+     and c.status in ('awaiting','submitted') order by 1`;
+
 // ---------- the CSV every tab is asked to carry ----------
 
 /** Each export takes the same `search` the tab is showing. A desk that filters a register down to
@@ -417,6 +541,21 @@ const TAG_EXPORT_SQL = `
      and ($3::text is null or t.name ilike '%' || $3 || '%' or tg.name ilike '%' || $3 || '%')
    order by g.applied_at desc`;
 
+const CLAIM_EXPORT_SQL = `
+  select t.name as survivor_name, l.name as loser_name, l.deleted_at as loser_closed_at,
+         c.status, c.reason, array_to_string(c.carried_kinds, ' ') as carried_kinds,
+         ru.full_name as raised_name, c.raised_at,
+         vu.full_name as voided_name, c.voided_at, c.void_reason
+    from customer_duplicate_claims c
+    join tenants t on t.id = c.survivor_tenant_id
+    join tenants l on l.id = c.loser_tenant_id
+    left join users ru on ru.id = c.raised_by
+    left join users vu on vu.id = c.voided_by
+   where c.tenant_id = $1 and ($2::text is null or c.status = $2)
+     and ($3::text is null or t.name ilike '%' || $3 || '%' or l.name ilike '%' || $3 || '%'
+          or c.reason ilike '%' || $3 || '%')
+   order by c.raised_at desc`;
+
 function csvCell(v: unknown): string {
   if (v === null || v === undefined) return "";
   let s = v instanceof Date ? v.toISOString() : String(v);
@@ -431,7 +570,7 @@ const csv = (head: string[], rows: Record<string, unknown>[]): string => [
   ...rows.map((r) => head.map((h) => csvCell(r[h])).join(","))
 ].join("\r\n");
 
-const REGISTERS = ["accounts", "checks", "notes", "tags"] as const;
+const REGISTERS = ["accounts", "checks", "notes", "tags", "claims"] as const;
 
 /** The board walks the definer a page at a time, so an export carries the whole filtered queue and
  *  not the twenty-five rows a screen asked for. Params: register, search, tin|null, status|null,
@@ -524,10 +663,15 @@ export async function controlCustomersRoutes(app: FastifyInstance, _opts: unknow
   app.get("/control/customers/accounts", { preHandler: [requireControl] }, async (req: any) => {
     await requireControlPermission(req, VIEW);
     await enforceRateLimit(`customers-accounts:${req.control.user_id}`, 120, 60);
-    const q = z.object({ search: SEARCH, account: UUID.optional() }).parse(req.query ?? {});
+    const q = z.object({ search: SEARCH, account: UUID.optional(), closed: CLOSED })
+      .parse(req.query ?? {});
     const tenant = tenantOf(req);
     return withTenant(tenant, async (c) => {
       if (q.account) return { rows: [await account(c, q.account)] };
+      if (q.closed === "1") {
+        const r = await c.query(CLOSED_ACCOUNTS_SQL, [q.search || null]);
+        return { rows: r.rows };
+      }
       const r = await c.query(ACCOUNTS_SQL, [tenant, q.search || null]);
       return { rows: r.rows };
     });
@@ -1069,6 +1213,221 @@ export async function controlCustomersRoutes(app: FastifyInstance, _opts: unknow
   });
 
   // ============================================================
+  // 128: two accounts that were one, and the seats on an account
+  // ============================================================
+
+  /**
+   * The claims register, newest first.
+   *
+   * Read with `view` rather than `merge`: the seat that asks "is this account already declared a
+   * duplicate of that one?" is usually the one looking before it decides, and a queue only the
+   * merger can see is a queue that gets raised twice.
+   */
+  app.get("/control/customers/duplicates", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, VIEW);
+    await enforceRateLimit(`customers-claims:${req.control.user_id}`, 120, 60);
+    const q = z.object({
+      status: z.enum(["declared", "voided"]).or(z.literal("all")).optional(),
+      search: SEARCH, limit: LIMIT, offset: OFFSET
+    }).parse(req.query ?? {});
+    const tenant = tenantOf(req);
+    return withTenant(tenant, async (c) => {
+      const rows = await c.query(CLAIM_LIST_SQL, [tenant,
+        q.status && q.status !== "all" ? q.status : null, q.search || null, q.limit, q.offset]);
+      const counts = (await c.query(CLAIM_COUNTS_SQL, [tenant])).rows[0];
+      return { claims: rows.rows, counts, clock: new Date().toISOString() };
+    });
+  });
+
+  /**
+   * What a claim would do, before anybody writes one.
+   *
+   * `duplicate_preview` answers the same six questions as the trigger that will refuse the insert,
+   * in the order it asks them, so the sentence on the screen is the sentence the write would have
+   * raised. The desk reads it live — which open checks move, which kinds the survivor already holds,
+   * and the count of everything that stays behind on the closed account — because "merged" is the
+   * word a clerk uses loosely and this register is not loose about it: only the unanswered checks
+   * move, and they move as new lines.
+   */
+  app.get("/control/customers/duplicates/:survivor/:loser",
+    { preHandler: [requireControl] }, async (req: any) => {
+      await requireControlPermission(req, VIEW);
+      await enforceRateLimit(`customers-duplicate-preview:${req.control.user_id}`, 120, 60);
+      const survivor = uuidOf(req.params.survivor, "account that would carry on");
+      const loser = uuidOf(req.params.loser, "account named as the extra one");
+      const { rows } = await pool.query(
+        "select platform_auth.duplicate_preview($1,$2) as p", [survivor, loser]);
+      const p = rows[0]?.p;
+      const refusal = definerRefusal(p);
+      if (refusal) throw refusal;
+      return p;
+    });
+
+  /**
+   * Declare two accounts one account.
+   *
+   * The write is 128's definer, so nothing here repeats the register's own tests: the hand that
+   * raises the claim, the account it is raised on and the reason all go in as arguments and the
+   * trigger decides whether the pair is legal. Two things make this single-seat rather than
+   * two-seat, and both are the register's: the closure the claim leans on already needed a second
+   * signature on the tenants desk, and the only thing that moves is work the office has not
+   * answered yet, which arrives as new lines that still have to be checked.
+   */
+  app.post("/control/customers/:id/duplicates", { preHandler: [requireControl] },
+    async (req: any, reply) => {
+      await requireControlPermission(req, MERGE);
+      await enforceRateLimit(`customers-duplicate-claim:${req.control.user_id}`, 12, 3600);
+      const survivor = uuidOf(req.params.id, "account");
+      const body = z.object({ loser: UUID, reason: SENTENCE }).strict().parse(req.body);
+      if (body.loser === survivor) {
+        throw new ApiError("VALIDATION_FAILED",
+          "A claim needs two accounts — the one that carries on and the extra one. You gave the same "
+          + "account twice.", 400, [{ field: "loser" }]);
+      }
+      const tenant = tenantOf(req);
+      return withTenant(tenant, async (c) => {
+        const keep = await account(c, survivor);
+        const standing = (await c.query(CLAIM_STANDING_SQL, [tenant, body.loser])).rows[0];
+        if (standing) {
+          throw new ApiError("CONFLICT",
+            `That closed account is already declared the extra one of ${standing.survivor_name} `
+            + `(claim raised ${standing.raised_day}). Withdraw that claim before raising another.`,
+            409);
+        }
+        let made;
+        try {
+          made = await c.query(
+            "select platform_auth.claim_duplicate($1,$2,$3,$4,$5) as j",
+            [tenant, survivor, body.loser, body.reason, req.control.user_id]);
+        } catch (e) {
+          throw guardRefusal(e, "The register refused that claim.",
+            "That closed account is already declared the extra one of another survivor. One closed "
+            + "account is the duplicate of one account only.") ?? e;
+        }
+        const j = made.rows[0]?.j;
+        const refusal = definerRefusal(j);
+        if (refusal) throw refusal;
+        // Read the survivor's open kinds back from the register rather than trusting the count the
+        // definer returned: a claim that promised to carry a licence check and left the desk with
+        // nothing to answer is the failure this panel exists to prevent.
+        const open = await c.query(OPEN_KINDS_SQL, [tenant, survivor]);
+        await audit(c, req, "customer_duplicate_claims", j.claim.id,
+          "control.customers.duplicate_claimed", null, {
+            survivor_id: survivor, survivor_name: keep.name,
+            loser_id: j.claim.loser.id, loser_name: j.claim.loser.name,
+            loser_closed_at: j.claim.loser.closed_at, reason: j.claim.reason,
+            carried_kinds: j.claim.carried_kinds, note_id: j.note_id
+          });
+        return reply.code(201).send({ ...j, survivor_open_kinds: open.rows.map((r: any) => r.kind) });
+      });
+    });
+
+  /**
+   * Take a claim back.
+   *
+   * A withdrawal is a write of its own, not an edit: the pair, the reason and the carry-list stay
+   * exactly as they were raised and the register adds who took it back, when and why. The carried
+   * lines stay on the survivor too — 127 keeps an answer once given and a carried line is the
+   * survivor's own check by then — so the definer's counter-note says that out loud rather than
+   * leaving two stories about the same licence on one file.
+   */
+  app.post("/control/customers/duplicates/:id/void", { preHandler: [requireControl] },
+    async (req: any) => {
+      await requireControlPermission(req, MERGE);
+      await enforceRateLimit(`customers-claim-void:${req.control.user_id}`, 12, 3600);
+      const claim = uuidOf(req.params.id, "claim");
+      const body = z.object({ reason: SENTENCE }).strict().parse(req.body);
+      const tenant = tenantOf(req);
+      return withTenant(tenant, async (c) => {
+        const before = (await c.query(CLAIM_ONE_SQL, [tenant, claim])).rows[0];
+        if (!before) {
+          throw new ApiError("NOT_FOUND", "That claim is not on this office's register.", 404);
+        }
+        let made;
+        try {
+          made = await c.query(
+            "select platform_auth.void_duplicate_claim($1,$2,$3,$4) as j",
+            [tenant, claim, body.reason, req.control.user_id]);
+        } catch (e) {
+          throw guardRefusal(e, "The register refused that withdrawal.") ?? e;
+        }
+        const j = made.rows[0]?.j;
+        const refusal = definerRefusal(j);
+        if (refusal) throw refusal;
+        const after = (await c.query(CLAIM_ONE_SQL, [tenant, claim])).rows[0];
+        await audit(c, req, "customer_duplicate_claims", claim,
+          "control.customers.duplicate_claim_voided",
+          { status: before.status, reason: before.reason, carried_kinds: before.carried_kinds },
+          { status: after.status, void_reason: after.void_reason, voided_at: after.voided_at,
+            note_id: j.note_id, carried_kinds_stay: after.carried_kinds });
+        return j;
+      });
+    });
+
+  /**
+   * Who is signed in to an account, right now.
+   *
+   * One row per person, with the last activity and the device — names, not emails, because the
+   * question at a desk is "which director is in there", and the email is already on the staff desk.
+   * Gated on `disconnect` rather than `view` and audited as it happens: a live session list is not a
+   * register read, it is a look into a company's building while the lights are on.
+   */
+  app.get("/control/customers/:id/access", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, DISCONNECT);
+    await enforceRateLimit(`customers-access:${req.control.user_id}`, 30, 60);
+    const companyId = uuidOf(req.params.id, "account");
+    const tenant = tenantOf(req);
+    return withTenant(tenant, async (c) => {
+      const { rows } = await c.query("select platform_auth.customer_access($1) as a", [companyId]);
+      const a = rows[0]?.a;
+      const refusal = definerRefusal(a);
+      if (refusal) throw refusal;
+      await audit(c, req, "tenants", companyId, "control.customers.access_read", null,
+        { company_name: a.company.name, live: a.live, seats: a.seats,
+          borrowed_views: a.borrowed_views, sessions_cut_before: a.cut_offs.sessions_cut });
+      return a;
+    });
+  });
+
+  /**
+   * End every session on an account.
+   *
+   * The act a desk reaches for on the call that says "somebody else has my password", which is why
+   * it is one seat and why it asks for a sentence: a cut-off is recoverable by signing in again, and
+   * the reason is the thing a clerk needs three weeks later when the account says it was cut twice.
+   * The response carries the honest limit of the act in the same breath as the count — an access
+   * token is a signed key with no row behind it, so it stays usable for the rest of its fifteen
+   * minutes unless the account is blocked, and blocking is 078's two-seat act.
+   */
+  app.post("/control/customers/:id/cut-off", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, DISCONNECT);
+    await enforceRateLimit(`customers-cut-off:${req.control.user_id}`, 8, 3600);
+    const companyId = uuidOf(req.params.id, "account");
+    const body = z.object({ reason: SENTENCE }).strict().parse(req.body);
+    const tenant = tenantOf(req);
+    return withTenant(tenant, async (c) => {
+      const company = await account(c, companyId);
+      const seen = await c.query("select platform_auth.customer_access($1) as a", [companyId]);
+      const before = seen.rows[0]?.a;
+      let made;
+      try {
+        made = await c.query("select platform_auth.customer_force_logout($1) as j", [companyId]);
+      } catch (e) {
+        throw guardRefusal(e, "The register refused that cut-off.") ?? e;
+      }
+      const j = made.rows[0]?.j;
+      const refusal = definerRefusal(j);
+      if (refusal) throw refusal;
+      await audit(c, req, "sessions", companyId, "control.customers.seat_cut_off",
+        { company_name: company.name, live: before?.live ?? null,
+          borrowed_views: before?.borrowed_views ?? null, reason: body.reason },
+        { sessions_revoked: j.sessions_revoked, of_which_borrowed_views: j.of_which_borrowed_views,
+          seats: j.seats, blocked: j.company.blocked, window: j.window, reason: body.reason });
+      return { ...j, reason: body.reason, previous_cut_offs: before?.cut_offs ?? null };
+    });
+  });
+
+  // ============================================================
   // the CSV every tab is asked to carry
   // ============================================================
 
@@ -1090,7 +1449,10 @@ export async function controlCustomersRoutes(app: FastifyInstance, _opts: unknow
     // a label taken off an account, which is the line the desk needs when something went wrong.
     const STATES: Record<(typeof REGISTERS)[number], readonly string[]> = {
       accounts: ["waiting", "refused", "expired", "clear", "none"],
-      checks: [...CHECK_STATES, "open"], notes: ["live", "withdrawn"], tags: ["live", "retired"]
+      checks: [...CHECK_STATES, "open"], notes: ["live", "withdrawn"], tags: ["live", "retired"],
+      // The two words the claim register itself uses, so a filter that reads like the table's own
+      // `status` column cannot quietly mean something else in the file.
+      claims: ["declared", "voided"]
     };
     const state = !q.status || q.status === "all" ? null : q.status;
     if (state && !STATES[q.register].includes(state)) {
@@ -1129,11 +1491,18 @@ export async function controlCustomersRoutes(app: FastifyInstance, _opts: unknow
         "voided_by_name", "voided_at", "void_reason"];
       rows = (await withTenant(tenant,
         (c) => c.query(NOTE_EXPORT_SQL, [tenant, state, q.search || null]))).rows;
-    } else {
+    } else if (q.register === "tags") {
       head = ["company_name", "name", "colour", "applied_by_name", "applied_at",
         "removed_by_name", "removed_at"];
       rows = (await withTenant(tenant,
         (c) => c.query(TAG_EXPORT_SQL, [tenant, state, q.search || null]))).rows;
+    } else {
+      // A claim is a sentence about two accounts, so the file carries both names and the day the
+      // extra one was shut — the three things a desk needs to check the claim still holds.
+      head = ["survivor_name", "loser_name", "loser_closed_at", "status", "reason",
+        "carried_kinds", "raised_name", "raised_at", "voided_name", "voided_at", "void_reason"];
+      rows = (await withTenant(tenant,
+        (c) => c.query(CLAIM_EXPORT_SQL, [tenant, state, q.search || null]))).rows;
     }
     // The account export is the one register whose rows are read through a definer rather than a
     // statement of their own, and the board's own filters are the desk's; nothing here re-counts.

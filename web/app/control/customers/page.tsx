@@ -39,6 +39,17 @@ const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
  * tail. The value itself comes from one route, costs the duty that answers checks, is limited to
  * twelve reads an hour, and is written into the audit register as it happens — which is why the
  * panel that does it asks twice and then says out loud that it was recorded.
+ *
+ * Two more things the register does not pretend, both of them 128's:
+ *
+ * **A claim is not a merge.** Around seventy foreign keys and forty per-tenant unique indexes point
+ * at `tenants`, and 127 freezes an account's answered checks against its own row, so nothing here
+ * moves a company's history. A claim records which account carries on, carries the *unanswered*
+ * checks onto it as new lines that still have to be checked, and lists what stayed behind.
+ *
+ * **A cut-off ends sessions, not an account.** An access token is a signed key with no row behind
+ * it, so it stays usable for up to fifteen minutes; the desk says so in the same breath as the
+ * count, and points at the two-seat block on the tenants desk for anything shorter.
  */
 
 // ---------- the vocabulary (web/app/control/customers/checks.ts mirrors the API and the table) ----------
@@ -51,9 +62,10 @@ const stateWord = (s: string | null | undefined) =>
   s ? CHECK_STATE_LABELS[s] ?? s : "—";
 
 /** The acts that cannot be taken back on the other side of the button: a terminal answer, a note
- *  withdrawn, a label taken off or retired, a number copied onto a screen. These ask for a second
- *  press; everything else writes on the first. */
-const ARMS: Panel["kind"][] = ["answer", "void", "retire", "off", "reveal"];
+ *  withdrawn, a label taken off or retired, a number copied onto a screen, a pair of accounts
+ *  declared one account, and every session on an account ended. These ask for a second press;
+ *  everything else writes on the first. */
+const ARMS: Panel["kind"][] = ["answer", "void", "retire", "off", "reveal", "claim", "voidclaim", "cut"];
 const armKey = (p: Panel) => `${p.kind}:${p.id ?? ""}:${p.tagId ?? ""}`;
 
 const EXPIRING_WORDS = EXPIRING_KINDS.map((k) => KIND_LABELS[k].toLowerCase()).join(", or ");
@@ -144,6 +156,12 @@ type Account = {
   id: string; name: string; type: string; account_status: string; slug: string; created_at: string;
   open_checks: number; approved: number; notes: number; labels: number;
 };
+/** A tombstone. It has no check counts because 128 refuses a claim whose survivor is closed and the
+ *  loser's own lines stay behind on its file — the list only has to name the account. */
+type ClosedAccount = {
+  id: string; name: string; type: string; account_status: string; slug: string;
+  created_at: string; deleted_at: string;
+};
 type Line = {
   id: string; kind: string; status: string; reason: string | null;
   reference_tail: string | null; document_id: string | null; raised_at: string;
@@ -180,15 +198,53 @@ type Dossier = {
 };
 type Timeline = { rows: { ts: string; source: string; title: string; detail: string | null; ref: string | null; actor: string | null }[] };
 
+type ClaimRow = {
+  id: string; status: string; reason: string; carried_kinds: string[]; raised_at: string;
+  voided_at: string | null; void_reason: string | null; raised_name: string | null;
+  voided_name: string | null; survivor_id: string; survivor_name: string; survivor_type: string;
+  survivor_status: string; loser_id: string; loser_name: string; loser_type: string;
+  loser_status: string; loser_closed_at: string | null; total?: number;
+};
+type ClaimCounts = { all: number; standing: number; withdrawn: number; carried: number };
+/** `duplicate_preview` answers the six questions the trigger will ask, in its own order, so the
+ *  sentence on the screen is the sentence the write would have raised. */
+type Preview = {
+  status: string;
+  survivor: { id: string; name: string; type: string; account_status: string; closed_at: string | null };
+  loser: { id: string; name: string; type: string; account_status: string; closed_at: string | null };
+  eligible: boolean; refusal: string | null;
+  carries: { kind: string; loser_status: string; loser_raised_at: string; loser_tail: string | null }[];
+  skips: { kind: string; because: string }[];
+  stays_behind: {
+    checks_answered: number; checks_open: number; notes: number; labels: number; papers: number;
+    calls: number; calls_open: number; disputes: number; refund_papers: number;
+    cargo_files: number; seats: number; sessions_live: number;
+  };
+  already: { id: string; status: string; reason: string; raised_at: string;
+    carried_kinds: string[]; direction: "same" | "reversed" }[];
+  clock: string;
+};
+type SeatRow = {
+  user_id: string; name: string | null; user_type: string; last_seen: string | null;
+  ip: string | null; device: string; borrowed_by: string | null;
+};
+type Access = {
+  status: string; company: { id: string; name: string; type: string; account_status: string;
+    closed_at: string | null };
+  sessions: SeatRow[]; live: number; borrowed_views: number; seats: number;
+  cut_offs: { sessions_cut: number; last_at: string | null }; clock: string;
+};
+
 // ---------- tabs ----------
 
-type Tab = "board" | "checks" | "notes" | "tags";
+type Tab = "board" | "checks" | "notes" | "tags" | "claims";
 const TABS: [Tab, string][] = [
-  ["board", "Accounts"], ["checks", "Checks"], ["notes", "The office's notes"], ["tags", "Labels"]
+  ["board", "Accounts"], ["checks", "Checks"], ["notes", "The office's notes"], ["tags", "Labels"],
+  ["claims", "Duplicate claims"]
 ];
 /** The export takes the register's own name for the tab (`board` is the accounts register). */
 const EXPORT_REGISTER: Record<Tab, string> = {
-  board: "accounts", checks: "checks", notes: "notes", tags: "tags"
+  board: "accounts", checks: "checks", notes: "notes", tags: "tags", claims: "claims"
 };
 
 // ---------- forms ----------
@@ -196,19 +252,22 @@ const EXPORT_REGISTER: Record<Tab, string> = {
 type Draft = {
   accountQuery: string; accountId: string; kind: CheckKind; status: string; reference: string;
   expiresOn: string; answer: string; reason: string; text: string; labelName: string;
-  labelColour: string; labelNote: string; tagId: string;
+  labelColour: string; labelNote: string; tagId: string; loserQuery: string; loserId: string;
 };
 const EMPTY_DRAFT: Draft = {
   accountQuery: "", accountId: "", kind: "national_id", status: "awaiting", reference: "",
   expiresOn: "", answer: "approved", reason: "", text: "", labelName: "", labelColour: "#0e7490",
-  labelNote: "", tagId: ""
+  labelNote: "", tagId: "", loserQuery: "", loserId: ""
 };
 type Panel = {
   kind: "raise" | "paper" | "answer" | "reveal" | "note" | "edit" | "void" | "label"
-    | "wear" | "off" | "retire";
+    | "wear" | "off" | "retire" | "claim" | "voidclaim" | "cut";
   id?: string; companyId?: string; companyName?: string; ref?: string; tagId?: string;
   tagName?: string; checkKind?: CheckKind; lineStatus?: string; hasReference?: boolean;
   expiresOn?: string | null; body?: string;
+  // 128: the pair a claim is being raised on, and the claim or account a withdrawal is about.
+  loserName?: string; loserId?: string; carried?: string[]; live?: number;
+  borrowedViews?: number; seats?: number;
 };
 
 const box = "mt-4 w-full rounded-input border px-10 py-8 text-sm";
@@ -259,6 +318,10 @@ export default function ControlCustomersPage() {
   const [tCounts, setTCounts] = useState<TagCounts | null>(null);
   const [tFilter, setTFilter] = useState({ status: "", q: "", limit: "30", offset: "0" });
 
+  const [kRows, setKRows] = useState<ClaimRow[]>([]);
+  const [kCounts, setKCounts] = useState<ClaimCounts | null>(null);
+  const [kFilter, setKFilter] = useState({ status: "", q: "", limit: "30", offset: "0" });
+
   const [dossier, setDossier] = useState<Dossier | null>(null);
   const [dossierFor, setDossierFor] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
@@ -270,11 +333,28 @@ export default function ControlCustomersPage() {
   const [pickerBusy, setPickerBusy] = useState(false);
   const [library, setLibrary] = useState<TagRow[] | null>(null);
 
+  // 128: the closed half of a pair, what a claim would do, and who is in an account right now.
+  const [closed, setClosed] = useState<ClosedAccount[] | null>(null);
+  const [closedBusy, setClosedBusy] = useState(false);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [access, setAccess] = useState<Access | null>(null);
+  const [accessFor, setAccessFor] = useState<string | null>(null);
+  // What the last cut-off actually said — the count and the fifteen-minute sentence. The seat list
+  // re-reads the register afterwards, so the only place those words survive is here.
+  const [lastCut, setLastCut] = useState<any | null>(null);
+
   const seq = useRef(0);
+  // The claim form's preview has its own counter: it is re-read every time a half of the pair
+  // changes, and a late answer about a pair the clerk has already changed must not be the one on
+  // screen — the button is gated on it.
+  const pseq = useRef(0);
 
   const canView = perms.includes("control.customers.view");
   const canManage = perms.includes("control.customers.manage");
   const canVerify = perms.includes("control.customers.verify");
+  const canMerge = perms.includes("control.customers.merge");
+  const canDisconnect = perms.includes("control.customers.disconnect");
 
   // ---------- reads ----------
 
@@ -316,6 +396,11 @@ export default function ControlCustomersPage() {
       if (nFilter.q.trim()) p.set("search", nFilter.q.trim());
       p.set("limit", nFilter.limit); p.set("offset", nFilter.offset);
       path = "notes"; words = "The note register did not answer.";
+    } else if (which === "claims") {
+      if (kFilter.status) p.set("status", kFilter.status);
+      if (kFilter.q.trim()) p.set("search", kFilter.q.trim());
+      p.set("limit", kFilter.limit); p.set("offset", kFilter.offset);
+      path = "duplicates"; words = "The claim register did not answer.";
     } else {
       if (tFilter.status) p.set("status", tFilter.status);
       if (tFilter.q.trim()) p.set("search", tFilter.q.trim());
@@ -334,8 +419,11 @@ export default function ControlCustomersPage() {
     if (which === "notes") {
       setNRows(j.rows ?? []); setNCounts(j.counts ?? null); setError(null); return;
     }
+    if (which === "claims") {
+      setKRows(j.claims ?? []); setKCounts(j.counts ?? null); setError(null); return;
+    }
     setTRows(j.rows ?? []); setTCounts(j.counts ?? null); setError(null);
-  }, [bFilter, cFilter, nFilter, tFilter]);
+  }, [bFilter, cFilter, nFilter, tFilter, kFilter]);
 
   const readDossier = useCallback(async (companyId: string) => {
     const res = await fetch(`${API}/api/v1/control/customers/${companyId}/dossier`,
@@ -360,6 +448,66 @@ export default function ControlCustomersPage() {
     setTimeline(await res.json());
   }, []);
 
+  /** What a claim would do, read live from the pair on the form. The preview is the trigger's own
+   *  six questions in the trigger's own order, so a refusal on the screen is the refusal the write
+   *  would have raised — which is why the form will not offer the button until it has answered. */
+  const readPreview = useCallback(async (key: number, survivor: string, loser: string) => {
+    setPreviewBusy(true); setPanelError(null);
+    try {
+      const res = await fetch(`${API}/api/v1/control/customers/duplicates/${survivor}/${loser}`,
+        { credentials: "include" });
+      if (key !== pseq.current) return;
+      if (res.status === 401) { window.location.href = "/control/login"; return; }
+      if (res.status === 403) { setForbidden(true); setPreview(null); return; }
+      if (!res.ok) {
+        setPreview(null);
+        setPanelError(errorMessage(await res.json().catch(() => ({})),
+          "The register would not say what a claim on that pair would do."));
+        return;
+      }
+      setPreview(await res.json());
+    } finally { if (key === pseq.current) setPreviewBusy(false); }
+  }, []);
+
+  /** The closed accounts a claim can name as the extra one. The live picker cannot: 127 keeps a
+   *  closed account out of every list, and a claim is only legal on a pair the office has already
+   *  shut one half of. */
+  const searchClosed = useCallback(async (term: string) => {
+    setClosedBusy(true); setClosed(null);
+    try {
+      const p = new URLSearchParams({ closed: "1" });
+      if (term.trim()) p.set("search", term.trim());
+      const res = await fetch(`${API}/api/v1/control/customers/accounts?${p}`,
+        { credentials: "include" });
+      if (!res.ok) {
+        setPanelError(errorMessage(await res.json().catch(() => ({})),
+          "The closed accounts did not answer."));
+        return;
+      }
+      setClosed((await res.json()).rows ?? []);
+    } finally { setClosedBusy(false); }
+  }, []);
+
+  /** Who is signed into an account at the moment the question is asked. Gated on the disconnect
+   *  duty and audited as a read, so this is only ever asked from the panel that can act on it. */
+  const readAccess = useCallback(async (companyId: string) => {
+    setAccess(null); setLastCut(null);
+    const res = await fetch(`${API}/api/v1/control/customers/${companyId}/access`,
+      { credentials: "include" });
+    if (res.status === 401) { window.location.href = "/control/login"; return; }
+    if (res.status === 403) { setForbidden(true); return; }
+    if (!res.ok) {
+      setAccessFor(null);
+      setError(errorMessage(await res.json().catch(() => ({})),
+        "Nobody would say who is in that account."));
+      return;
+    }
+    const j = await res.json();
+    setAccess(j);
+    setAccessFor(companyId);
+    setError(null);
+  }, []);
+
   useEffect(() => {
     (async () => {
       const m = await fetch(`${API}/api/v1/control/auth/me`, { credentials: "include" });
@@ -378,6 +526,17 @@ export default function ControlCustomersPage() {
     return () => clearTimeout(t);
   }, [tab, canView, load]);
 
+  // A claim is raised on a pair the register has looked at, so the form asks the question the
+  // moment both halves are named and again when either changes. The button waits for the answer.
+  useEffect(() => {
+    if (panel?.kind !== "claim") return;
+    const survivor = draft.accountId, loser = draft.loserId;
+    if (!survivor || !loser || survivor === loser) { setPreview(null); return; }
+    const key = ++pseq.current;
+    const t = setTimeout(() => { readPreview(key, survivor, loser); }, 300);
+    return () => clearTimeout(t);
+  }, [panel?.kind, draft.accountId, draft.loserId, readPreview]);
+
   const refresh = useCallback(() => {
     const key = ++seq.current;
     load(tab, key);
@@ -387,7 +546,11 @@ export default function ControlCustomersPage() {
       readTimeline(dossierFor, tlSource);
     }
     if (wearersTag) setWearers(null);
-  }, [tab, load, loadFacets, dossierFor, tlSource, readDossier, readTimeline, wearersTag]);
+    // A seat list is only honest as of the second it was read. After a write, re-read it rather
+    // than let a clerk believe a session that just ended is still open.
+    if (accessFor) readAccess(accessFor);
+  }, [tab, load, loadFacets, dossierFor, tlSource, readDossier, readTimeline, wearersTag,
+    accessFor, readAccess]);
 
   /** A row is opened, not navigated to: the dossier is the only place an account's own facts, its
    *  checks, notes and labels are all together, and it is where every act on them is started. */
@@ -411,6 +574,13 @@ export default function ControlCustomersPage() {
       setWearersTag(null); return;
     }
     setWearers((await res.json()).rows ?? []);
+  }
+
+  /** The seat list opens and closes by account, like the wearers of a label: it is a live look into
+   *  a company, so it is not read on page load and not kept on screen once it has been answered. */
+  function toggleSeats(companyId: string) {
+    if (accessFor === companyId) { setAccessFor(null); setAccess(null); setLastCut(null); return; }
+    readAccess(companyId);
   }
 
   /** The account picker every write is opened from. A clerk finds an account by the name it trades
@@ -456,6 +626,7 @@ export default function ControlCustomersPage() {
       }
       const j = await res.json().catch(() => ({}));
       setPanel(null); setDraft(EMPTY_DRAFT); setArmed(null); setAccounts(null); setRevealed(null);
+      setPreview(null); setClosed(null);
       refresh();
       return j;
     } finally { setBusy(false); }
@@ -472,7 +643,7 @@ export default function ControlCustomersPage() {
     const p = panel;
     if (!p) return;
     const company = p.companyId ?? draft.accountId;
-    if (["raise", "note", "wear", "off"].includes(p.kind) && !company) {
+    if (["raise", "note", "wear", "off", "claim"].includes(p.kind) && !company) {
       setPanelError("Pick the account first — nothing on this register is written without one.");
       return;
     }
@@ -538,6 +709,37 @@ export default function ControlCustomersPage() {
         if (j) setNotice(`“${p.tagName}” is off that account. The pairing is kept — who wore it, and when it stopped.`);
         return;
       }
+      case "claim": {
+        const j = await send(`${company}/duplicates`,
+          { loser: draft.loserId, reason: draft.reason.trim() });
+        if (j) {
+          const carried = (j.claim?.carried_kinds ?? []) as string[];
+          setNotice(`The register now holds ${j.claim?.survivor?.name ?? "that account"} as the account that `
+            + `carries on and ${j.claim?.loser?.name ?? "the closed account"} as its extra one. `
+            + (carried.length
+              ? `It had unanswered ${carried.map(kindWord).join(", ")} — those came across as new lines on `
+                + "the survivor, with no number and no paper copied, because the paper was on the other file."
+              : "It had nothing unanswered to carry, so no line moved at all.")
+            + " Everything else stayed on the closed account's own file.");
+        }
+        return;
+      }
+      case "voidclaim": {
+        const j = await send(`duplicates/${p.id}/void`, { reason: draft.reason.trim() });
+        if (j) setNotice(`The claim is withdrawn, with ${j.claim?.voided_name ?? "this seat"}'s name on the `
+          + "withdrawal. The checks it carried stay open on the survivor — a carried line is that account's own "
+          + "check now, and an answer once given is kept.");
+        return;
+      }
+      case "cut": {
+        const j = await send(`${p.companyId}/cut-off`, { reason: draft.reason.trim() });
+        if (j) {
+          setLastCut(j);
+          setNotice(`${j.sessions_revoked} session(s) ended on ${j.company?.name ?? "that account"}, of which `
+            + `${j.of_which_borrowed_views} were a read-only visit from this office. ${j.window?.words ?? ""}`);
+        }
+        return;
+      }
     }
   }
 
@@ -564,13 +766,16 @@ export default function ControlCustomersPage() {
   function openPanel(next: Panel, seed?: Partial<Draft>) {
     const closing = panel?.kind === next.kind && panel?.id === next.id
       && panel?.companyId === next.companyId && panel?.tagId === next.tagId;
-    setPanelError(null); setArmed(null); setRevealed(null);
+    setPanelError(null); setArmed(null); setRevealed(null); setPreview(null);
     if (next.kind === "raise" || next.kind === "wear" || next.kind === "note") setAccounts(null);
+    if (next.kind === "claim") { setClosed(null); if (!next.companyId) searchAccounts(""); }
     setDraft({ ...EMPTY_DRAFT, ...seed });
     if (closing) { setPanel(null); return; }
     setPanel(next);
     if (next.kind === "wear") loadLibrary();
     if (next.kind === "raise" && !next.companyId) searchAccounts("");
+    if (next.kind === "claim" && next.companyId) searchAccounts(next.companyName ?? "");
+    if (next.kind === "claim") searchClosed("");
     requestAnimationFrame(() =>
       document.getElementById("customers-form")?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
   }
@@ -592,6 +797,9 @@ export default function ControlCustomersPage() {
       } else if (tab === "notes") {
         if (nFilter.status) p.set("status", nFilter.status);
         if (nFilter.q.trim()) p.set("search", nFilter.q.trim());
+      } else if (tab === "claims") {
+        if (kFilter.status) p.set("status", kFilter.status);
+        if (kFilter.q.trim()) p.set("search", kFilter.q.trim());
       } else {
         if (tFilter.status) p.set("status", tFilter.status);
         if (tFilter.q.trim()) p.set("search", tFilter.q.trim());
@@ -609,7 +817,8 @@ export default function ControlCustomersPage() {
       URL.revokeObjectURL(url);
       setNotice(tab === "tags"
         ? "The file is the label history — which account wore what, who put it on and who took it off — "
-        : `The ${tab === "board" ? "account board" : tab} was exported with the filters on screen.`);
+        : `The ${tab === "board" ? "account board" : tab === "claims" ? "claim register, both halves named" : tab}`
+          + " was exported with the filters on screen.");
     } finally { setExporting(false); }
   }
 
@@ -621,6 +830,9 @@ export default function ControlCustomersPage() {
   const lineHasNumber = !!panel?.hasReference || !!draft.reference.trim();
   const lineHasDay = !!panel?.expiresOn || !!draft.expiresOn;
   const approvedNeedsDay = expiresOnKind(kind) && !lineHasDay;
+  // Named out of the list the clerk just searched, not out of the panel: a claim's loser is only ever
+  // chosen from the closed accounts, so this is the one place the desk can say which tombstone it means.
+  const loserChosen = closed?.find((c) => c.id === draft.loserId) ?? null;
 
   function formReady(): boolean {
     const p = panel;
@@ -641,6 +853,13 @@ export default function ControlCustomersPage() {
       case "off": return !!p.tagId;
       case "retire": return !!p.id;
       case "reveal": return !!p.id;
+      // The preview is the trigger's own answer, so the button waits for it rather than letting the
+      // desk type a reason against a pair the register will never accept.
+      case "claim":
+        return !!draft.accountId && !!draft.loserId && draft.reason.trim().length >= 8
+          && !previewBusy && !!preview && preview.eligible;
+      case "voidclaim": return !!p.id && draft.reason.trim().length >= 8;
+      case "cut": return !!p.companyId && draft.reason.trim().length >= 8;
     }
   }
 
@@ -678,6 +897,24 @@ export default function ControlCustomersPage() {
         + "It is stored lower-case, so KYC-Hold and kyc-hold are one label.";
     }
     if (p.kind === "wear" && !draft.tagId) return "Pick the label from the live library.";
+    if (p.kind === "claim") {
+      if (!draft.accountId) return "Name the account that carries on first.";
+      if (!draft.loserId) return "Then name the extra one — a claim is written on a pair, and the closed "
+        + "half is only ever found by searching the accounts the office has shut.";
+      if (previewBusy) return "Asking the register what this pair would do…";
+      if (!preview) return "The register has not answered whether this pair can be claimed. Search both "
+        + "halves again — a claim is never raised on a preview it refused to read.";
+      if (!preview.eligible) return preview.refusal ?? "The register will not accept this pair as one account.";
+      if (draft.reason.trim().length < 8) return "Say what makes them the same account: the same NIDA, the "
+        + "same TIN, the same director who signed up twice. Eight characters, because the sentence is kept.";
+    }
+    if (p.kind === "voidclaim" && draft.reason.trim().length < 8) {
+      return "Taking a claim back needs a sentence as good as the one that made it.";
+    }
+    if (p.kind === "cut" && draft.reason.trim().length < 8) {
+      return "Say on the register why every session is being ended. Three weeks from now, when the account "
+        + "says it was cut twice, this is the sentence that answers it.";
+    }
     return "The register will take this — press the button.";
   }
 
@@ -704,6 +941,13 @@ export default function ControlCustomersPage() {
               opening a check, writing a note and labelling an account needs <code>control.customers.manage</code>;
               answering a check and reading back a whole identity number needs{" "}
               <code>control.customers.verify</code>.
+            </p>
+            <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+              Two more acts sit behind their own keys, because both of them change what a company is or who
+              is standing in it: declaring two accounts one needs <code>control.customers.merge</code>, and
+              reading a live seat list or cutting every session off needs{" "}
+              <code>control.customers.disconnect</code>. A desk without them still sees the board, the
+              checks, the notes and the labels — it simply cannot claim a duplicate or sign anybody out.
             </p>
             <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
               A ban, a price or a refund is not on this desk at all: those need a second seat&apos;s
@@ -806,6 +1050,8 @@ export default function ControlCustomersPage() {
             setTlSource(s); readTimeline(dossier.company.id, s);
           }}
           openDossier={openDossier}
+          canMerge={canMerge} canDisconnect={canDisconnect} toggleSeats={toggleSeats}
+          accessFor={accessFor}
         />}
 
         {/* ---------------- the wearers of one label ---------------- */}
@@ -866,6 +1112,96 @@ export default function ControlCustomersPage() {
                 </div>
               </div>
             ))}
+          </section>
+        )}
+
+        {/* ---------------- who is inside one account, right now ---------------- */}
+        {accessFor && (
+          <section className="mt-20 rounded-card border p-20"
+            style={{ borderColor: "var(--adm-accent)", background: "var(--surface)" }}>
+            <div className="flex flex-wrap items-center justify-between gap-12">
+              <h2 className="text-sm font-bold uppercase tracking-[0.12em]" style={{ color: "var(--ink)" }}>
+                Who is inside {access?.company.name ?? "that account"}
+              </h2>
+              <button type="button" className={headBtn} style={miniStyle} onClick={() => toggleSeats(accessFor)}>
+                Close
+              </button>
+            </div>
+            <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+              A live look into a company while the lights are on, so this read is gated on its own duty and
+              written into the audit register as it happens. It lists names, the device and the last activity —
+              not emails, not identity numbers.
+            </p>
+            {access === null ? (
+              <p role="status" className="mt-12 text-sm" style={{ color: "var(--ink-soft)" }}>Reading…</p>
+            ) : (
+              <>
+                <p className="mt-12 text-xs" style={{ color: "var(--ink)" }}>
+                  {access.live} live session(s) · {access.seats} seat(s) on the account
+                  {access.borrowed_views > 0 && (
+                    <> · <span style={{ color: "var(--warning)" }}>
+                      {access.borrowed_views} of them a read-only visit opened by this office</span></>
+                  )}
+                  {access.cut_offs.sessions_cut > 0 && (
+                    <> · {access.cut_offs.sessions_cut} ever cut off from here, last {day(access.cut_offs.last_at)}</>
+                  )}
+                </p>
+                {access.sessions.length === 0 && (
+                  <p className="mt-12 text-[11px]" style={{ color: "var(--ink)" }}>
+                    Nobody is in. Every session on this account has been signed out or has expired; the seats
+                    above can sign in again whenever they like.
+                  </p>
+                )}
+                {access.sessions.map((s) => (
+                  <div key={`${s.user_id}-${s.ip ?? "n"}`} className={line}>
+                    <div className="flex flex-wrap items-center justify-between gap-10">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
+                          {s.name ?? "a seat with no name on it"}{" "}
+                          <span className="chip" style={{ border: "1px solid var(--line)", color: "var(--ink-soft)" }}>
+                            {s.user_type}
+                          </span>
+                        </p>
+                        <p className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                          last seen {age(s.last_seen)} ago · {when(s.last_seen)} · {s.ip ?? "no address recorded"} · {s.device}
+                        </p>
+                        {s.borrowed_by && (
+                          <p className="mt-4 text-[11px]" style={{ color: "var(--warning)" }}>
+                            opened as a read-only visit by this office — {s.borrowed_by}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {lastCut && (
+                  <p className="mt-12 text-[11px]" style={{ color: "var(--success)" }}>
+                    {lastCut.sessions_revoked} session(s) ended just now, of which{" "}
+                    {lastCut.of_which_borrowed_views} were this office&apos;s own visits. {lastCut.window?.words}
+                  </p>
+                )}
+                <div className="mt-14 flex flex-wrap gap-10">
+                  {canDisconnect && (
+                    <button type="button" className={headBtn}
+                      style={{ borderColor: "var(--danger)", color: "var(--danger)" }}
+                      onClick={() => openPanel({
+                        kind: "cut", companyId: access.company.id, companyName: access.company.name,
+                        live: access.live, borrowedViews: access.borrowed_views, seats: access.seats
+                      })}>
+                      {panel?.kind === "cut" ? "Close the form" : "Cut every session off"}
+                    </button>
+                  )}
+                  <button type="button" className={headBtn} style={miniStyle}
+                    onClick={() => readAccess(accessFor)}>
+                    Read it again
+                  </button>
+                </div>
+                <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                  A cut-off ends sessions. It does not close or block the account, and a token already handed
+                  out keeps working for up to fifteen minutes — the panel says so before the button is pressed.
+                </p>
+              </>
+            )}
           </section>
         )}
 
@@ -1063,12 +1399,240 @@ export default function ControlCustomersPage() {
               </div>
             )}
 
+            {/* ---------------- 128: the claim, its withdrawal and the cut-off ---------------- */}
+            {panel.kind === "claim" && (
+              <>
+                {!panel.companyId && (
+                  <AccountPicker draft={draft} setDraft={setDraft} rows={accounts} busy={pickerBusy}
+                    search={searchAccounts} onPick={(a) => setDraft({ ...draft, accountId: a.id })} />
+                )}
+                {panel.companyId && (
+                  <p className="mt-12 text-xs" style={{ color: "var(--ink)" }}>
+                    The account that carries on is <span className="font-semibold">{panel.companyName}</span>.
+                    Close this form to raise the claim on a different one.
+                  </p>
+                )}
+
+                <fieldset className="mt-14 rounded-card border p-12" style={{ borderColor: "var(--line)" }}>
+                  <legend className="px-8 text-[11px] font-semibold uppercase tracking-[0.12em]"
+                    style={{ color: "var(--ink-soft)" }}>
+                    The extra one — always an account this office has shut
+                  </legend>
+                  <div className="flex flex-wrap gap-10">
+                    <input value={draft.loserQuery} aria-label="Search closed accounts"
+                      onChange={(e) => setDraft({ ...draft, loserQuery: e.target.value })}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); searchClosed(draft.loserQuery); } }}
+                      placeholder="The name it was shut under"
+                      className="min-w-[220px] flex-1 rounded-input border px-12 py-8 text-sm" style={boxStyle} />
+                    <button type="button" className={headBtn} style={miniStyle} disabled={closedBusy}
+                      onClick={() => searchClosed(draft.loserQuery)}>
+                      {closedBusy ? "Reading…" : "Find"}
+                    </button>
+                  </div>
+                  {(loserChosen || panel.loserName) && (
+                    <p className="mt-8 text-xs" style={{ color: "var(--ink)" }}>
+                      Named as the extra one: <span className="font-semibold">
+                        {loserChosen?.name ?? panel.loserName}</span>
+                      {loserChosen ? ` — shut ${day(loserChosen.deleted_at)}.` : ". "
+                        + "It is not in the twenty-five most recently closed accounts, so search its name "
+                        + "to see it in the list — the register already knows which one this is."}
+                    </p>
+                  )}
+                  {closed === null ? (
+                    <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                      The twenty-five accounts shut most recently. Type a name and press Find — a claim is
+                      raised on the accounts the office has already closed, so none of these are on the live list.
+                    </p>
+                  ) : closed.length === 0 ? (
+                    <p className="mt-8 text-[11px]" style={{ color: "var(--ink)" }}>
+                      No shut account matches. Nothing here searches the live accounts: an account that is
+                      still open cannot be anybody&apos;s extra one until the tenants desk closes it.
+                    </p>
+                  ) : (
+                    <ul className="mt-8 max-h-[240px] overflow-y-auto">
+                      {closed.map((c) => (
+                        <li key={c.id} className={line}>
+                          <button type="button"
+                            onClick={() => setDraft({ ...draft, loserId: c.id, loserQuery: c.name })}
+                            className="w-full border-0 bg-transparent p-0 text-left"
+                            style={{ background: c.id === draft.loserId ? "color-mix(in srgb, var(--adm-accent) 12%, transparent)" : undefined }}>
+                            <p className="text-xs font-semibold" style={{ color: "var(--ink)" }}>{c.name}</p>
+                            <p className="text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                              {c.type} · {label(ACCOUNT_STATES, c.account_status)} · opened {day(c.created_at)} ·{" "}
+                              shut {day(c.deleted_at)}
+                            </p>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </fieldset>
+
+                {previewBusy && (
+                  <p role="status" className="mt-14 text-sm" style={{ color: "var(--ink-soft)" }}>
+                    Asking the register what this pair would do…
+                  </p>
+                )}
+                {preview && !previewBusy && (
+                  <div className="mt-14 grid gap-12">
+                    <div className="rounded-card border p-14"
+                      style={{
+                        borderColor: preview.eligible ? "var(--success)" : "var(--warning)",
+                        background: preview.eligible ? "var(--milk)"
+                          : "color-mix(in srgb, var(--warning) 8%, transparent)"
+                      }}>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em]"
+                        style={{ color: preview.eligible ? "var(--success)" : "var(--danger)" }}>
+                        {preview.eligible ? "The register would accept this pair" : "This pair cannot be claimed"}
+                      </p>
+                      <p className="mt-6 text-xs" style={{ color: "var(--ink)" }}>
+                        {preview.survivor.name} carries on{preview.survivor.closed_at ? ` (shut ${day(preview.survivor.closed_at)})` : ""}
+                        {" "}· {preview.loser.name} is the extra one
+                        {preview.loser.closed_at ? `, shut ${day(preview.loser.closed_at)}` : ""}
+                      </p>
+                      {!preview.eligible && (
+                        <p className="mt-8 text-[11px]" style={{ color: "var(--ink)" }}>
+                          {preview.refusal ?? "The register gave no reason."}
+                        </p>
+                      )}
+                      <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                        Read at {when(preview.clock)}. It is the same answer the write itself would give, in
+                        the same order, so nothing here is the desk&apos;s guess about what the trigger thinks.
+                      </p>
+                    </div>
+
+                    {preview.eligible && (
+                      <>
+                        <Block head="What moves to the account that carries on"
+                          hint="Only the unanswered lines, and only as new lines. An answer already signed is kept on the file it was signed on.">
+                          {preview.carries.length === 0 ? (
+                            <p className="mt-6 text-[11px]" style={{ color: "var(--ink)" }}>
+                              Nothing. That closed account has no line waiting for an answer, so this claim
+                              moves no work at all — it only writes down that the two are one company.
+                            </p>
+                          ) : (
+                            <ul className="mt-6 grid gap-6">
+                              {preview.carries.map((c, i) => (
+                                <li key={`${c.kind}-${i}`} className="text-[11px]" style={{ color: "var(--ink)" }}>
+                                  <span className="font-semibold">{kindWord(c.kind)}</span> — {stateWord(c.loser_status)}
+                                  {c.loser_tail ? `, read as ending ${c.loser_tail}` : ", no number ever written"}
+                                  {" "}· raised {day(c.loser_raised_at)}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          {preview.skips.length > 0 && (
+                            <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                              {preview.skips.map((s) => `${kindWord(s.kind)}: ${s.because}`).join(" · ")}
+                            </p>
+                          )}
+                        </Block>
+
+                        <Block head="What stays behind on the closed account"
+                          hint="A claim is not a merge. These stay on that file and are still readable there.">
+                          <div className="mt-6 flex flex-wrap gap-8">
+                            {([
+                              ["answered checks", preview.stays_behind.checks_answered],
+                              ["open checks", preview.stays_behind.checks_open],
+                              ["notes", preview.stays_behind.notes],
+                              ["labels worn", preview.stays_behind.labels],
+                              ["filed papers", preview.stays_behind.papers],
+                              ["calls logged", preview.stays_behind.calls],
+                              ["open disputes", preview.stays_behind.disputes],
+                              ["refund papers", preview.stays_behind.refund_papers],
+                              ["cargo files", preview.stays_behind.cargo_files],
+                              ["seats", preview.stays_behind.seats],
+                              ["live sessions", preview.stays_behind.sessions_live]
+                            ] as [string, number][]).map(([w, n]) => (
+                              <Chip key={w} edge={n > 0 ? "var(--adm-accent)" : "var(--ink-soft)"}>{n} {w}</Chip>
+                            ))}
+                          </div>
+                        </Block>
+                      </>
+                    )}
+
+                    {preview.already.length > 0 && (
+                      <Block head="Claims the register already holds on this pair">
+                        <ul className="mt-6 grid gap-6">
+                          {preview.already.map((a) => (
+                            <li key={a.id} className="text-[11px]" style={{ color: "var(--ink)" }}>
+                              <span className="font-semibold">{a.direction === "same"
+                                ? "This pair, the same way round"
+                                : "These two accounts, the other way round"}</span>
+                              {" "}· {a.status === "declared" ? "standing" : "withdrawn"} · raised {day(a.raised_at)} · “{a.reason.slice(0, 120)}”
+                              {a.carried_kinds.length > 0 && (
+                                <> · carried {a.carried_kinds.map(kindWord).join(", ")}</>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="mt-8 text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                          A withdrawn claim is history, not a wall: the same pair can be claimed again, and the
+                          register keeps both sentences.
+                        </p>
+                      </Block>
+                    )}
+                  </div>
+                )}
+
+                <label className={`${labelText} mt-14 block`} style={{ color: "var(--ink-soft)" }}>
+                  What makes them one account — kept on the register forever
+                  <textarea value={draft.reason} rows={3} className={box} style={boxStyle}
+                    placeholder="the same NIDA number, the same TIN, the same director signed up twice"
+                    onChange={(e) => setDraft({ ...draft, reason: e.target.value })} />
+                </label>
+              </>
+            )}
+
+            {panel.kind === "voidclaim" && (
+              <>
+                <p className="mt-12 text-xs" style={{ color: "var(--ink)" }}>
+                  <span className="font-semibold">{panel.companyName}</span> keeps its place as the account that
+                  carried on; <span className="font-semibold">{panel.loserName}</span> stays shut exactly as it
+                  was. Only the pairing stops.
+                </p>
+                {(panel.carried?.length ?? 0) > 0 && (
+                  <p className="mt-8 text-[11px]" style={{ color: "var(--warning)" }}>
+                    This claim had carried {panel.carried!.map(kindWord).join(", ")} onto{" "}
+                    {panel.companyName}. Those lines are that account&apos;s own checks now and an answer given
+                    on one is kept, so withdrawing the claim does not take them back.
+                  </p>
+                )}
+                <label className={`${labelText} mt-14 block`} style={{ color: "var(--ink-soft)" }}>
+                  Why the claim comes off
+                  <textarea value={draft.reason} rows={3} className={box} style={boxStyle}
+                    onChange={(e) => setDraft({ ...draft, reason: e.target.value })} />
+                </label>
+              </>
+            )}
+
+            {panel.kind === "cut" && (
+              <>
+                <p className="mt-12 text-xs" style={{ color: "var(--ink)" }}>
+                  {panel.live} live session(s) on {panel.companyName}, across {panel.seats} seat(s)
+                  {panel.borrowedViews ? `, of which ${panel.borrowedViews} is a read-only visit from this office` : ""}.
+                </p>
+                <p className="mt-8 text-[11px]" style={{ color: "var(--warning)" }}>
+                  An access token is a signed key with no row behind it, so one already issued keeps working for
+                  up to fifteen minutes even after the cut-off. Nothing on this desk shortens that; stopping an
+                  account sooner is a block, and a block needs a second seat on Approvals.
+                </p>
+                <label className={`${labelText} mt-14 block`} style={{ color: "var(--ink-soft)" }}>
+                  Why every session is being ended
+                  <textarea value={draft.reason} rows={3} className={box} style={boxStyle}
+                    placeholder="the director telephoned: somebody else has the password"
+                    onChange={(e) => setDraft({ ...draft, reason: e.target.value })} />
+                </label>
+              </>
+            )}
+
             <div className="mt-16 flex flex-wrap items-center gap-12">
               <button type="button" disabled={!formReady() || busy} onClick={async () => {
-                if (panel.kind === "reveal") {
-                  if (!armed) { setArmed(armKey(panel)); return; }
-                  await revealReference(panel.id!); setArmed(null); return;
-                }
+                // The label and the caption below both promise a second press; every irreversible act
+                // on this desk has to keep that promise, not only the one that decrypts a number.
+                if (isArmed() && armed !== armKey(panel)) { setArmed(armKey(panel)); return; }
+                setArmed(null);
+                if (panel.kind === "reveal") { await revealReference(panel.id!); return; }
                 await press();
               }}
                 className="waisha-btn min-h-[36px] rounded-input px-16 py-8 text-xs font-semibold disabled:opacity-40">
@@ -1449,6 +2013,113 @@ export default function ControlCustomersPage() {
             <Pager filter={tFilter} setFilter={setTFilter} total={tRows[0]?.total ?? 0} />
           </section>
         )}
+
+        {tab === "claims" && (
+          <section className="mt-20">
+            <div className="flex flex-wrap gap-12">
+              <input value={kFilter.q} aria-label="Search claims"
+                onChange={(e) => setKFilter({ ...kFilter, q: e.target.value, offset: "0" })}
+                placeholder="Either account, or the sentence that made them one"
+                className="min-w-[220px] flex-1 rounded-input border px-12 py-8 text-sm" style={boxStyle} />
+              <select value={kFilter.status} aria-label="Filter claims"
+                onChange={(e) => setKFilter({ ...kFilter, status: e.target.value, offset: "0" })}
+                className="rounded-input border px-12 py-8 text-sm" style={boxStyle}>
+                <option value="">Standing and withdrawn</option>
+                <option value="declared">Standing</option>
+                <option value="voided">Withdrawn</option>
+              </select>
+              {canMerge && (
+                <button type="button" onClick={() => openPanel({ kind: "claim" })} className={headBtn}
+                  style={{ borderColor: "var(--adm-accent)", color: "var(--ink)" }}>
+                  {panel?.kind === "claim" ? "Close the form" : "Declare a duplicate"}
+                </button>
+              )}
+            </div>
+            {kCounts && (
+              <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
+                {kCounts.all} claim(s) ever raised · {kCounts.standing} standing · {kCounts.withdrawn} withdrawn ·{" "}
+                {kCounts.carried} that moved a check
+              </p>
+            )}
+            <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+              This register is not a merge. A claim writes down which account carries on and which one is the
+              extra one, and it carries only the checks nobody had answered yet — as new lines that still have
+              to be checked. Everything else stays on the closed account&apos;s own file, and both halves stay
+              readable below.
+            </p>
+            <List loading={kRows.length === 0 && !kCounts} empty={kRows.length === 0 && !!kCounts}
+              emptyWords="No claim on this office's register. Two accounts are only ever declared one here — the extra one has to be an account the tenants desk has already shut."
+              head={["The pair", "Why they are one", "Carried", "Raised by", "Day", ""]}
+              rows={kRows.map((r) => ([
+                <span key="a">
+                  <button type="button" className="border-0 bg-transparent p-0 text-left"
+                    style={{ color: "var(--ink)" }} onClick={() => openDossier(r.survivor_id, r.survivor_name)}>
+                    <span className="text-xs font-semibold">{r.survivor_name}</span>
+                    <span className="block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                      carries on · {label(ACCOUNT_STATES, r.survivor_status)}
+                    </span>
+                  </button>
+                  <span className="mt-4 block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                    the extra one:
+                  </span>
+                  <button type="button" className="mt-2 border-0 bg-transparent p-0 text-left"
+                    style={{ color: "var(--ink)" }} onClick={() => openDossier(r.loser_id, r.loser_name)}>
+                    <span className="text-xs font-semibold">{r.loser_name}</span>
+                    <span className="block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                      shut {day(r.loser_closed_at)}
+                    </span>
+                  </button>
+                  {r.status === "voided" && (
+                    <span className="mt-4 block text-[10px]" style={{ color: "var(--danger)" }}>
+                      withdrawn {day(r.voided_at)} by {r.voided_name ?? "—"}
+                    </span>
+                  )}
+                </span>,
+                <span key="b" className="break-words text-[11px]" style={{ color: "var(--ink)" }}>
+                  {r.reason}
+                  {r.void_reason && (
+                    <span className="mt-4 block" style={{ color: "var(--ink-soft)" }}>
+                      taken back because: {r.void_reason}
+                    </span>
+                  )}
+                </span>,
+                <span key="c">
+                  {r.carried_kinds.length === 0 ? (
+                    <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>nothing</span>
+                  ) : (
+                    <span className="flex flex-wrap gap-6">
+                      {r.carried_kinds.map((k) => <Chip key={k} edge="var(--adm-accent)">{kindWord(k)}</Chip>)}
+                    </span>
+                  )}
+                </span>,
+                <span key="d" className="text-[11px]" style={{ color: "var(--ink)" }}>{r.raised_name ?? "—"}</span>,
+                <span key="e" className="whitespace-nowrap text-[11px]">{day(r.raised_at)}</span>,
+                <span key="f" className="flex flex-wrap gap-8">
+                  {canMerge && r.status === "declared" && (
+                    <button type="button" className={mini}
+                      style={{ borderColor: "var(--danger)", color: "var(--danger)" }}
+                      onClick={() => openPanel({
+                        kind: "voidclaim", id: r.id, companyId: r.survivor_id, companyName: r.survivor_name,
+                        loserName: r.loser_name, carried: r.carried_kinds
+                      })}>
+                      Withdraw it
+                    </button>
+                  )}
+                  {canMerge && r.status === "voided" && (
+                    <button type="button" className={mini} style={miniStyle}
+                      onClick={() => openPanel({
+                        kind: "claim", companyId: r.survivor_id, companyName: r.survivor_name,
+                        loserId: r.loser_id, loserName: r.loser_name
+                      }, { accountId: r.survivor_id, loserId: r.loser_id, loserQuery: r.loser_name })}>
+                      Claim them again
+                    </button>
+                  )}
+                </span>
+              ]))}
+            />
+            <Pager filter={kFilter} setFilter={setKFilter} total={kRows[0]?.total ?? 0} />
+          </section>
+        )}
       </main>
     </div>
   );
@@ -1457,11 +2128,13 @@ export default function ControlCustomersPage() {
 // ---------- the dossier ----------
 
 function DossierBlock({ d, panel, openPanel, close, canManage, canVerify, busy, timeline,
-  tlSource, setTlSource, openDossier }: {
+  tlSource, setTlSource, openDossier, canMerge, canDisconnect, toggleSeats, accessFor }: {
     d: Dossier; panel: Panel | null; openPanel: (p: Panel, seed?: Partial<Draft>) => void;
     close: () => void; canManage: boolean; canVerify: boolean; busy: boolean;
     timeline: Timeline | null; tlSource: string; setTlSource: (s: string) => void;
     openDossier: (id: string, name: string) => void;
+    canMerge: boolean; canDisconnect: boolean; toggleSeats: (id: string) => void;
+    accessFor: string | null;
   }) {
   const c = d.company;
   const t = d.trust;
@@ -1509,6 +2182,19 @@ function DossierBlock({ d, panel, openPanel, close, canManage, canVerify, busy, 
                 Label it
               </button>
             </>
+          )}
+          {canMerge && !c.deleted_at && (
+            <button type="button" className={headBtn} style={miniStyle}
+              onClick={() => openPanel({ kind: "claim", companyId: c.id, companyName: c.name },
+                { accountId: c.id })}>
+              {panel?.kind === "claim" && panel.companyId === c.id ? "Close the claim" : "Declare a duplicate"}
+            </button>
+          )}
+          {canDisconnect && (
+            <button type="button" className={headBtn} style={miniStyle}
+              onClick={() => toggleSeats(c.id)}>
+              {accessFor === c.id ? "Hide the seats" : "Who is inside"}
+            </button>
           )}
           <Link href={`/control/tenants?account=${c.id}`} className={headBtn}
             style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
@@ -2064,7 +2750,10 @@ function panelTitle(p: Panel) {
     answer: `Answer the check${who}`, reveal: `Read the whole number${who}`,
     note: `Write on the file${who}`, edit: `Rewrite a note`, void: `Withdraw a note`,
     label: "Write a label into the library", retire: `Retire “${p.tagName ?? "that label"}”`,
-    wear: `Mark an account${who}`, off: `Take “${p.tagName ?? "the label"}” off${who}`
+    wear: `Mark an account${who}`, off: `Take “${p.tagName ?? "the label"}” off${who}`,
+    claim: "Declare a duplicate",
+    voidclaim: `Withdraw the claim on ${p.loserName ? `“${p.loserName}”` : "that pair"}`,
+    cut: `Cut every session off${who}`
   }[p.kind];
 }
 
@@ -2101,6 +2790,17 @@ function panelHint(p: Panel) {
     case "off":
       return "Taking a label off retires the pairing rather than deleting it, so the register can still say "
         + "who wore it and when it stopped.";
+    case "claim":
+      return "A claim is not a merge. Nothing is moved, copied or deleted by declaring one — it is the office "
+        + "writing down that two accounts are the same company, and keeping the extra one shut so it cannot be "
+        + "checked again. What carries over, if anything, is a separate decision made against that pair.";
+    case "voidclaim":
+      return "Withdrawing the claim retires the pairing, not the accounts. The extra one stays closed exactly "
+        + "as it was, and the register keeps this sentence beside the claim as the reason it stopped.";
+    case "cut":
+      return "Every live seat on this account is signed out at once, whatever device it was opened on. Nothing "
+        + "is deleted: the sessions the office cut off stay in the register with the reason and the hand that "
+        + "cut them, and the account can sign in again on its own.";
   }
 }
 
@@ -2109,6 +2809,10 @@ function submitWords(k: Panel["kind"]) {
     raise: "Open the line", paper: "Mark the paper as in", answer: "Sign the answer",
     reveal: "Read the number", note: "Write it", edit: "Rewrite it", void: "Withdraw the note",
     label: "Add it to the library", retire: "Retire the label", wear: "Mark the account",
-    off: "Take it off"
+    off: "Take it off",
+    // A claim and a cut-off are the two acts on this desk that a clerk cannot take back from the
+    // screen, so the button says what is being written rather than a verb.
+    claim: "Declare them one account", voidclaim: "Withdraw the claim",
+    cut: "Cut every session off"
   }[k];
 }

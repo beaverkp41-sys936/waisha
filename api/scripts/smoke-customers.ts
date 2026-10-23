@@ -14,6 +14,14 @@
  * desk can pick and the table refuses is a 400 nobody can explain; one the table allows and the route
  * refuses is a check no clerk can raise.
  *
+ * The last phase is 128's, and it tests a different kind of answer. A claim is written by a definer
+ * that refuses in three shapes — `ok`, `invalid` with a sentence, `not_found` naming which half of
+ * the pair the office has never seen — so the wire has to show the sentence arriving as a 409 and
+ * the missing account arriving as a 404, that the only thing a claim moves is work nobody has
+ * answered yet, that it arrives as a NEW line with no number copied off the other account's paper,
+ * and that a cut-off ends the sessions of one account and no others. `verify-customers-sql.ts`
+ * cannot show any of that, because all of it is about which words reach a clerk.
+ *
  * The fixtures are this run's own: two platform desks (the office under test and a foreign one, to
  * show the reads are bound to the register that asked), one live company, one the office has closed,
  * the seats inside them, and the papers filed against them. Everything is swept by tenant id at the
@@ -46,6 +54,12 @@ const TIN = "1245678901";
 const LICENCE = "TL/2027/0441";
 const TRANSPORT = "TP-88120077";
 const INSURANCE = "INS-2027/0415";
+/** Two numbers that belong to the closed account rather than to the live one (128). They exist only
+ *  to be refused a place in a carry: an answered check stays where it was answered, and an
+ *  unanswered one arrives on the survivor as a new line with no number copied off the other
+ *  account's paper. The sweep at the end of the claim phase proves neither left the register. */
+const CX_INSURANCE = "INS-2026/1188";
+const CX_TIN = "9988776655";
 
 let failures = 0;
 let proved = 0;
@@ -152,7 +166,9 @@ async function main() {
       .rows.map((r: any) => r.id);
     if (uids.length) {
       // A pairing names a label and an account, a label names the hand that wrote it, and a note
-      // cannot go before the account it was written about: children first, always.
+      // cannot go before the account it was written about: children first, always. A claim names
+      // two accounts (128), so it goes before either of them.
+      await oi(`delete from customer_duplicate_claims where tenant_id = any($1::uuid[])`, [all]);
       await oi(`delete from customer_taggings where tenant_id = any($1::uuid[])`, [all]);
       await oi(`delete from customer_tags where tenant_id = any($1::uuid[])`, [all]);
       await oi(`delete from customer_notes where tenant_id = any($1::uuid[])`, [all]);
@@ -257,21 +273,35 @@ async function main() {
       (await call("/control/customers/board", { ck: ck("for") })).status === 200);
 
     const probe = (await call("/control/auth/permissions", { ck: ck("sa") })).json;
-    check("the permissions probe lists the three customer duties for a super_admin",
-      ["control.customers.view", "control.customers.verify", "control.customers.manage"]
+    check("the permissions probe lists the five customer duties for a super_admin",
+      ["control.customers.view", "control.customers.verify", "control.customers.manage",
+        "control.customers.merge", "control.customers.disconnect"]
         .every((k) => (probe?.permissions ?? []).includes(k)), probe?.permissions);
     const paProbe = (await call("/control/auth/permissions", { ck: ck("pa") })).json;
     check("an analyst reads the register and cannot write to it",
       (paProbe?.permissions ?? []).includes("control.customers.view")
       && !(paProbe?.permissions ?? []).includes("control.customers.manage")
       && !(paProbe?.permissions ?? []).includes("control.customers.verify"), paProbe?.permissions);
+    check("…and reads the claims register without holding either pen: it may look, not merge, "
+      + "and may never see who is signed in",
+      (paProbe?.permissions ?? []).includes("control.customers.view")
+      && !(paProbe?.permissions ?? []).includes("control.customers.merge")
+      && !(paProbe?.permissions ?? []).includes("control.customers.disconnect"),
+      paProbe?.permissions);
     const csProbe = (await call("/control/auth/permissions", { ck: ck("cs") })).json;
     check("an agent may raise a line and write a note, and cannot certify a paper",
       (csProbe?.permissions ?? []).includes("control.customers.manage")
       && !(csProbe?.permissions ?? []).includes("control.customers.verify"), csProbe?.permissions);
+    check("…and the seat that takes “somebody else is in my account” may end those sessions on the "
+      + "call, while the same seat cannot record that two accounts were one",
+      (csProbe?.permissions ?? []).includes("control.customers.disconnect")
+      && !(csProbe?.permissions ?? []).includes("control.customers.merge"), csProbe?.permissions);
     const coProbe = (await call("/control/auth/permissions", { ck: ck("co") })).json;
     check("the compliance seat holds the answer and the reveal",
       (coProbe?.permissions ?? []).includes("control.customers.verify"), coProbe?.permissions);
+    check("…and the claim, because a duplicate is a compliance question before it is a typing "
+      + "question", (coProbe?.permissions ?? []).includes("control.customers.merge"),
+      coProbe?.permissions);
 
     // ============================================================
     phase("one vocabulary, three authors, tested by raising every kind");
@@ -661,7 +691,7 @@ async function main() {
       reWear.status === 409 && msg(reWear.json).includes("withdrawn"), msg(reWear.json));
 
     // ============================================================
-    phase("the four CSVs");
+    phase("the five CSVs");
     for (const [register, head] of [
       ["accounts", "name,type,account_status,slug,plan_name,created_at,trial_ends_at,"
         + "licence_expires_at,open_checks,approved,refused,expired,seats,tags,trust,blocked_note,"
@@ -670,7 +700,9 @@ async function main() {
         + "raised_name,raised_at,decided_name,decided_at,has_reference"],
       ["notes", "company_name,body,author_name,created_at,edited_at,voided_by_name,voided_at,"
         + "void_reason"],
-      ["tags", "company_name,name,colour,applied_by_name,applied_at,removed_by_name,removed_at"]
+      ["tags", "company_name,name,colour,applied_by_name,applied_at,removed_by_name,removed_at"],
+      ["claims", "survivor_name,loser_name,loser_closed_at,status,reason,carried_kinds,"
+        + "raised_name,raised_at,voided_name,voided_at,void_reason"]
     ] as [string, string][]) {
       const file = await call(`/control/customers/export?register=${register}`, { ck: ck("pa") });
       // The writer quotes every cell, so the assertion is about the column names it chose, not the
@@ -741,7 +773,7 @@ async function main() {
       "control.customers.note_written", "control.customers.note_edited",
       "control.customers.note_withdrawn", "control.customers.tag_created",
       "control.customers.tag_applied", "control.customers.tag_removed", "control.customers.tag_retired"];
-    check("all eleven acts this desk performs left an audit row",
+    check("the eleven acts of the register left an audit row each",
       wantActions.every((a) => audits.some((r: any) => r.action === a)),
       audits.map((r: any) => r.action));
     const before = await one(`select before, after from audit_logs
@@ -786,6 +818,446 @@ async function main() {
       (trustNow?.t?.factors ?? []).some((f: any) => f.label === "checked and approved"),
       trustNow?.t?.factors);
 
+    // ============================================================
+    phase("the claim and the cut-off (128)");
+    const seenAt = seen.length;
+    /** A refusal this desk shows a clerk is either the route's `error.message` or the preview's own
+     *  `refusal` field — the second one is not an error, it is the answer to a question the desk
+     *  asked before deciding. Both are read the same way here. */
+    const refuse = (j: any) => String(j?.refusal ?? j?.error?.message ?? j?.message ?? "");
+    // A claim is only ever about an account the office has already shut, and 127's own guard refuses
+    // a check line written against a closed account — which is exactly why a carry arrives as a NEW
+    // line rather than by moving one. So the closed fixture is opened, given three real register
+    // lines through the routes, and shut again. Everything below depends on which of those three
+    // the survivor still owes an answer on.
+    await oi(`update tenants set deleted_at = null, status = 'active' where id = $1`, [CX]);
+    const cxInsRaise = await call(`/control/customers/${CX}/checks`, {
+      ck: ck("cs"), body: { kind: "insurance" } });
+    const cxIns = String(cxInsRaise.json?.check?.id ?? "");
+    const cxInsSubmit = await call(`/control/customers/checks/${cxIns}/submit`, {
+      ck: ck("cs"), body: { reference: CX_INSURANCE } });
+    const cxTinRaise = await call(`/control/customers/${CX}/checks`, {
+      ck: ck("cs"), body: { kind: "tin" } });
+    const cxTin = String(cxTinRaise.json?.check?.id ?? "");
+    const cxTinAnswer = await call(`/control/customers/checks/${cxTin}/decide`, {
+      ck: ck("co"), body: { status: "approved", reference: CX_TIN } });
+    const cxTraRaise = await call(`/control/customers/${CX}/checks`, {
+      ck: ck("cs"), body: { kind: "transport_licence" } });
+    check("the account that will be named as the extra one holds one answered, one submitted and "
+      + "one awaiting check", [cxInsRaise, cxTinRaise, cxTraRaise].every((r) => r.status === 201)
+      && cxInsSubmit.status === 200 && cxTinAnswer.status === 200,
+      { ins: cxInsRaise.status, submitted: cxInsSubmit.status, tin: cxTinRaise.status,
+        answered: cxTinAnswer.status, transport: cxTraRaise.status });
+    await oi(`update tenants set deleted_at = now(), status = 'suspended' where id = $1`, [CX]);
+    // 106's read-only visit is a session on the company wearing one of its seats, with the office's
+    // seat named in `actor_user_id`. It is the row a cut-off has to reach that the fixture's own
+    // seven do not, so it is opened here and the answer has to count it.
+    await oi(`insert into sessions (id, user_id, tenant_id, family_id, family_expires_at,
+        refresh_token_hash, actor_user_id, user_agent, ip, expires_at)
+      values ($1,$2,$3,$4, now() + interval '2 hours', $5,$6,'smoke-customers','127.0.0.1',
+        now() + interval '2 hours')`,
+      [randomUUID(), uDir, CO, randomUUID(), sha256(`cu-smoke-visit-${MARK}`), uCS]);
+
+    const liveLoser = await call(`/control/customers/duplicates/${CO}/${CF}`, { ck: ck("pa") });
+    check("a live account cannot be the extra one, and the desk is told that before it writes, "
+      + "pointing at the two-seat door", liveLoser.status === 200
+      && liveLoser.json?.eligible === false && refuse(liveLoser.json).includes("still live")
+      && refuse(liveLoser.json).includes("two-seat"), liveLoser.json?.refusal);
+    const officeHalf = await call(`/control/customers/duplicates/${TC}/${CX}`, { ck: ck("pa") });
+    check("the office is not an account on the platform, so the preview says it cannot be either "
+      + "half — in words, on the same 200 that carries a live pair, because a refusal to claim is "
+      + "what the clerk is choosing between, not a fault",
+      officeHalf.status === 200 && officeHalf.json?.eligible === false
+      && officeHalf.json?.survivor?.type === "platform"
+      && refuse(officeHalf.json).includes("not an account on the platform"), officeHalf.json?.refusal);
+    const noSurvivor = await call(`/control/customers/duplicates/${randomUUID()}/${CX}`,
+      { ck: ck("pa") });
+    check("an account the office has never seen is a 404 that says which half of the pair is missing",
+      noSurvivor.status === 404 && refuse(noSurvivor.json).includes("carry on"),
+      refuse(noSurvivor.json));
+    const noLoser = await call(`/control/customers/duplicates/${CO}/${randomUUID()}`, { ck: ck("pa") });
+    check("…and the same when it is the extra one that is missing",
+      noLoser.status === 404 && refuse(noLoser.json).includes("named as the extra one"),
+      refuse(noLoser.json));
+
+    // The clerk chooses the extra account out of a list, and the list every other write on this
+    // desk uses is the live one — a tombstone is not on it. `?closed=1` is the other half of the
+    // picker, and the claim is unraisable without it.
+    const closedPicker = await call(`/control/customers/accounts?closed=1&search=Shut`, { ck: ck("pa") });
+    const shutRow = (closedPicker.json?.rows ?? []).find((r: any) => r.id === CX);
+    check("a claim's extra account is chosen from the closed list, which is the only list it can "
+      + "be on", closedPicker.status === 200 && !!shutRow
+      && shutRow.name === "Customers Smoke Shut Ltd"
+      && !!shutRow.deleted_at && !!shutRow.created_at, shutRow);
+    check("…and the closed list holds no live account, so the desk cannot name a survivor there",
+      (closedPicker.json?.rows ?? []).every((r: any) => !!r.deleted_at)
+      && !(closedPicker.json?.rows ?? []).some((r: any) => r.id === CO),
+      (closedPicker.json?.rows ?? []).length);
+    const livePicker = await call(`/control/customers/accounts?search=Customers%20Smoke`, { ck: ck("pa") });
+    check("the picker a check is raised from still excludes every closed account, including the "
+      + "one just named", (livePicker.json?.rows ?? []).some((r: any) => r.id === CO)
+      && !(livePicker.json?.rows ?? []).some((r: any) => r.id === CX),
+      (livePicker.json?.rows ?? []).map((r: any) => r.name));
+    const closedBadFlag = await call(`/control/customers/accounts?closed=yes`, { ck: ck("pa") });
+    check("a flag the picker does not have is a 400 rather than a silent change of list",
+      closedBadFlag.status === 400, closedBadFlag.text.slice(0, 160));
+
+    const prev = await call(`/control/customers/duplicates/${CO}/${CX}`, { ck: ck("pa") });
+    check("the eligible pair is eligible: one open check would move, and the preview names the "
+      + "number it was read from", prev.status === 200 && prev.json?.eligible === true
+      && prev.json?.refusal === null && (prev.json?.carries ?? []).length === 1
+      && prev.json?.carries[0]?.kind === "insurance"
+      && prev.json?.carries[0]?.loser_tail === CX_INSURANCE.slice(-4)
+      && prev.json?.carries[0]?.loser_status === "submitted",
+      { eligible: prev.json?.eligible, carries: prev.json?.carries });
+    check("…and the kind the survivor already owes an answer on is skipped, not doubled",
+      (prev.json?.skips ?? []).length === 1
+      && prev.json?.skips[0]?.kind === "transport_licence"
+      && refuse(prev.json?.skips[0]).length === 0
+      && String(prev.json?.skips[0]?.because).includes("already has an open"),
+      prev.json?.skips);
+    check("…the preview counts what stays behind instead of letting “merged” mean everything moved — "
+      + "and the line that moves is not also counted as staying",
+      prev.json?.stays_behind?.checks_answered === 1
+      && prev.json?.stays_behind?.checks_open === 1
+      && prev.json?.stays_behind?.notes === 0
+      && prev.json?.stays_behind?.papers === 0
+      && prev.json?.stays_behind?.sessions_live === 0, prev.json?.stays_behind);
+    check("…and nothing stands between this pair yet", (prev.json?.already ?? []).length === 0,
+      prev.json?.already);
+
+    const sameTwice = await call(`/control/customers/${CO}/duplicates`, {
+      ck: ck("sa"), body: { loser: CO, reason: "The same account named twice is not a pair." } });
+    check("a claim needs two accounts, and the route says so before the register is asked",
+      sameTwice.status === 400 && fields(sameTwice.json).includes("loser"), sameTwice.text);
+    const briefReason = await call(`/control/customers/${CO}/duplicates`, {
+      ck: ck("sa"), body: { loser: CX, reason: "same" } });
+    check("seven characters is not a reason: a claim has to say what makes them one account",
+      briefReason.status === 400 && fields(briefReason.json).includes("reason"), briefReason.text);
+    const claimLive = await call(`/control/customers/${CO}/duplicates`, {
+      ck: ck("sa"), body: { loser: CF, reason: "Both accounts were signed up by one director." } });
+    check("claiming a live account is refused in the register's own words, with the second "
+      + "signature it is waiting for", claimLive.status === 409
+      && refuse(claimLive.json).includes("still a live account")
+      && refuse(claimLive.json).includes("second signature"), refuse(claimLive.json));
+    const claimClosed = await call(`/control/customers/${CX}/duplicates`, {
+      ck: ck("sa"), body: { loser: CF, reason: "A closed account cannot carry on as anything." } });
+    check("…and so is a claim written on a closed account: the survivor has to be the live one",
+      claimClosed.status === 409
+      && refuse(claimClosed.json).includes("cannot be the one that survives"),
+      refuse(claimClosed.json));
+    const claimOffice = await call(`/control/customers/${TC}/duplicates`, {
+      ck: ck("sa"), body: { loser: CX, reason: "The office is not a customer of itself." } });
+    check("…and the office cannot be the account that survives, because the picker never "
+      + "offers it", claimOffice.status === 404, claimOffice.text.slice(0, 160));
+    const analystClaim = await call(`/control/customers/${CO}/duplicates`, {
+      ck: ck("pa"), body: { loser: CX, reason: "An analyst reads the register and signs nothing." } });
+    check("the seat that may read the claims register may not write one (403)",
+      analystClaim.status === 403 && code(analystClaim.json) === "FORBIDDEN", analystClaim.text);
+    const agentClaim = await call(`/control/customers/${CO}/duplicates`, {
+      ck: ck("cs"), body: { loser: CX, reason: "The agent labels accounts; it does not merge them." } });
+    check("…nor can the seat that holds `manage`: a claim leans on a closure two seats signed",
+      agentClaim.status === 403, agentClaim.text);
+
+    const claim = await call(`/control/customers/${CO}/duplicates`, {
+      ck: ck("sa"), body: { loser: CX,
+        reason: "Both accounts were signed up by the same director with the same taxpayer number." } });
+    const claimId = String(claim.json?.claim?.id ?? "");
+    check("the office declares the closed account the extra one of the live account",
+      claim.status === 201 && claim.json?.status === "ok" && !!claimId
+      && claim.json?.claim?.status === "declared"
+      && claim.json?.claim?.survivor?.name === "Customers Smoke Cargo Ltd"
+      && claim.json?.claim?.loser?.name === "Customers Smoke Shut Ltd"
+      && !!claim.json?.claim?.loser?.closed_at
+      && claim.json?.claim?.raised_name === "Amani Super", claim.text.slice(0, 260));
+    check("…and the claim names the one kind it carried, not the two a clerk might have expected",
+      JSON.stringify(claim.json?.claim?.carried_kinds) === '["insurance"]'
+      && JSON.stringify(claim.json?.carried) === '[{"kind":"insurance"}]',
+      { carried_kinds: claim.json?.claim?.carried_kinds, carried: claim.json?.carried });
+    check("…the survivor owes an insurance answer it did not owe an hour ago",
+      (claim.json?.survivor_open_kinds ?? []).includes("insurance")
+      && (claim.json?.survivor_open_kinds ?? []).length === 4, claim.json?.survivor_open_kinds);
+    const carriedLine = await one(`select id, status, (reference_encrypted is not null) as has_number,
+        reference_tail, reason, raised_by, (document_id is not null) as has_paper
+      from customer_verifications where company_tenant_id = $1 and kind = 'insurance'
+        and status = 'awaiting'`, [CO]);
+    check("the line that arrived is a new one: no number copied off the other account's paper, no "
+      + "reason, no document — only the question", !!carriedLine
+      && carriedLine.has_number === false && carriedLine.reference_tail === null
+      && carriedLine.reason === null && carriedLine.has_paper === false
+      && carriedLine.raised_by === uSA, carriedLine);
+    const loserLine = await one(`select status, reference_tail from customer_verifications
+      where id = $1`, [cxIns]);
+    check("…while the closed account's own submitted line stays where it was, number and all",
+      loserLine?.status === "submitted"
+      && loserLine?.reference_tail === CX_INSURANCE.slice(-4), loserLine);
+    const stayedPut = await one(`select count(*)::int as answered from customer_verifications
+      where company_tenant_id = $1 and status = 'approved'`, [CX]);
+    check("…and an answer the office already signed is not moved by a claim",
+      stayedPut?.answered === 1, stayedPut);
+    const mergeNote = await one(`select body from customer_notes where id = $1`,
+      [claim.json?.note_id]);
+    check("the survivor's file says what happened, in the register's own sentence",
+      !!mergeNote && mergeNote.body.startsWith("Duplicate of Customers Smoke Shut Ltd, closed")
+      && mergeNote.body.includes("new lines to be checked: insurance")
+      && mergeNote.body.includes("stay on its own file"), mergeNote?.body?.slice(0, 240));
+    const claimStory = await call(`/control/customers/${CO}/timeline?source=note`, { ck: ck("pa") });
+    check("…which is why the claim is legible on the account's own story, not only in a register "
+      + "nobody opens", (claimStory.json?.rows ?? []).some((r: any) =>
+        /Duplicate of Customers Smoke Shut Ltd/.test(String(r.detail))),
+      (claimStory.json?.rows ?? []).slice(0, 2).map((r: any) => String(r.detail).slice(0, 60)));
+    const claimTwice = await call(`/control/customers/${CO}/duplicates`, {
+      ck: ck("sa"), body: { loser: CX, reason: "Trying to write the same claim a second time." } });
+    check("a pair already on the register cannot be claimed twice, and the answer names the "
+      + "survivor that holds it", claimTwice.status === 409
+      && refuse(claimTwice.json).includes("already declared the extra one of Customers Smoke Cargo Ltd")
+      && refuse(claimTwice.json).includes("Withdraw that claim"), refuse(claimTwice.json));
+    const otherSurvivor = await call(`/control/customers/${CF}/duplicates`, {
+      ck: ck("sa"), body: { loser: CX, reason: "A different account claims the same closed one." } });
+    check("…nor can a second account claim the same closed one: one closed account is the extra "
+      + "one of one account only", otherSurvivor.status === 409
+      && refuse(otherSurvivor.json).includes("Cargo Ltd"), refuse(otherSurvivor.json));
+    const afterPrev = await call(`/control/customers/duplicates/${CO}/${CX}`, { ck: ck("pa") });
+    check("…and the preview says so before the desk tries again",
+      (afterPrev.json?.already ?? []).length === 1
+      && afterPrev.json?.already[0]?.status === "declared"
+      && afterPrev.json?.already[0]?.direction === "same", afterPrev.json?.already);
+    const reversed = await call(`/control/customers/duplicates/${CX}/${CO}`, { ck: ck("pa") });
+    check("…in whichever order the two accounts are named",
+      (reversed.json?.already ?? []).length === 1
+      && reversed.json?.already[0]?.direction === "reversed"
+      && reversed.json?.eligible === false,
+      { already: reversed.json?.already, refusal: reversed.json?.refusal });
+
+    const ghostVoid = await call(`/control/customers/duplicates/${randomUUID()}/void`, {
+      ck: ck("sa"), body: { reason: "There is no claim on this office's register with that number." } });
+    check("a claim the office has never seen is a 404 rather than a rollback",
+      ghostVoid.status === 404 && refuse(ghostVoid.json).includes("not on this office"),
+      refuse(ghostVoid.json));
+    const briefVoid = await call(`/control/customers/duplicates/${claimId}/void`, {
+      ck: ck("sa"), body: { reason: "oops" } });
+    check("taking a claim back needs a sentence as good as the one that made it",
+      briefVoid.status === 400 && fields(briefVoid.json).includes("reason"), briefVoid.text);
+    const agentVoid = await call(`/control/customers/duplicates/${claimId}/void`, {
+      ck: ck("cs"), body: { reason: "An agent cannot take back what it cannot declare." } });
+    check("and the withdrawal is the merge duty's, not the note-writer's", agentVoid.status === 403,
+      agentVoid.text);
+    const voided = await call(`/control/customers/duplicates/${claimId}/void`, {
+      ck: ck("co"), body: { reason: "The taxpayer number on the second account is the first one's, "
+        + "mistyped by the bank — they were never the same proprietor." } });
+    check("a second seat takes the claim back, and the claim keeps both hands",
+      voided.status === 200 && voided.json?.claim?.status === "voided"
+      && voided.json?.claim?.voided_name === "Biweta Compliance"
+      && String(voided.json?.claim?.void_reason).startsWith("The taxpayer number")
+      && voided.json?.claim?.carried_kinds?.join(",") === "insurance", voided.json);
+    const carriedStill = await one(`select count(*)::int as open from customer_verifications
+      where company_tenant_id = $1 and kind = 'insurance' and status = 'awaiting'`, [CO]);
+    check("the carried line stays: it is the survivor's own check now, and an answer once owed is "
+      + "not un-owed", carriedStill?.open === 1, carriedStill);
+    const voidNote = await one(`select body from customer_notes where id = $1`,
+      [voided.json?.note_id]);
+    check("…and the file says the withdrawal happened and why the checks did not go back",
+      !!voidNote && voidNote.body.includes("That duplicate claim was withdrawn")
+      && voidNote.body.includes("stay on this file")
+      && voidNote.body.includes("mistyped by the bank"), voidNote?.body?.slice(0, 240));
+    const voidTwice = await call(`/control/customers/duplicates/${claimId}/void`, {
+      ck: ck("co"), body: { reason: "Withdrawing the same claim a second time says nothing." } });
+    check("a withdrawal is not edited, and cannot be withdrawn twice", voidTwice.status === 409
+      && refuse(voidTwice.json).includes("already withdrawn on"), refuse(voidTwice.json));
+    const reClaim = await call(`/control/customers/${CO}/duplicates`, {
+      ck: ck("sa"), body: { loser: CX, reason: "Raised again on the strength of the identity number "
+        + "both accounts share, and this time the office holds the second note." } });
+    check("after a withdrawal the pair can be claimed again, and the register says what it carries "
+      + "this time — nothing, because the survivor already owes that insurance answer",
+      reClaim.status === 201 && JSON.stringify(reClaim.json?.claim?.carried_kinds) === "[]"
+      && JSON.stringify(reClaim.json?.carried) === "[]",
+      { status: reClaim.status, carried: reClaim.json?.claim?.carried_kinds,
+        text: reClaim.text.slice(0, 200) });
+
+    const register = await call("/control/customers/duplicates?limit=50", { ck: ck("pa") });
+    const claims = (register.json?.claims ?? []) as any[];
+    check("the claims register lists both halves by name, newest first, with the hands that wrote "
+      + "and unwrote them", claims.length === 2
+      && claims[0]?.survivor_name === "Customers Smoke Cargo Ltd"
+      && claims[0]?.loser_name === "Customers Smoke Shut Ltd"
+      && !!claims[0]?.loser_closed_at && claims[0]?.status === "declared"
+      && claims[1]?.status === "voided" && claims[1]?.voided_name === "Biweta Compliance",
+      { n: claims.length, first: claims[0], second: claims[1] });
+    check("…with the register's own counts beside it, so a chip says what it filtered out of, and "
+      + "the carried count is standing claims that moved something — the claim that moved one is "
+      + "withdrawn, and the one standing now moved nothing",
+      register.json?.counts?.all === 2 && register.json?.counts?.standing === 1
+      && register.json?.counts?.withdrawn === 1 && register.json?.counts?.carried === 0,
+      register.json?.counts);
+    const onlyVoided = await call("/control/customers/duplicates?status=voided", { ck: ck("pa") });
+    const onlyDeclared = await call("/control/customers/duplicates?status=declared", { ck: ck("pa") });
+    check("a state chip filters the list and not the counts",
+      (onlyVoided.json?.claims ?? []).length === 1
+      && (onlyDeclared.json?.claims ?? []).length === 1
+      && onlyVoided.json?.counts?.all === 2,
+      { voided: (onlyVoided.json?.claims ?? []).length, counts: onlyVoided.json?.counts });
+    check("…and every claim line carries how many the filter matched, because the desk's pager "
+      + "reads it off the rows and would otherwise say “0 rows” above a row it is showing",
+      claims[0]?.total === 2 && onlyVoided.json?.claims[0]?.total === 1
+      && onlyDeclared.json?.claims[0]?.total === 1,
+      { all: claims[0]?.total, voided: onlyVoided.json?.claims[0]?.total,
+        declared: onlyDeclared.json?.claims[0]?.total });
+    const hunted = await call("/control/customers/duplicates?search=Shut", { ck: ck("pa") });
+    check("…and a clerk can search the register by the closed account's name",
+      (hunted.json?.claims ?? []).length === 2, (hunted.json?.claims ?? []).length);
+    const badClaimFilter = await call("/control/customers/duplicates?status=teleported",
+      { ck: ck("pa") });
+    check("a word the register does not have is a 400 naming the two it does, not an empty page",
+      badClaimFilter.status === 400, badClaimFilter.text.slice(0, 200));
+    const foreignRegister = await call("/control/customers/duplicates?limit=50", { ck: ck("for") });
+    check("another office's register holds none of these claims",
+      (foreignRegister.json?.claims ?? []).length === 0
+      && foreignRegister.json?.counts?.all === 0, foreignRegister.json?.counts);
+
+    const access = await call(`/control/customers/${CO}/access`, { ck: ck("cs") });
+    check("the seat that takes the stolen-password call can see who is in the account",
+      access.status === 200 && access.json?.company?.name === "Customers Smoke Cargo Ltd"
+      && access.json?.seats === 1 && access.json?.live === 2
+      && access.json?.borrowed_views === 1
+      && access.json?.cut_offs?.sessions_cut === 0, access.json);
+    check("…one row per person rather than per session, with a device and an address and never an "
+      + "email", (access.json?.sessions ?? []).length === 1
+      && access.json?.sessions[0]?.name === "Daudi Director"
+      && access.json?.sessions[0]?.device === "smoke-customers"
+      && !JSON.stringify(access.json).includes("@"), access.json?.sessions);
+    const analystAccess = await call(`/control/customers/${CO}/access`, { ck: ck("pa") });
+    check("who is signed in right now is not a register read: the analyst is refused (403)",
+      analystAccess.status === 403, analystAccess.text);
+    const officeAccess = await call(`/control/customers/${TC}/access`, { ck: ck("cs") });
+    check("the office cannot read its own seats through a customer door",
+      officeAccess.status === 409 && refuse(officeAccess.json).includes("staff desk"),
+      refuse(officeAccess.json));
+    const ghostAccess = await call(`/control/customers/${randomUUID()}/access`, { ck: ck("cs") });
+    check("…and an account that is not there is a 404, not an empty list",
+      ghostAccess.status === 404, ghostAccess.text);
+    // `platform_auth.hit_rate_limit` aligns its window to the epoch, so a burst that crosses a
+    // minute edge is metered against two windows and never trips. Thirty-one reads take seventy
+    // seconds end to end on this database, so the burst is fired at once instead of one after
+    // another: waiting for the edge only works if the whole burst fits inside the window.
+    await new Promise((r) => setTimeout(r, 60_000 - (Date.now() % 60_000) + 300));
+    const burstStartedAt = new Date();
+    const reads = await Promise.all(Array.from({ length: 31 }, () =>
+      call(`/control/customers/${CO}/access`, { ck: ck("cs") })));
+    const served = reads.filter((r) => r.status === 200).length;
+    const refused = reads.filter((r) => r.status === 429);
+    check("a live seat list is enumerable, but the ceiling is thirty reads a minute: of "
+      + "thirty-one asked at once, thirty are served and the rest are refused together",
+      served === 30 && refused.length === 1
+      && code(refused[0]?.json) === "RATE_LIMITED",
+      { served, refused: refused.length, other: reads.filter((r) => r.status !== 200 && r.status !== 429).map((r) => r.status) });
+    const accessAudits = await one(`select count(*)::int as n from audit_logs
+      where tenant_id = $1 and action = 'control.customers.access_read' and ts >= $2`,
+      [TC, burstStartedAt.toISOString()]);
+    check("…and every read that answered left a row saying who looked and what they saw — "
+      + "a refusal writes nothing, because nothing was seen",
+      accessAudits?.n === served, { rows: accessAudits?.n, served });
+
+    const briefCut = await call(`/control/customers/${CO}/cut-off`, {
+      ck: ck("cs"), body: { reason: "no" } });
+    check("a cut-off has to say why in as many characters as a note",
+      briefCut.status === 400 && fields(briefCut.json).includes("reason"), briefCut.text);
+    const analystCut = await call(`/control/customers/${CO}/cut-off`, {
+      ck: ck("pa"), body: { reason: "An analyst does not end other people's work." } });
+    check("and the read-only seat cannot end a session either", analystCut.status === 403,
+      analystCut.text);
+    const cut = await call(`/control/customers/${CO}/cut-off`, {
+      ck: ck("cs"), body: { reason: "The director says somebody has been signing in from Kigoma; "
+        + "every session on this account ends now." } });
+    check("the cut ends every live session on the account it was aimed at, and counts a support "
+      + "visit among them", cut.status === 200 && cut.json?.sessions_revoked === 2
+      && cut.json?.of_which_borrowed_views === 1 && cut.json?.seats === 1
+      && cut.json?.company?.name === "Customers Smoke Cargo Ltd", cut.json);
+    const honestWindow = cut.json?.window ?? {};
+    check("the answer tells the desk the limit of the act in the same breath as the count",
+      honestWindow.minutes === 15 && honestWindow.gated === false
+      && String(honestWindow.words).includes("15 minutes")
+      && String(honestWindow.words).includes("blocked"), honestWindow);
+    const revocations = await one(`select count(*)::int as every_row,
+        count(*) filter (where revoked_reason = 'control_force_logout')::int as by_this_act,
+        count(*) filter (where revoked_at is null)::int as still_open
+      from sessions where tenant_id = $1`, [CO]);
+    check("the register of the act is the session row itself: revoked, with the reason written down",
+      revocations?.every_row === 2 && revocations?.by_this_act === 2
+      && revocations?.still_open === 0, revocations);
+    const officeSeats = await one(`select count(*)::int as cut from sessions
+      where tenant_id = $1 and revoked_at is not null`, [TC]);
+    check("…and the cut is bound to one account: not one of the office's own sessions ended",
+      officeSeats?.cut === 0, officeSeats);
+    const stillOpen = await one(`select count(*)::int as n from sessions
+      where tenant_id = $1 and revoked_at is null and user_id = any($2::uuid[])`,
+      [CO, [uSA, uCO, uCS, uPA, uFor]]);
+    check("…the same for every seat that does not belong to the account",
+      stillOpen?.n === 0, stillOpen);
+    const afterCut = await call(`/control/customers/${CO}/access`, { ck: ck("sa") });
+    check("a second read answers with nobody in the building and both cut-offs counted",
+      afterCut.status === 200 && afterCut.json?.live === 0
+      && (afterCut.json?.sessions ?? []).length === 0
+      && afterCut.json?.cut_offs?.sessions_cut === 2 && !!afterCut.json?.cut_offs?.last_at,
+      afterCut.json);
+    const cutAgain = await call(`/control/customers/${CO}/cut-off`, {
+      ck: ck("cs"), body: { reason: "Cutting it a second time proves the first one held; there was "
+        + "nothing left to cut." } });
+    check("a second cut finds nothing to cut and says so rather than failing",
+      cutAgain.status === 200 && cutAgain.json?.sessions_revoked === 0
+      && cutAgain.json?.previous_cut_offs?.sessions_cut === 2, cutAgain.json);
+    const shutCut = await call(`/control/customers/${CX}/cut-off`, {
+      ck: ck("cs"), body: { reason: "There is nothing left open on an account the office has shut." } });
+    check("a closed account is not cut again: its sessions went with the tombstone, and the answer "
+      + "names where", shutCut.status === 409 && refuse(shutCut.json).includes("tombstone"),
+      refuse(shutCut.json));
+    const officeCut = await call(`/control/customers/${TC}/cut-off`, {
+      ck: ck("cs"), body: { reason: "A control seat is cut off on the staff desk, not this one." } });
+    check("…and the office's own seats are not reachable through a customer door",
+      officeCut.status === 404, officeCut.text.slice(0, 160));
+
+    const claimsCsv = await call("/control/customers/export?register=claims", { ck: ck("co") });
+    check("the claims register exports the file every tab was asked to carry",
+      claimsCsv.status === 200 && claimsCsv.text.split("\r\n").filter((l) => l.trim()).length === 3
+      && claimsCsv.text.includes("Customers Smoke Shut Ltd")
+      && claimsCsv.text.includes("Customers Smoke Cargo Ltd") && claimsCsv.text.includes("insurance"),
+      claimsCsv.text.slice(0, 200));
+    const voidedCsv = await call("/control/customers/export?register=claims&status=voided",
+      { ck: ck("co") });
+    check("…with the same filter words the tab has, so the file is what the screen showed",
+      voidedCsv.text.split("\r\n").filter((l) => l.trim()).length === 2
+      && voidedCsv.text.includes("mistyped by the bank"), voidedCsv.text.slice(0, 160));
+    const claimLeaks = seen.slice(seenAt).filter((s) => !s.where.includes("/reference")
+      && (s.text.includes(NID) || s.text.includes(TIN) || s.text.includes(CX_TIN)
+        || s.text.includes(CX_INSURANCE) || s.text.includes(INSURANCE.replace(/[^A-Z0-9]/g, ""))));
+    check("the preview, the claim, the register, the seat list and the cut-off carried no identity "
+      + "number — only the four characters a clerk can quote", claimLeaks.length === 0,
+      claimLeaks.map((s) => s.where));
+    const claimActs = (await oi(`select action, count(*)::int as n from audit_logs
+      where tenant_id = $1 and action in ('control.customers.duplicate_claimed',
+        'control.customers.duplicate_claim_voided','control.customers.seat_cut_off')
+      group by action`, [TC])).rows;
+    check("no act on this desk leaves no trace: the claim, the withdrawal and the cut are all in "
+      + "the register of writes", claimActs.length === 3, claimActs);
+    const firstClaimAudit = await one(`select entity, before, after, ip, user_agent from audit_logs
+      where tenant_id = $1 and action = 'control.customers.duplicate_claimed'
+      order by ts asc limit 1`, [TC]);
+    check("…written against the claim row, naming both accounts, what moved and who moved it",
+      firstClaimAudit?.entity === "customer_duplicate_claims"
+      && firstClaimAudit?.before === null
+      && JSON.stringify(firstClaimAudit?.after).includes("Customers Smoke Shut Ltd")
+      && JSON.stringify(firstClaimAudit?.after).includes("insurance")
+      && !JSON.stringify(firstClaimAudit?.after).includes(CX_INSURANCE)
+      && firstClaimAudit?.ip === "127.0.0.1", firstClaimAudit?.after);
+    const firstCutAudit = await one(`select entity, before, after from audit_logs
+      where tenant_id = $1 and action = 'control.customers.seat_cut_off'
+      order by ts asc limit 1`, [TC]);
+    check("…and the cut keeps what it saw before it acted and what it ended after",
+      firstCutAudit?.entity === "sessions"
+      && JSON.stringify(firstCutAudit?.before).includes('"live":2')
+      && JSON.stringify(firstCutAudit?.before).includes("Kigoma")
+      && JSON.stringify(firstCutAudit?.after).includes('"sessions_revoked":2'),
+      { before: firstCutAudit?.before, after: firstCutAudit?.after });
+
   } catch (e) {
     // A throw in the teardown below would otherwise replace the run's own error, and the smoke
     // would end with a stack about a DELETE and no word about what actually broke.
@@ -799,6 +1271,8 @@ async function main() {
               (select count(*)::int from customer_notes where tenant_id = any($1::uuid[])) as notes,
               (select count(*)::int from customer_tags where tenant_id = any($1::uuid[])) as tags,
               (select count(*)::int from customer_taggings where tenant_id = any($1::uuid[])) as taggings,
+              (select count(*)::int from customer_duplicate_claims
+                 where tenant_id = any($1::uuid[])) as claims,
               (select count(*)::int from documents where storage_path like $2) as papers`,
       [[TC, TB, CO, CX, CF], `%/${MARK}/%`]);
     await sweep();
@@ -809,15 +1283,20 @@ async function main() {
               (select count(*)::int from sessions where user_agent = 'smoke-customers') as sessions,
               (select count(*)::int from customer_verifications
                  where tenant_id = any($3::uuid[])) as checks,
+              (select count(*)::int from customer_duplicate_claims
+                 where tenant_id = any($3::uuid[])) as claims,
               (select count(*)::int from documents where storage_path like $4) as papers,
               (select count(*)::int from rate_limits where bucket like 'customers-%') as limiters`,
       [TENANT_SWEEP, EMAIL_SWEEP, [TC, TB, CO, CX, CF], `%/${MARK}/%`]);
+    // Ten checks: the six this run raised on the live account, the three it raised on the closed
+    // one before claiming it, and the one a carry left behind as a new line. Five notes: the agent's
+    // two, and the three the claim register wrote about itself.
     check(`the registers hold exactly what this run wrote (${JSON.stringify(residue)})`,
-      residue?.checks === 6 && residue?.tags === 1 && residue?.taggings === 1
-      && residue?.notes === 2 && residue?.papers === 3, residue);
+      residue?.checks === 10 && residue?.tags === 1 && residue?.taggings === 1
+      && residue?.notes === 5 && residue?.claims === 2 && residue?.papers === 3, residue);
     check("nothing of this run is left in the database",
       left?.tenants === 0 && left?.seats === 0 && left?.sessions === 0 && left?.checks === 0
-      && left?.papers === 0 && left?.limiters === 0, left);
+      && left?.claims === 0 && left?.papers === 0 && left?.limiters === 0, left);
     note("audit_logs is never deleted — this run's reveals, answers and withdrawals stay in the "
       + "fixture tenants, as every earlier smoke leaves its own.");
     await owner.end();

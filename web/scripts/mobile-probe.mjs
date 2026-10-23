@@ -560,12 +560,24 @@ const clickForm = (want) => `(() => {
   // rest of the pass measured the login page while reporting clean numbers.
   const danger = /delete|remove|revoke|suspend|block|wipe|reset|sign ?out|log ?out/i;
   const text = (el) => (el.textContent || '').trim().toLowerCase();
+  // What a control *says it does* is its first line, or its own aria-label. The line under it is
+  // the record's data: a closed account's row prints "Suspended" beneath its name, so grading the
+  // whole button refused every row in the picklist and left the panel that reads a pair unmeasured.
+  const head = (el) => {
+    const labelled = (el.getAttribute('aria-label') || '').trim();
+    if (labelled) return labelled.toLowerCase();
+    const own = [...el.childNodes].filter(n => n.nodeType === 3)
+      .map(n => n.textContent).join(' ').trim();
+    if (own) return own.toLowerCase();
+    const first = [...el.children].find(n => (n.textContent || '').trim());
+    return (first ? first.textContent : el.textContent || '').trim().toLowerCase();
+  };
   const btns = [...document.querySelectorAll('${SHELL} button, ${SHELL} a.waisha-btn')]
     .filter(el => !el.closest('[hidden]') && el.getBoundingClientRect().height > 0);
   // A row's control is often a single word — "Open", "Edit" — that the page's own create
   // button also begins with ("Open a dispute"). Taking the first prefix match measured the
   // toolbar form and reported it as the sheet, so an exact label wins when one is on the page.
-  const safe = btns.filter(el => !danger.test(text(el)));
+  const safe = btns.filter(el => !danger.test(head(el)));
   const hit = safe.find(el => text(el) === want) ?? safe.find(el => text(el).startsWith(want));
   if (!hit) return 'no ' + want;
   hit.click();
@@ -711,7 +723,12 @@ async function main() {
       const hit = await cdp.send("Runtime.evaluate",
         { expression: fillForm(String(FILL)), returnByValue: true, awaitPromise: true });
       filled = String(hit.exceptionDetails ? "fill threw" : hit.result.value);
-      await sleep(400);
+      // A search box is not a form field: the desk debounces its own refetch, so a fixed
+      // sleep measured the list from *before* the word was typed and then every later tap
+      // landed on a row that had already left the page. Wait the queue out, the same way
+      // a panel's picklist is waited out.
+      const afterFill = await settle(cdp, inflight);
+      filled += ` (${afterFill.ms > 0 ? (afterFill.ms / 1000).toFixed(1) + "s" : "cap"} settled)`;
     }
     if (OPEN) {
       const hit = await cdp.send("Runtime.evaluate",
