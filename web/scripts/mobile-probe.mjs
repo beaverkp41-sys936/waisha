@@ -95,6 +95,10 @@ const COOKIE = process.env.WAISHA_PROBE_COOKIE ?? "";
 // A create form is a page a phone user has to use, and it only exists after a tap,
 // so the load-time sweep cannot see it. --open clicks the create control first.
 const OPEN = args.includes("--open");
+// ... and the tap only lands once the desk has drawn its own toolbar. A CFA cargo desk
+// waits on /profile for the licence before it shows anything but one button, and over the
+// pooler that can pass 20s, so the wait is a knob, not a guess.
+const OPEN_WAIT = Number(flag("open-wait", 40000));
 // A tab is the same problem as a create form one: the panel a phone user has to live in
 // only exists after a tap. --click names the control by the words on it, so a sweep can
 // measure the queue tab or the register rather than only whatever a page opens on.
@@ -523,12 +527,24 @@ const SAMPLE_TEXT = `(async () => {
  *  control" for a page whose form was there all along — which reads exactly like a
  *  page with nothing wrong in it. */
 const SHELL = ".app-main, .portal-shell main, .control-shell";
+// ... and a comma list must never be dropped straight into a descendant selector:
+// ".app-main, .portal-shell main, .control-shell button" parses as three selectors, the
+// first two of which match the *panes*, not their controls. Every portal page then handed
+// back its own `<div class=app-main>` — one "button" whose text was the whole pane, so it
+// matched no verb, and `--open` reported "no create control" for a desk whose form had been
+// on screen the whole time. `:is()` keeps the list one ancestor of the thing being asked for.
+const PANE = `:is(${SHELL})`;
 
 /** Open the create form a page only shows after a tap. Verbs are the ones this
  *  codebase uses for form panels, and anything that reads like a destructive act is
  *  refused, because a sweep must not be able to delete a company.
+ *  The control is a client render — /app/cfa/cargo paints its shell, then fetches the book
+ *  counts and only then draws "+ New clearing file" — so this waits for it rather than
+ *  scanning once, and when it does give up it says how many controls it could see and how
+ *  many panes matched, because a sweep that never opened the form must not read as a sweep
+ *  of a page with nothing wrong in it.
  *  Again a template literal: no backticks in here. */
-const OPEN_FORM = `(() => {
+const OPEN_FORM = `(async () => {
   const opener = /^(\\+?\\s*)?(add|new|create|raise|report|book)\\b/i;
   const shown = /^(close|hide|cancel|done|back)\\b/i;
   const danger = /delete|remove|revoke|suspend|block|wipe|reset|sign ?out|log ?out/i;
@@ -540,14 +556,26 @@ const OPEN_FORM = `(() => {
     const t = text(el);
     return shown.test(t) && t.split(/\\s+/).length <= 2 && t.length <= 12;
   };
-  const btns = [...document.querySelectorAll('${SHELL} button, ${SHELL} a.waisha-btn')]
-    .filter(el => !el.closest('[hidden]') && el.getBoundingClientRect().height > 0);
-  const already = btns.find(dismisses);
-  if (already) return 'already open (' + text(already).slice(0, 20) + ')';
-  const hit = btns.find(el => opener.test(text(el)) && !danger.test(text(el)));
-  if (!hit) return 'no create control';
-  hit.click();
-  return 'clicked ' + text(hit).slice(0, 24);
+  const scan = () => {
+    const btns = [...document.querySelectorAll('${PANE} button, ${PANE} a.waisha-btn')]
+      .filter(el => !el.closest('[hidden]') && el.getBoundingClientRect().height > 0);
+    return {
+      seen: btns.length,
+      closed: btns.find(dismisses),
+      create: btns.find(el => opener.test(text(el)) && !danger.test(text(el)))
+    };
+  };
+  const deadline = Date.now() + ${OPEN_WAIT};
+  for (;;) {
+    const s = scan();
+    if (s.closed) return 'already open (' + text(s.closed).slice(0, 20) + ')';
+    if (s.create) { s.create.click(); return 'clicked ' + text(s.create).slice(0, 24); }
+    if (Date.now() > deadline) {
+      return 'no create control (' + s.seen + ' visible button(s), '
+        + document.querySelectorAll('${SHELL}').length + ' pane(s)) after ${(OPEN_WAIT / 1000)}s';
+    }
+    await new Promise(r => setTimeout(r, 400));
+  }
 })()`;
 
 /** Same refusal rule as OPEN_FORM: a sweep may open a panel, never undo a record.
@@ -572,7 +600,7 @@ const clickForm = (want) => `(() => {
     const first = [...el.children].find(n => (n.textContent || '').trim());
     return (first ? first.textContent : el.textContent || '').trim().toLowerCase();
   };
-  const btns = [...document.querySelectorAll('${SHELL} button, ${SHELL} a.waisha-btn')]
+  const btns = [...document.querySelectorAll('${PANE} button, ${PANE} a.waisha-btn')]
     .filter(el => !el.closest('[hidden]') && el.getBoundingClientRect().height > 0);
   // A row's control is often a single word — "Open", "Edit" — that the page's own create
   // button also begins with ("Open a dispute"). Taking the first prefix match measured the
@@ -591,7 +619,7 @@ const clickForm = (want) => `(() => {
  *  not exist until somebody types something. Paired with --click. */
 const fillForm = (want) => `(() => {
   const want = ${JSON.stringify(want)};
-  const boxes = [...document.querySelectorAll('${SHELL} input, ${SHELL} textarea')]
+  const boxes = [...document.querySelectorAll('${PANE} input, ${PANE} textarea')]
     .filter(el => !el.closest('[hidden]') && !/hidden|checkbox|radio|submit|button/i.test(el.type)
       && el.getBoundingClientRect().height > 0 && !el.value);
   const box = boxes[0];
