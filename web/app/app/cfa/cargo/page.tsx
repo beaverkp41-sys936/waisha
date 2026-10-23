@@ -19,15 +19,30 @@ interface Shipment {
   consignee_name: string; consignor_name: string; eta: string | null;
   payment_status: string; stage: string; status: string;
   weight_tonnes: string | null; open_tasks: number; created_at: string;
+  /** The two codes 130's tables hold, with the words the same tables label them. */
+  mode_code: number | null; mode_label: string | null;
+  cpc_code: string | null; cpc_label: string | null;
   /** 'signed' | 'draft' | null — whether this file has 111's master sheet, and whether it is declared. */
   master_state: string | null;
 }
 
-const TYPE_LABELS: Record<string, string> = {
-  export: "Export (1)", import: "Import (4)",
-  transhipment: "Transhipment (7)", transit: "Transit (8)"
-};
-const TYPE_PREFIX: Record<string, string> = { export: "1", import: "4", transhipment: "7", transit: "8" };
+/**
+ * The code lists, exactly as `/cargo/codes` hands them over.
+ *
+ * Migration 130 turned the EAC's modes of transport and customs procedure codes into tables, and
+ * bound each CPC to the movement its own first digit names — the same digit the file number starts
+ * on. The desk used to keep its own copy of those four pairs, which is how a clerk came to type
+ * statutory words into a free-text box while the register printed a number nobody had checked.
+ * Nothing here spells a prefix, a mode or a procedure out again.
+ */
+interface MovementType { value: string; label: string; prefix: string }
+interface TransportMode {
+  code: number; key: string; label: string; note: string | null;
+  carrier_word: string | null; bill_kind: string | null; bill_label: string | null;
+}
+interface Procedure { code: string; label: string; shipment_type: string; note: string | null }
+interface CodeLists { types: MovementType[]; modes: TransportMode[]; procedures: Procedure[] }
+
 /* What each book is for, in the office's own words. Which type stands in which book, and what
    the books are called, is the API's answer (`/cargo/books`) — never a second copy here, so the
    tab a clerk reads and the rows behind it are one story. */
@@ -56,10 +71,14 @@ const PAYMENT_COLORS: Record<string, string> = {
   unpaid: "var(--danger)", partial: "var(--gold)", paid: "var(--success)"
 };
 const INCOTERMS = ["CIF", "CFR", "EXW", "FCA", "CPT", "CIP", "DAP", "DDP", "FAS", "FOB"];
+// The mode block prints the paper's name inside a sentence, so the article has to follow the word:
+// a sea movement travels on a bill of lading, an air movement on an air waybill.
+const anOrA = (word: string) => (/^[aeiou]/i.test(word.trim()) ? "an" : "a");
 
 interface ItemRow { description: string; }
 interface FormState {
-  shipmentType: string; hsCode: string; declarationMode: string; cargoDescription: string;
+  shipmentType: string; modeCode: string; cpcCode: string;
+  hsCode: string; declarationMode: string; cargoDescription: string;
   containerType: string; containerCount: string; containerNumbers: string;
   cbm: string; weightTonnes: string;
   consigneeName: string; consignorName: string; shippingLine: string; billNumber: string;
@@ -70,7 +89,8 @@ interface FormState {
   processingCost: string; paymentAmount: string; paymentStatus: string; notes: string;
 }
 const EMPTY: FormState = {
-  shipmentType: "import", hsCode: "", declarationMode: "", cargoDescription: "",
+  shipmentType: "import", modeCode: "", cpcCode: "",
+  hsCode: "", declarationMode: "", cargoDescription: "",
   containerType: "20ft", containerCount: "1", containerNumbers: "",
   cbm: "", weightTonnes: "",
   consigneeName: "", consignorName: "", shippingLine: "", billNumber: "",
@@ -108,18 +128,29 @@ const SCAN_TEXT_KEYS: (keyof FormState)[] = [
   "officeDeclaration", "borderPoint", "nominatedIcd", "cabinetPosition"
 ];
 
-function applyScan(base: FormState, ex: ScanExtraction | null, shipmentTypeHint: string): FormState {
+/**
+ * The movement a scanned page is filed under: the word printed on it when this office files that
+ * movement, otherwise the number the clerk gave the page.
+ *
+ * `valid` is `/cargo/codes`'s list, so the desk holds no opinion of its own about what a movement
+ * is. An empty list means the codes have not landed yet — and nothing on this side can then judge
+ * the paper's word, so the shelf's answer, which the API validated on the way in, stands.
+ */
+function pickType(printed: unknown, hint: string, valid: string[]): string {
+  if (!valid.length) return hint;
+  if (typeof printed === "string" && valid.includes(printed)) return printed;
+  return valid.includes(hint) ? hint : "import";
+}
+
+function applyScan(base: FormState, ex: ScanExtraction | null, shipmentTypeHint: string,
+  validTypes: string[]): FormState {
   const f: FormState = { ...base };
   const value = (k: string) => ex?.fields?.[k]?.value;
   for (const k of SCAN_TEXT_KEYS) {
     const v = value(k);
     if (typeof v === "string" || typeof v === "number") f[k] = String(v);
   }
-  // The two pick-lists are only taken when the page prints one this desk actually files: an
-  // unknown movement type falls back to the number the clerk gave the page, then to import.
-  const printedType = value("shipmentType");
-  const typed = typeof printedType === "string" && printedType in TYPE_LABELS ? printedType : shipmentTypeHint;
-  f.shipmentType = typed in TYPE_LABELS ? typed : "import";
+  f.shipmentType = pickType(value("shipmentType"), shipmentTypeHint, validTypes);
   const printedSize = value("containerType");
   if (typeof printedSize === "string" && printedSize in CONTAINER_LABELS) f.containerType = printedSize;
   if (!CONTAINER_LABELS[f.containerType]) f.containerType = "20ft";
@@ -165,6 +196,9 @@ function CargoContent() {
   const [filterStage, setFilterStage] = useState("");
   const [filterType, setFilterType] = useState("");
   const [books, setBooks] = useState<BookMeta[]>([]);
+  // The two code lists the desk declares from. Reference data, so one pull per page: a filter
+  // change that asked again would be a second story told about the same four digits.
+  const [codes, setCodes] = useState<CodeLists | null>(null);
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY);
@@ -192,6 +226,24 @@ function CargoContent() {
   // book either way, so the only difference before the first reply is a lowercase name.
   const bookLabel = bookMeta?.label ?? book;
 
+  // Every label and digit on this page is read out of the lists the API publishes. Nothing below
+  // spells a prefix, a mode or a procedure out a second time.
+  const types = codes?.types ?? [];
+  const typeValues = types.map(t => t.value);
+  const typeLabel = (t: string) => types.find(x => x.value === t)?.label ?? t;
+  const typePrefix = (t: string) => types.find(x => x.value === t)?.prefix ?? "";
+  /** "Import (4)" once the lists have landed, the bare word while they have not. */
+  const typeOption = (t: string) => {
+    const p = typePrefix(t);
+    return p ? `${typeLabel(t)} (${p})` : typeLabel(t);
+  };
+  const modes = codes?.modes ?? [];
+  const chosenMode = modes.find(m => String(m.code) === form.modeCode) ?? null;
+  // A procedure belongs to the movement its first digit names, so the block offers only the
+  // procedures this file can declare under — the same rule 130's trigger refuses on the write.
+  const fileProcedures = (codes?.procedures ?? []).filter(p => p.shipment_type === form.shipmentType);
+  const chosenCpc = fileProcedures.find(p => p.code === form.cpcCode) ?? null;
+
   const load = useCallback(async (editTarget?: string | null) => {
     const qs = new URLSearchParams();
     qs.set("book", book);
@@ -217,7 +269,12 @@ function CargoContent() {
       const j = await e.json().catch(() => ({}));
       if (e.ok) {
         setForm({
-          shipmentType: j.shipment_type, hsCode: j.hs_code ?? "", declarationMode: j.declaration_mode ?? "",
+          shipmentType: j.shipment_type,
+          // The codes come back as the file holds them: a number for the mode, four digits for the
+          // procedure, each empty when the desk never gave the file one.
+          modeCode: j.mode_code === null || j.mode_code === undefined ? "" : String(j.mode_code),
+          cpcCode: j.cpc_code ?? "",
+          hsCode: j.hs_code ?? "", declarationMode: j.declaration_mode ?? "",
           cargoDescription: j.cargo_description ?? "",
           containerType: j.container_type, containerCount: j.container_count ? String(j.container_count) : "",
           containerNumbers: (j.container_numbers ?? []).join("\n"),
@@ -246,6 +303,19 @@ function CargoContent() {
 
   useEffect(() => {
     seatPermissions().then(keys => setCanExtract(keys.has("shipments.extract")));
+  }, []);
+
+  // The modes and the procedures are the community's lists, not this office's, so they are pulled
+  // once. A seat without `shipments.view` never reaches this page, and a reply that does not come
+  // leaves the boxes offering nothing to pick — never a guess at a digit.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await apiFetch("/cargo/codes");
+      const j = await res.json().catch(() => null);
+      if (!cancelled && res.ok && j) setCodes(j as CodeLists);
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // One pull per page id. The form is built from EMPTY rather than from whatever was typed
@@ -284,7 +354,7 @@ function CargoContent() {
           + "Open it from the list below to edit it.");
         return;
       }
-      setForm(applyScan(EMPTY, d.extraction, d.shipment_type));
+      setForm(applyScan(EMPTY, d.extraction, d.shipment_type, typeValues));
       setShowForm(true);
     })();
   }, [draftId]);
@@ -293,17 +363,31 @@ function CargoContent() {
   const containerLines = form.containerNumbers.split("\n").map(s => s.trim()).filter(Boolean);
   const containerCount = Number(form.containerCount) || 0;
   const numbersMatch = isLoose || containerLines.length === containerCount;
-  const prefix = TYPE_PREFIX[form.shipmentType] ?? "4";
+  const prefix = typePrefix(form.shipmentType);
   const isEditing = editId !== null;
   // The form offers the open book's two types, plus whatever the file or the scanned page
   // already carries, so a clerk is never shown a type the desk cannot list.
   const formTypes = [...new Set([...bookTypes, form.shipmentType])];
-  const filePreview = companyCode
-    ? `${prefix}${companyCode}-###-${new Date().getFullYear()}`
-    : "set your company code in Profile";
+  const filePreview = !companyCode
+    ? "set your company code in Profile"
+    : prefix
+      ? `${prefix}${companyCode}-###-${new Date().getFullYear()}`
+      : "waiting for the movement codes";
 
   function set<K extends keyof FormState>(k: K, v: FormState[K]) {
     setForm(f => ({ ...f, [k]: v }));
+  }
+
+  // A procedure carries its movement in its own first digit, so switching the movement cannot leave
+  // the old code sitting on the file: the box would show a value it no longer offers, and 130's
+  // trigger would refuse the write. The clerk watches the code go rather than reading a failure
+  // after pressing Save.
+  function chooseType(next: string) {
+    setForm(f => ({
+      ...f, shipmentType: next,
+      cpcCode: (codes?.procedures ?? []).some(p => p.code === f.cpcCode && p.shipment_type === next)
+        ? f.cpcCode : ""
+    }));
   }
 
   // The book lives in the URL, so an alert or a handed-over link lands on the same register.
@@ -324,6 +408,8 @@ function CargoContent() {
     try {
       const payload = {
         shipmentType: form.shipmentType,
+        modeCode: form.modeCode ? Number(form.modeCode) : null,
+        cpcCode: form.cpcCode || null,
         hsCode: form.hsCode || null,
         declarationMode: form.declarationMode || null,
         cargoDescription: form.cargoDescription || null,
@@ -380,7 +466,11 @@ function CargoContent() {
       }
       if (mode === "new" && !isEditing) {
         setNotice("Cargo file opened — the form is ready for the next one." + filedNote);
-        setForm(f => ({ ...EMPTY, shipmentType: f.shipmentType, containerType: f.containerType }));
+        // The movement and how the goods travelled carry over — a desk working a lane files the same
+        // shape of file after file. The procedure does not: a declaration is given to each consignment,
+        // never assumed from the one before it.
+        setForm(f => ({ ...EMPTY, shipmentType: f.shipmentType, modeCode: f.modeCode,
+          containerType: f.containerType }));
       } else {
         setNotice((isEditing ? "Cargo file updated." : `Cargo file ${j.fileNumber ?? ""} opened.`.trim()) + filedNote);
         setForm(EMPTY); setShowForm(false);
@@ -428,8 +518,11 @@ function CargoContent() {
           <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
             {`Two books, kept apart: ${BOOK_NOTES[book].toLowerCase()}.`}
             {companyCode
-              ? (bookTypes.length
-                ? ` This book numbers from ${bookTypes.map(t => TYPE_PREFIX[t]).join(" or ")}, so a file here reads ${TYPE_PREFIX[bookTypes[0]]}${companyCode}-001-${new Date().getFullYear()}.`
+              ? (bookTypes.length && bookTypes.every(t => typePrefix(t))
+                // The digit each movement is numbered from, printed beside the movement it belongs
+                // to: this is the pair 130's tables and the file's own number both hold.
+                ? ` This book numbers ${bookTypes.map(t => `${typePrefix(t)} for ${typeLabel(t).toLowerCase()}`).join(" and ")},`
+                  + ` so a file here reads ${typePrefix(bookTypes[0])}${companyCode}-001-${new Date().getFullYear()}.`
                 : "")
               : " Set your company code on the Profile page to open files."}
           </p>
@@ -486,7 +579,7 @@ function CargoContent() {
             <option value="">Every {bookLabel.toLowerCase()} type</option>
             {(bookMeta?.types ?? []).map(t => (
               <option key={t.value} value={t.value}>
-                {`${TYPE_LABELS[t.value] ?? t.value} — ${t.count} file${t.count === 1 ? "" : "s"}`}
+                {`${typeOption(t.value)} — ${t.count} file${t.count === 1 ? "" : "s"}`}
               </option>
             ))}
           </select>
@@ -494,7 +587,7 @@ function CargoContent() {
         <label className="block">
           <span className={`${labelCls} pane-note`}>Search</span>
           <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="File no, consignee, TANSAD, bill…" className={inputCls} style={inputStyle} />
+            placeholder="File no, consignee, TANSAD, bill, CPC…" className={inputCls} style={inputStyle} />
         </label>
       </section>
 
@@ -542,22 +635,63 @@ function CargoContent() {
           {sec("1. Classification", <>
             {field(isEditing ? "Shipment type (fixed)" : "Shipment type *", <>
               <select required value={form.shipmentType} disabled={isEditing}
-                onChange={e => set("shipmentType", e.target.value)}
+                onChange={e => chooseType(e.target.value)}
                 className={inputCls} style={isEditing ? disabledStyle : inputStyle}>
-                {formTypes.map(t => <option key={t} value={t}>{TYPE_LABELS[t] ?? t}</option>)}
+                {formTypes.map(t => <option key={t} value={t}>{typeOption(t)}</option>)}
               </select>
               {isEditing ? (
                 <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
                   A file stays in the book its number was cut from — to move it, open a new one.
                 </p>
+              ) : prefix ? (
+                <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                  {`Its number begins ${prefix}, and so does every customs procedure this file can declare under.`}
+                </p>
               ) : null}
             </>)}
+            {field("Mode of transport", <>
+              <select value={form.modeCode} onChange={e => set("modeCode", e.target.value)}
+                className={inputCls} style={inputStyle}>
+                <option value="">{modes.length ? "Not stated" : "Loading the six modes…"}</option>
+                {modes.map(m => (
+                  <option key={m.code} value={String(m.code)}>{`${m.code} — ${m.label}`}</option>
+                ))}
+              </select>
+              {modes.length > 0 && form.modeCode && !chosenMode && (
+                <p className="mt-6 text-[11px]" style={{ color: "var(--warning)" }}>
+                  This file carries a mode the list no longer offers — pick the one on the paper and
+                  save, or the sheet prints the number without the words.
+                </p>
+              )}
+            </>)}
+            {/* The mode decides what the file's paper is, so the words it implies are printed with it
+                rather than left for the clerk to remember at another section of the form. */}
+            {chosenMode && (
+              <div className="col-span-2 rounded-input border px-12 py-10"
+                style={{ borderColor: "var(--gold)",
+                  background: "color-mix(in srgb, var(--gold) 7%, transparent)" }}>
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em]"
+                  style={{ color: "var(--ink)" }}>
+                  {`Mode ${chosenMode.code} — ${chosenMode.label}`}
+                </p>
+                <p className="mt-6 text-xs" style={{ color: "var(--ink-soft)" }}>
+                  {chosenMode.note}{" "}
+                  {chosenMode.bill_label
+                    ? `It travels on ${anOrA(chosenMode.bill_label)} ${chosenMode.bill_label.toLowerCase()}, so that is the transport document the master sheet must name for this file.`
+                    : "Two legs or somebody else's paper carry it, so no single transport document belongs to this movement."}{" "}
+                  {chosenMode.carrier_word
+                    ? `The company that moves the goods is the ${chosenMode.carrier_word.toLowerCase()}, and section 3 labels its box that name.`
+                    : "This mode names no carrier, so the parties keep their own words."}
+                </p>
+              </div>
+            )}
             {field("File number (auto)",
               <input disabled value={filePreview} className={inputCls} style={disabledStyle} />)}
             {field("HS code", <input value={form.hsCode} onChange={e => set("hsCode", e.target.value)}
               placeholder="e.g. 8701.21.90" className={inputCls} style={inputStyle} />)}
             {field("Declaration mode", <input value={form.declarationMode}
-              onChange={e => set("declarationMode", e.target.value)} className={inputCls} style={inputStyle} />)}
+              onChange={e => set("declarationMode", e.target.value)}
+              placeholder="e.g. PVO, cash before delivery" className={inputCls} style={inputStyle} />)}
             {field("Cargo description", <input value={form.cargoDescription}
               onChange={e => set("cargoDescription", e.target.value)}
               placeholder="e.g. Portland cement, bagged" className={inputCls} style={inputStyle} />, true)}
@@ -596,10 +730,16 @@ function CargoContent() {
               onChange={e => set("consigneeName", e.target.value)} className={inputCls} style={inputStyle} />)}
             {field("Consignor *", <input required value={form.consignorName}
               onChange={e => set("consignorName", e.target.value)} className={inputCls} style={inputStyle} />)}
-            {field("Shipping line", <input value={form.shippingLine}
-              onChange={e => set("shippingLine", e.target.value)} className={inputCls} style={inputStyle} />)}
-            {field("Bill number (BL)", <input value={form.billNumber}
-              onChange={e => set("billNumber", e.target.value)} className={inputCls} style={inputStyle} />)}
+            {/* The mode's own word for the company that moves the goods, so a rail file is not asked
+                for a "shipping line" and an air file does not hide its airline behind one label. */}
+            {field(chosenMode?.carrier_word ?? "Shipping line", <input value={form.shippingLine}
+              onChange={e => set("shippingLine", e.target.value)}
+              placeholder={chosenMode?.carrier_word
+                ? `The ${chosenMode.carrier_word.toLowerCase()} named on the paper` : "e.g. MSC"}
+              className={inputCls} style={inputStyle} />)}
+            {field(chosenMode?.bill_label ? `${chosenMode.bill_label} number` : "Bill number (BL)",
+              <input value={form.billNumber} onChange={e => set("billNumber", e.target.value)}
+                className={inputCls} style={inputStyle} />)}
           </>)}
 
           {sec("4. Dates", <>
@@ -621,6 +761,39 @@ function CargoContent() {
           </>)}
 
           {sec("5. Customs", <>
+            {/* The procedure this file declares under, headed on its own and offered by its code:
+                the desk quotes "4000" to the customs officer, never a sentence it typed for itself.
+                The four movements' codes are cut from the same digit as the file number, so the list
+                is filtered to this file's movement — the rule 130's trigger holds on the write. */}
+            <div className="col-span-2 rounded-input border px-12 py-10"
+              style={{ borderColor: "var(--line)", background: "var(--milk)" }}>
+              <p className="text-[11px] font-bold uppercase tracking-[0.14em]"
+                style={{ color: "var(--ink)" }}>
+                CPC — the customs procedure code
+              </p>
+              <p className="mt-6 text-xs" style={{ color: "var(--ink-soft)" }}>
+                {fileProcedures.length
+                  ? `${typeLabel(form.shipmentType)} files declare under the ${fileProcedures.length} procedure${fileProcedures.length === 1 ? "" : "s"} whose code opens with ${prefix}.`
+                  : "The procedures load with the file's own code lists."}
+              </p>
+              <select value={form.cpcCode} onChange={e => set("cpcCode", e.target.value)}
+                className={`${inputCls} mt-10`} style={inputStyle}>
+                <option value="">{fileProcedures.length ? "Not stated" : "Loading the procedures…"}</option>
+                {fileProcedures.map(p => (
+                  <option key={p.code} value={p.code}>{`${p.code} — ${p.label}`}</option>
+                ))}
+              </select>
+              {chosenCpc?.note && (
+                <p className="mt-6 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                  {`${chosenCpc.code} — ${chosenCpc.note}`}
+                </p>
+              )}
+              {modes.length > 0 && fileProcedures.length > 0 && form.cpcCode && !chosenCpc && (
+                <p className="mt-6 text-[11px]" style={{ color: "var(--warning)" }}>
+                  {`This file holds CPC ${form.cpcCode}, which the list does not offer for a ${typeLabel(form.shipmentType).toLowerCase()} movement. Pick the code on the declaration — another movement's code is refused on save.`}
+                </p>
+              )}
+            </div>
             {field("TANSAD number", <input value={form.tansadNumber}
               onChange={e => set("tansadNumber", e.target.value)} className={inputCls} style={inputStyle} />)}
             {field("RCN number", <input value={form.rcnNumber}
@@ -690,7 +863,7 @@ function CargoContent() {
             meta={[
               { label: "Book", value: bookLabel },
               { label: "Stage", value: filterStage ? (STAGE_LABELS[filterStage] ?? filterStage) : "All" },
-              { label: "Type", value: typeFilter ? (TYPE_LABELS[typeFilter] ?? typeFilter) : "Both" },
+              { label: "Type", value: typeFilter ? typeOption(typeFilter) : "Both" },
               { label: "Search", value: search.trim() || "—" },
               // A register lists 200 files; a sheet that says 200 rows without saying the book
               // holds 400 reads like the office finished the book.
@@ -700,6 +873,8 @@ function CargoContent() {
               { key: "file", label: "File no.", type: "text" },
               { key: "consignee", label: "Consignee", type: "text" },
               { key: "type", label: "Type", type: "text" },
+              { key: "mode", label: "Mode of transport", type: "text" },
+              { key: "cpc", label: "CPC", type: "text" },
               { key: "container", label: "Container", type: "text" },
               { key: "eta", label: "ETA", type: "date" },
               { key: "weight", label: "Weight (t)", type: "number" },
@@ -709,7 +884,11 @@ function CargoContent() {
             ]}
             rows={shipments.map(s => ({
               file: s.file_number, consignee: s.consignee_name,
-              type: TYPE_LABELS[s.shipment_type] ?? s.shipment_type,
+              type: typeOption(s.shipment_type),
+              // The code and its words on one line, so a sheet read away from the desk still says
+              // which procedure the file was declared under.
+              mode: s.mode_code ? `${s.mode_code} · ${s.mode_label ?? "mode not in the list"}` : "—",
+              cpc: s.cpc_code ? `${s.cpc_code} · ${s.cpc_label ?? "procedure not in the list"}` : "—",
               container: `${CONTAINER_LABELS[s.container_type] ?? s.container_type}`
                 + (s.container_count ? ` x${s.container_count}` : ""),
               eta: s.eta, weight: s.weight_tonnes,
@@ -769,7 +948,17 @@ function CargoContent() {
                     </span>
                   )}
                 </td>
-                <td className="p-12" style={{ color: "var(--ink-soft)" }}>{TYPE_LABELS[s.shipment_type] ?? s.shipment_type}</td>
+                <td className="p-12" style={{ color: "var(--ink-soft)" }}>
+                  {typeLabel(s.shipment_type)}
+                  {/* The two codes the file was declared on, under the movement that owns them. */}
+                  {(s.cpc_code || s.mode_code) && (
+                    <p className="mt-4 text-[10px]">
+                      {[s.cpc_code ? `CPC ${s.cpc_code}` : null,
+                        s.mode_code ? `mode ${s.mode_code}` : null]
+                        .filter(Boolean).join(" · ")}
+                    </p>
+                  )}
+                </td>
                 <td className="p-12" style={{ color: "var(--ink)" }}>{s.consignee_name}</td>
                 <td className="p-12" style={{ color: "var(--ink-soft)" }}>
                   {CONTAINER_LABELS[s.container_type] ?? s.container_type}

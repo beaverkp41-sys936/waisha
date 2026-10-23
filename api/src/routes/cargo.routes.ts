@@ -8,6 +8,7 @@ import { requirePermission } from "../security/permissions.js";
 import { writeAudit } from "../audit/audit.js";
 import { openJob, assertAssignable } from "../util/jobs.js";
 import { CARGO_BOOKS, BOOK_OF_TYPE, TYPES_OF_BOOK, bookOf } from "../cargo/books.js";
+import { FILE_PREFIX, assertCodesFit, readCodes } from "../cargo/codes.js";
 
 async function requireAuth(req: any) {
   const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -17,7 +18,8 @@ async function requireAuth(req: any) {
 }
 
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const PREFIX: Record<string, string> = { export: "1", import: "4", transhipment: "7", transit: "8" };
+/** 130's interlink says the same four pairs in SQL; the one TS author is `cargo/codes.ts`. */
+const PREFIX = FILE_PREFIX;
 const LOOSE_TYPES = ["loose_cargo", "car"];
 
 const containerFields = z.object({
@@ -30,6 +32,11 @@ const shipmentBase = containerFields.merge(z.object({
   shipmentType: z.enum(["export", "import", "transhipment", "transit"]),
   hsCode: z.string().trim().max(30).nullable().optional(),
   declarationMode: z.string().trim().max(60).nullable().optional(),
+  // The two codes 130 keeps as lists. A mode is a published number, a CPC is a four-digit one, and
+  // neither is free text: a clerk reads "mode 4" and "CPC 4200" across a counter, so a typo in
+  // either is refused rather than filed.
+  modeCode: z.number().int().min(1).max(6).nullable().optional(),
+  cpcCode: z.string().trim().regex(/^\d{4}$/, "A CPC is four digits").nullable().optional(),
   cargoDescription: z.string().trim().max(500).nullable().optional(),
   cbm: z.number().nonnegative().max(1_000_000).nullable().optional(),
   weightTonnes: z.number().nonnegative().max(1_000_000).nullable().optional(),
@@ -217,6 +224,12 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
       const term = q.search ? `%${q.search}%` : null;
       const { rows } = await withTenant(req.user.tid, (c) => c.query(
         `select s.id, s.file_number, s.shipment_type, s.hs_code, s.container_type,
+                s.mode_code, s.cpc_code,
+                -- The two codes in the words the lists hold, so a register prints "Maritime (Sea)"
+                -- and "Direct Import for Home Consumption" without the desk carrying a second copy
+                -- of either table.
+                (select m.label from mode_of_transport m where m.code = s.mode_code) as mode_label,
+                (select p.label from customs_procedure_code p where p.code = s.cpc_code) as cpc_label,
                 s.container_count, s.consignee_name, s.consignor_name, s.eta,
                 s.payment_status, s.payment_amount, s.processing_cost, s.stage, s.status,
                 s.weight_tonnes, s.created_at,
@@ -235,7 +248,8 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
            and ($5::text[] is null or s.shipment_type = any($5::text[]))
            and ($4::text is null or s.file_number ilike $4
                 or s.consignee_name ilike $4 or s.consignor_name ilike $4
-                or s.reference_number ilike $4 or s.bill_number ilike $4)
+                or s.reference_number ilike $4 or s.bill_number ilike $4
+                or s.cpc_code ilike $4)
          order by s.created_at desc
          limit 200`,
         [req.user.tid, q.stage ?? null, q.shipmentType ?? null, term,
@@ -274,6 +288,20 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
       return { books, total: books.reduce((n, b) => n + b.count, 0) };
     });
 
+  // ---------- The code lists the desk declares from ----------
+  /**
+   * The four movements with the digit each file number starts on, the six modes of transport and
+   * every customs procedure code — 130's two tables, whole.
+   *
+   * The form had its own copies of the prefix map and a free-text box where a CPC belongs, so the
+   * desk typed statutory words by hand and the register printed a code nobody had checked. One door
+   * for both, and the labels the desk shows are the labels the database holds.
+   *
+   * Static path, so it is matched before `/cargo/:id` the way `/cargo/books` already is.
+   */
+  app.get("/cargo/codes", { preHandler: [requireAuth, requirePermission("shipments.view")] },
+    async (req: any) => withTenant(req.user.tid, (c) => readCodes(c)));
+
   // ---------- Create (file number generated server-side) ----------
   app.post("/cargo", { preHandler: [requireAuth, requirePermission("shipments.create")] },
     async (req: any, reply) => {
@@ -283,25 +311,27 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
       let fileNumber = "";
       try {
         await withTenant(req.user.tid, async (c) => {
+          await assertCodesFit(c, body.shipmentType, body.modeCode, body.cpcCode);
           const { fileNumber: fn, seq, year } = await nextFileNumber(c, req.user.tid, body.shipmentType);
           fileNumber = fn;
           const loose = LOOSE_TYPES.includes(body.containerType);
 
           await c.query(
             `insert into cargo_shipments (id, tenant_id, file_number, seq, file_year,
-               shipment_type, hs_code, declaration_mode, cargo_description,
-               container_type, container_count, container_numbers, cbm, weight_tonnes,
-               consignee_name, consignor_name, shipping_line, bill_number,
-               order_date, document_receipt_date, eta, discharge_date, carry_in_date,
-               terms_delivery, tansad_number, rcn_number, reference_number,
+               shipment_type, hs_code, declaration_mode, mode_code, cpc_code,
+               cargo_description, container_type, container_count, container_numbers,
+               cbm, weight_tonnes, consignee_name, consignor_name, shipping_line,
+               bill_number, order_date, document_receipt_date, eta, discharge_date,
+               carry_in_date, terms_delivery, tansad_number, rcn_number, reference_number,
                office_declaration, border_point, nominated_icd, cabinet_position,
                processing_cost, payment_amount, payment_status, notes,
                status, created_by, updated_by)
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
                $19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,
-               'open',$36,$36)`,
+               $36,$37,'open',$38,$38)`,
             [id, req.user.tid, fn, seq, year,
              body.shipmentType, body.hsCode ?? null, body.declarationMode ?? null,
+             body.modeCode ?? null, body.cpcCode ?? null,
              body.cargoDescription ?? null,
              body.containerType, loose ? null : body.containerCount,
              loose ? null : body.containerNumbers ?? null,
@@ -323,7 +353,8 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
             tenantId: req.user.tid, actorUserId: req.user.sub, ip: req.ip,
             requestId: req.requestId, entity: "cargo_shipments", entityId: id,
             action: "shipment.created",
-            after: { fileNumber, type: body.shipmentType, consignee: body.consigneeName }
+            after: { fileNumber, type: body.shipmentType, consignee: body.consigneeName,
+              modeCode: body.modeCode ?? null, cpcCode: body.cpcCode ?? null }
           });
         });
       } catch (e: any) {
@@ -341,7 +372,13 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
       const { id } = req.params as { id: string };
       return withTenant(req.user.tid, async (c) => {
         const s = await c.query(
-          `select * from cargo_shipments where id = $1 and tenant_id = $2 and deleted_at is null`,
+          `select c.*, m.label as mode_label, m.carrier_word as mode_carrier_word,
+                  m.bill_kind as mode_bill_kind,
+                  p.label as cpc_label, p.note as cpc_note
+             from cargo_shipments c
+             left join mode_of_transport m on m.code = c.mode_code
+             left join customs_procedure_code p on p.code = c.cpc_code
+            where c.id = $1 and c.tenant_id = $2 and c.deleted_at is null`,
           [id, req.user.tid]);
         if (!s.rowCount) throw new ApiError("NOT_FOUND", "Cargo file not found", 404);
 
@@ -385,7 +422,7 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
 
       await withTenant(req.user.tid, async (c) => {
         const prev = await c.query(
-          "select status, container_type from cargo_shipments where id=$1 and tenant_id=$2 and deleted_at is null",
+          "select status, container_type, shipment_type from cargo_shipments where id=$1 and tenant_id=$2 and deleted_at is null",
           [id, req.user.tid]);
         if (!prev.rowCount) throw new ApiError("NOT_FOUND", "Cargo file not found", 404);
         if (prev.rows[0].status === "cancelled" || prev.rows[0].status === "completed") {
@@ -404,6 +441,10 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
           }
         }
 
+        // A file's movement never changes, so it is the stored one that decides which CPC fits —
+        // not whatever the form believes its first section says.
+        await assertCodesFit(c, prev.rows[0].shipment_type, body.modeCode, body.cpcCode);
+
         const sets: string[] = [];
         const params: unknown[] = [id, req.user.sub, req.user.tid]; // $1 id, $2 updated_by, $3 tenant_id
         const set = (col: string, val: unknown) => {
@@ -412,6 +453,8 @@ export async function cargoRoutes(app: FastifyInstance, _opts: unknown) {
         };
         if ("hsCode" in body) set("hs_code", body.hsCode ?? null);
         if ("declarationMode" in body) set("declaration_mode", body.declarationMode ?? null);
+        if ("modeCode" in body) set("mode_code", body.modeCode ?? null);
+        if ("cpcCode" in body) set("cpc_code", body.cpcCode ?? null);
         if ("cargoDescription" in body) set("cargo_description", body.cargoDescription ?? null);
         if ("containerType" in body) set("container_type", body.containerType!);
         set("container_count", loose ? null : body.containerCount ?? null);

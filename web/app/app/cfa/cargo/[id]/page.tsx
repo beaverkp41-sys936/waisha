@@ -22,7 +22,6 @@ const STAGE_LABELS: Record<string, string> = {
   pre_arrival: "Pre-arrival", arrival: "Arrival", customs: "Customs",
   inspection: "Inspection", release: "Release", exit: "Exit"
 };
-const TYPE_PREFIX: Record<string, string> = { export: "1", import: "4", transhipment: "7", transit: "8" };
 const CONTAINER_LABELS: Record<string, string> = {
   "20ft": "20FT", "40ft": "40FT", loose_cargo: "Loose Cargo", car: "Car"
 };
@@ -30,6 +29,9 @@ const CONTAINER_LABELS: Record<string, string> = {
 interface Shipment {
   id: string; file_number: string; seq: number; file_year: number;
   shipment_type: string; hs_code: string | null; declaration_mode: string | null;
+  /** 130's two codes, each with the words its own table holds. */
+  mode_code: number | null; mode_label: string | null; mode_carrier_word: string | null;
+  cpc_code: string | null; cpc_label: string | null;
   cargo_description: string | null;
   container_type: string; container_count: number | null; container_numbers: string[] | null;
   cbm: string | null; weight_tonnes: string | null;
@@ -369,13 +371,19 @@ export default function CargoDetailPage() {
         <div className="grid grid-cols-2 gap-16 text-sm md:grid-cols-3">
           <Row label="Shipment type" value={file.shipment_type[0].toUpperCase() + file.shipment_type.slice(1)} />
           <Row label="Book" value={file.book?.label ?? "—"} />
+          {/* The two codes 130's tables own, printed as the number and the words behind it: the
+              movement the file was cut from, and the procedure it declares under. */}
+          <Row label="Mode of transport" value={file.mode_code
+            ? `${file.mode_code} · ${file.mode_label ?? "mode not in the list"}` : "—"} />
+          <Row label="CPC" value={file.cpc_code
+            ? `${file.cpc_code} · ${file.cpc_label ?? "procedure not in the list"}` : "—"} />
           <Row label="HS code" value={file.hs_code ?? "—"} />
           <Row label="Declaration mode" value={file.declaration_mode ?? "—"} />
           <Row label="Container" value={`${CONTAINER_LABELS[file.container_type] ?? file.container_type}${file.container_count ? ` ×${file.container_count}` : ""}`} />
           <Row label="Container numbers" value={(file.container_numbers ?? []).length ? (file.container_numbers ?? []).join(", ") : "—"} />
           <Row label="Weight (t)" value={file.weight_tonnes ? Number(file.weight_tonnes).toLocaleString() : "—"} />
           <Row label="CBM" value={file.cbm ? Number(file.cbm).toLocaleString() : "—"} />
-          <Row label="Shipping line" value={file.shipping_line ?? "—"} />
+          <Row label={file.mode_carrier_word ?? "Shipping line"} value={file.shipping_line ?? "—"} />
           <Row label="Bill number" value={file.bill_number ?? "—"} />
           <Row label="Order date" value={fmtDate(file.order_date)} />
           <Row label="Documents received" value={fmtDate(file.document_receipt_date)} />

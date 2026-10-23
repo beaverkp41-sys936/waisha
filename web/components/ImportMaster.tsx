@@ -108,7 +108,9 @@ interface Paper {
 
 interface Gate {
   file: { id: string; file_number: string; shipment_type: string; bill_number: string | null;
-          weight_tonnes: string | null; cbm: string | null };
+          weight_tonnes: string | null; cbm: string | null;
+          /** 130: the mode the cargo file travels by, and the document that mode expects. */
+          mode_label: string | null; mode_bill_kind: string | null };
   master: Record<string, string | number | null> | null;
   papers: Paper[];
   state: {
@@ -152,10 +154,29 @@ const COLUMN: Record<string, string> = {
   notes: "notes"
 };
 
-function formFrom(master: Gate["master"]): Record<string, string> {
+/** The words 111 froze for the five transport documents, as the sheet's own pick-list names them. */
+const billWord = (kind: string) => BILL_KINDS.find(k => k.value === kind)?.label ?? kind;
+
+/** The paper with the article its own first letter asks for — "an Air waybill", not "a Air …". */
+const aBill = (kind: string) => {
+  const w = billWord(kind);
+  return `${/^[aeiou]/i.test(w) ? "an" : "a"} ${w}`;
+};
+
+/**
+ * The sheet as the office left it, with one exception: a transport document nobody has chosen yet
+ * is filled from the mode the cargo file carries.
+ *
+ * 130 says a sea movement travels on a bill of lading and an air movement on an air waybill, and the
+ * master route refuses a sheet that contradicts the file. Asking the clerk to answer that question a
+ * second time — and then being refused — would be a form that argues with the office. A sheet that
+ * already names its document is left exactly as it was signed.
+ */
+function formFrom(master: Gate["master"], modeBillKind: string | null): Record<string, string> {
   const f = emptyForm();
-  if (!master) return f;
+  if (!master) return modeBillKind ? { ...f, billKind: modeBillKind } : f;
   for (const [key, column] of Object.entries(COLUMN)) f[key] = str(master[column]);
+  if (!f.billKind && modeBillKind) f.billKind = modeBillKind;
   return f;
 }
 
@@ -220,7 +241,7 @@ export function ImportMaster({ shipmentId, onNotice }: {
     setError(null);
     // After a write the server's row is the truth; while the clerk is still typing, their
     // draft is. A reload that overwrote live keystrokes is how a half-filled sheet dies.
-    if (!keepDraft) setForm(formFrom(g.master));
+    if (!keepDraft) setForm(formFrom(g.master, g.file.mode_bill_kind));
   }, [shipmentId]);
 
   useEffect(() => { load(false); }, [load]);
@@ -230,6 +251,47 @@ export function ImportMaster({ shipmentId, onNotice }: {
     setForm(f => ({ ...f, [key]: e.target.value }));
 
   const editable = (f: Field) => !!gate?.can.edit && (!gate.state.declared || !f.figure);
+
+  /**
+   * The caption under "Which document", written by the mode the cargo file travels by.
+   *
+   * 130 ties a sea movement to a bill of lading and an air movement to an air waybill, and the
+   * master route refuses a sheet that names another paper. The route is the authority, but a desk
+   * that only learns it said the wrong document after pressing Save has filled three lines for
+   * nothing — so the expected paper is stated here, and the sentence turns red while the typed one
+   * contradicts the file. A mode that names no document (mail, a multimodal consignment) says none.
+   */
+  function modeHint(key: string): { text: string; danger: boolean } | null {
+    const want = gate?.file.mode_bill_kind;
+    const mode = gate?.file.mode_label;
+    if (key !== "billKind" || !want || !mode) return null;
+    if (form.billKind && form.billKind !== want) {
+      return { text: `This file moves by ${mode}, so its paper is ${aBill(want)}, not `
+        + `${aBill(form.billKind)}.`, danger: true };
+    }
+    return { text: `The file moves by ${mode}, so this line names ${aBill(want)}.`,
+      danger: false };
+  }
+
+  /** A field's own caption, unless the file's mode has a stronger claim on it. */
+  function hintFor(f: Field): { text: string; danger: boolean } | null {
+    const byMode = modeHint(f.key);
+    if (byMode) return byMode;
+    if (!f.hint) return null;
+    if (f.key !== "invoiceCurrency") return { text: f.hint, danger: false };
+    return { text: f.hint, danger: !!form[f.key].trim()
+      && !/^[A-Za-z]{3}$/.test(form[f.key].trim()) };
+  }
+
+  /**
+   * Say the office refused, then bring the sheet back — in that order, because load() clears the
+   * error box. A refusal shown before the reload is a refusal nobody reads: the write is refused,
+   * the numbers re-sync and the sentence that told the clerk which box to fix is gone.
+   */
+  async function refuse(message: string) {
+    await load(true);
+    setError(message);
+  }
 
   async function save() {
     setError(null); setBusy(true);
@@ -241,10 +303,10 @@ export function ImportMaster({ shipmentId, onNotice }: {
         body: JSON.stringify(bodyOf(form))
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(serveError(j, "The office refused the sheet.")); await load(true); return; }
+      if (!res.ok) { await refuse(serveError(j, "The office refused the sheet.")); return; }
       const g = j as Gate;
       setGate(g);
-      setForm(formFrom(g.master));
+      setForm(formFrom(g.master, g.file.mode_bill_kind));
       onNotice?.(g.state.has_master
         ? `Master sheet saved for ${g.file.file_number}.`
         : "Master sheet saved.");
@@ -256,10 +318,10 @@ export function ImportMaster({ shipmentId, onNotice }: {
     try {
       const res = await apiFetch(`/cargo/${shipmentId}/master/declare`, { method: "POST" });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(serveError(j, "The sheet would not sign.")); await load(true); return; }
+      if (!res.ok) { await refuse(serveError(j, "The sheet would not sign.")); return; }
       const g = j as Gate;
       setGate(g);
-      setForm(formFrom(g.master));
+      setForm(formFrom(g.master, g.file.mode_bill_kind));
       onNotice?.(`Signed${g.state.declared_by ? ` by ${g.state.declared_by}` : ""} on `
         + `${g.state.declared_on}. The figures are now the office's declaration; the papers and `
         + "the note can still change.");
@@ -287,7 +349,7 @@ export function ImportMaster({ shipmentId, onNotice }: {
         body: JSON.stringify({ [slot.docKey]: docId || null })
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(serveError(j, "The paper would not attach.")); await load(true); return; }
+      if (!res.ok) { await refuse(serveError(j, "The paper would not attach.")); return; }
       const g = j as Gate;
       setGate(g);
       // The pointers are the whole write, so the typed figures stay as the clerk left them.
@@ -393,7 +455,9 @@ export function ImportMaster({ shipmentId, onNotice }: {
               </h3>
 
               <div className="mt-12 space-y-12">
-                {slot.fields.map(f => (
+                {slot.fields.map(f => {
+                  const hint = hintFor(f);
+                  return (
                   <label key={f.key} className="block">
                     <span className={labelCls} style={{ color: "var(--ink-soft)" }}>{f.label}</span>
                     {f.kind === "select" ? (
@@ -414,16 +478,15 @@ export function ImportMaster({ shipmentId, onNotice }: {
                           ? { ...inputStyle, textTransform: "uppercase" } : inputStyle}
                       />
                     )}
-                    {f.hint && (
+                    {hint && (
                       <span className="mt-4 block text-[11px]"
-                        style={{ color: f.key === "invoiceCurrency"
-                          && form[f.key].trim() && !/^[A-Za-z]{3}$/.test(form[f.key].trim())
-                            ? "var(--danger)" : "var(--ink-soft)" }}>
-                        {f.hint}
+                        style={{ color: hint.danger ? "var(--danger)" : "var(--ink-soft)" }}>
+                        {hint.text}
                       </span>
                     )}
                   </label>
-                ))}
+                  );
+                })}
               </div>
 
               <div className="mt-16 border-t pt-16" style={{ borderColor: "var(--line)" }}>
@@ -533,8 +596,11 @@ export function ImportMaster({ shipmentId, onNotice }: {
 /** The server's own sentence, with the names of the boxes it rejected. */
 function serveError(json: any, fallback: string): string {
   const d = json?.error?.details;
-  const extra = Array.isArray(d) && d.length
-    ? ` (${d.map((x: any) => `${x.field ? `${x.field}: ` : ""}${x.message ?? ""}`).join("; ")})`
+  // A detail that only names a box is already said by the sentence above it; printing it again
+  // reads as "(billKind: )" — the clerk sees a label with nothing to do with it.
+  const said = Array.isArray(d) ? d.filter((x: any) => !!x?.message) : [];
+  const extra = said.length
+    ? ` (${said.map((x: any) => `${x.field ? `${x.field}: ` : ""}${x.message}`).join("; ")})`
     : "";
   return (json?.error?.message ?? json?.message ?? fallback) + extra;
 }

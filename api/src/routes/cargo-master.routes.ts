@@ -11,6 +11,7 @@ import { uuidv7 } from "../util/uuid.js";
 import { checkPermissions, requirePermission } from "../security/permissions.js";
 import { writeAudit } from "../audit/audit.js";
 import { prepareTable, type PreparedTable } from "../export/table.js";
+import { BILL_LABEL } from "../cargo/codes.js";
 import { buildPdf } from "../export/pdf.js";
 import { ZipWriter, safeEntryPath } from "../export/zip.js";
 import { getObject, storageConfigured } from "../storage/supabase.js";
@@ -36,10 +37,6 @@ const text = (max: number) => z.string().trim().max(max).nullable().optional()
   .transform((v) => (v === undefined ? undefined : (v && v.length ? v : null)));
 
 const BILL_KINDS = ["bill_of_lading", "sea_waybill", "air_waybill", "rail_waybill", "road_waybill"] as const;
-const BILL_LABEL: Record<string, string> = {
-  bill_of_lading: "Bill of lading", sea_waybill: "Sea waybill", air_waybill: "Air waybill",
-  rail_waybill: "Rail waybill", road_waybill: "Road waybill"
-};
 
 /** The three slots of a cover sheet, in the order the sheet prints them. */
 const SLOTS = [
@@ -96,12 +93,20 @@ const FIELDS: { body: keyof Body; column: string; phrase: string }[] = [
 const AFTER_SIGNATURE = new Set(["invoice_document_id", "packing_document_id", "bill_document_id", "notes"]);
 
 const FILE_SQL = `
-  select id, file_number, shipment_type, status, stage, cargo_description,
-         consignee_name, consignor_name, shipping_line, bill_number, container_type,
-         container_count, cbm, weight_tonnes, terms_delivery,
-         eta::text as eta, order_date::text as order_date
-    from cargo_shipments
-   where id = $1 and tenant_id = $2 and deleted_at is null`;
+  select s.id, s.file_number, s.shipment_type, s.status, s.stage, s.cargo_description,
+         s.consignee_name, s.consignor_name, s.shipping_line, s.bill_number, s.container_type,
+         s.container_count, s.cbm, s.weight_tonnes, s.terms_delivery,
+         s.eta::text as eta, s.order_date::text as order_date,
+         s.mode_code, s.cpc_code,
+         -- 130: the movement the file travels by names the document it must carry, and the CPC
+         -- names the procedure the sheet declares under. Both are read with the file so the cover
+         -- sheet and the desk cannot be told two different stories.
+         md.label as mode_label, md.bill_kind as mode_bill_kind,
+         pc.label as cpc_label, pc.note as cpc_note
+    from cargo_shipments s
+    left join mode_of_transport md on md.code = s.mode_code
+    left join customs_procedure_code pc on pc.code = s.cpc_code
+   where s.id = $1 and s.tenant_id = $2 and s.deleted_at is null`;
 
 const MASTER_SQL = `
   select m.id, m.shipment_id,
@@ -199,10 +204,12 @@ async function loadMaster(c: PoolClient, tid: string, rawId: string) {
   const gaps = await gapsOf(c, m ?? { shipment_id: shipmentId });
   const onFile = new Map(papers.rows.map((p: any) => [String(p.id), p]));
 
-  // Two ways a sheet can be internally consistent and still be wrong on the desk: the number on
-  // the bill disagrees with the number on the file, and the paper pointed at is not filed under
-  // the kind of paper the slot names. 111 refuses neither — a clerk may well file a scan under
-  // `other` — so both are said out loud instead of left for the customs desk to discover.
+  // Three ways a sheet can be internally consistent and still be wrong on the desk: the number on
+  // the bill disagrees with the number on the file, the paper pointed at is not filed under the
+  // kind of paper the slot names, and the transport document named on the sheet is not the one the
+  // file's mode travels by. 111 refuses none of the three — a clerk may well file a scan under
+  // `other` — and the route below refuses only a contradiction typed in the same call — so each is
+  // said out loud instead of left for the customs desk to discover.
   const warnings: string[] = [];
   if (m) {
     const fileBill = String(file.rows[0].bill_number ?? "").trim();
@@ -210,6 +217,15 @@ async function loadMaster(c: PoolClient, tid: string, rawId: string) {
     if (fileBill && masterBill && fileBill.toLowerCase() !== masterBill.toLowerCase()) {
       warnings.push(`The master carries bill or air waybill number ${masterBill}, the cargo file `
         + `carries ${fileBill}. One of the two is mistyped.`);
+    }
+    // The third way the two halves of one answer come apart: a file's mode changed after the sheet
+    // named its paper. The route refuses only an answer typed in the same call — refusing a stored
+    // one would lock the sheet against its own note — so the stale pair is said out loud here.
+    const modeKind = file.rows[0].mode_bill_kind as string | null;
+    if (modeKind && m.bill_kind && m.bill_kind !== modeKind) {
+      warnings.push(`The sheet's transport document is ${BILL_LABEL[m.bill_kind] ?? m.bill_kind}, `
+        + `but this file moves by ${file.rows[0].mode_label}, whose paper is `
+        + `${BILL_LABEL[modeKind] ?? modeKind}. Fix the one that is out of date.`);
     }
     for (const slot of SLOTS) {
       const docId = m[slot.column];
@@ -298,6 +314,22 @@ export async function cargoMasterRoutes(app: FastifyInstance, _opts: unknown) {
       // sends one box must not be refused for the boxes this call left alone.
       const merged: Record<string, any> = { shipment_id: id };
       for (const f of FIELDS) merged[f.column] = (f.body in body ? body[f.body] : row?.[f.column]) ?? null;
+
+      // 130: a sea movement does not travel on an air waybill. The file's mode already names the
+      // paper, so the sheet is refused when the clerk's own answer contradicts it. Only an answer
+      // actually given in this call is compared: a body that points at a late paper says nothing
+      // about the document, and refusing it would lock a signed sheet the moment a clerk changed
+      // the mode — 111 promised the papers and the note stay open. A mode that rides on somebody
+      // else's paper (mail, a multimodal consignment) names none, and the sheet's word stands.
+      const modeKind = loaded.file.mode_bill_kind as string | null;
+      const stated = "billKind" in body ? body.billKind ?? null : null;
+      if (modeKind && stated !== null && stated !== modeKind) {
+        throw new ApiError("VALIDATION_FAILED",
+          `This file moves by ${loaded.file.mode_label}, so its transport document is `
+          + `${BILL_LABEL[modeKind] ?? modeKind}. The sheet says `
+          + `${BILL_LABEL[stated] ?? stated}. Either name that paper here or change the mode on `
+          + "the cargo file.", 400, [{ field: "billKind" }]);
+      }
 
       if (merged.net_weight_kg !== null && merged.gross_weight_kg !== null
         && Number(merged.net_weight_kg) > Number(merged.gross_weight_kg)) {
@@ -582,6 +614,10 @@ function masterSheet(gate: Loaded, actor: string, generatedAt: Date): PreparedTa
   const meta = [
     { label: "Cargo file", value: String(f.file_number) },
     { label: "Type", value: String(f.shipment_type) },
+    ...(f.mode_label
+      ? [{ label: "Mode of transport", value: `${f.mode_code} · ${f.mode_label}` }] : []),
+    ...(f.cpc_label
+      ? [{ label: "CPC", value: `${f.cpc_code} · ${f.cpc_label}` }] : []),
     { label: "Consignee", value: String(f.consignee_name ?? "not stated") },
     { label: "Consignor", value: String(f.consignor_name ?? "not stated") },
     { label: "Shipping line", value: String(f.shipping_line ?? "not stated") },
