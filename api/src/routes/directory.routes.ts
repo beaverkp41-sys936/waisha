@@ -7,7 +7,6 @@ import { checkPermission, requirePermission } from "../security/permissions.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
 import { webAddress } from "../security/url.js";
 import { writeAudit } from "../audit/audit.js";
-import { requireControl, hasLicenceRole } from "./control.routes.js";
 // One translation table for every reason the 061 meter emits, shared with the claim
 // paths that emit the same ones.
 import { meterRefusal } from "./seeker.routes.js";
@@ -180,6 +179,78 @@ const listingSchema = z.object({
 }).strict();
 
 const CARDS_SQL = `select * from directory_search($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`;
+
+/** The role the audit row is filed under. The definer takes it as text and never trusts it. */
+const actorRole = (req: any): string | null => req.user?.roles?.[0] ?? null;
+
+/**
+ * A mark stands on one of exactly two proofs and the caller may not hold both: a job the two
+ * companies actually booked (048), or a card this seeker's own credit opened (061's log row).
+ * Which of the two is also which duty has to sign for it, so the shape is checked here rather
+ * than left to the definer — a body carrying both ids would otherwise be answered by whichever
+ * branch the server happened to reach first.
+ */
+const markSchema = z.object({
+  stars: z.number().int().min(1).max(5),
+  comment: z.string().trim().max(600).nullish(),
+  bookingId: z.string().uuid().optional(),
+  searchId: z.string().uuid().optional()
+}).strict().superRefine((v, ctx) => {
+  if (!!v.bookingId === !!v.searchId) {
+    ctx.addIssue({
+      code: "custom", path: [v.bookingId ? "bookingId" : "searchId"],
+      message: "Name the job you booked or the card you opened, and only one of them"
+    });
+  }
+});
+
+/** The words a company puts under a mark on its own card. Written once, so 8 is the floor. */
+const replySchema = z.object({
+  reply: z.string().trim().min(8).max(600)
+}).strict();
+
+/** The author's own words, retyped before they are answered. */
+const editSchema = z.object({
+  stars: z.number().int().min(1).max(5),
+  comment: z.string().trim().max(600).nullish()
+}).strict();
+
+/**
+ * The five answers 131's mark definers give back, turned into the codes a caller can act on.
+ * `conflict` carries the rating id on purpose: a seeker who has already marked this company is
+ * sent to the mark they wrote, not to a sentence that leaves them guessing where it went.
+ */
+function markRefusal(res: any, field: string, fallback: string): ApiError | null {
+  if (!res || res.status === "ok") return null;
+  if (res.status === "not_found") {
+    return new ApiError("NOT_FOUND", "No mark under that reference.", 404);
+  }
+  if (res.status === "unauthorised") {
+    return new ApiError("FORBIDDEN",
+      String(res.message ?? "This mark is not yours to change."), 403);
+  }
+  if (res.status === "conflict") {
+    return new ApiError("CONFLICT", String(res.message ?? fallback), 409,
+      res.rating_id ? [{ reason: "already_marked", ratingId: res.rating_id }] : []);
+  }
+  if (res.status === "invalid") {
+    return new ApiError("VALIDATION_FAILED",
+      String(res.message ?? fallback), 400, [{ field, message: String(res.message ?? fallback) }]);
+  }
+  return new ApiError("UPSTREAM_ERROR", fallback, 502);
+}
+
+/**
+ * 131's rules are also written as `raise exception` sentences with the table named first, which
+ * is what a register needs in its log and not what a star picker needs underneath it. The prefix
+ * is taken off here; the sentence is kept, because it is the reason the mark was refused.
+ */
+function markGuard(err: any, fallback: string): ApiError | null {
+  if (err?.code !== "P0001" || typeof err.message !== "string") return null;
+  return new ApiError("CONFLICT",
+    err.message.split("\n")[0].replace(/^directory_ratings:\s*/, "").slice(0, 300) || fallback,
+    409);
+}
 
 /**
  * directory_card_for returns one composite, not a set, so a listing that is not on the
@@ -619,66 +690,195 @@ export async function directoryRoutes(app: FastifyInstance, _opts: unknown) {
     });
 
   // ============================
-  // CONTROL — confirm money, moderate the board
+  // THE MARK — what a job or an opened card left behind
   // ============================
 
-  app.get("/control/directory/passes", { preHandler: [requireControl] }, async (req: any) => {
-    if (!hasLicenceRole(req.control.roles ?? [])) throw new ApiError("FORBIDDEN", "Not permitted", 403);
-    const { rows } = await pool.query("select * from platform_auth.list_pending_passes()");
-    return rows;
-  });
-
-  // The week is re-based on the approval instant inside the definer, because the money
-  // usually lands a day after the reference was typed.
-  app.post("/control/directory/passes/:id/verify",
-    { preHandler: [requireControl] }, async (req: any) => {
-      if (!hasLicenceRole(req.control.roles ?? [])) throw new ApiError("FORBIDDEN", "Not permitted", 403);
-      await enforceRateLimit(`pass-verify:uid:${req.control.user_id}`, 60, 3600);
-      const passId = z.string().uuid().parse((req.params as any).id);
-      const body = z.object({
-        approve: z.boolean(),
-        note: z.string().trim().max(400).optional()
-      }).strict().parse(req.body);
-
-      const r = await pool.query(
-        "select platform_auth.verify_search_pass($1,$2,$3,$4) as r",
-        [passId, req.control.user_id, body.approve, body.note ?? null]);
-      const res = r.rows[0]?.r ?? {};
-      if (res.status === "not_found") throw new ApiError("NOT_FOUND", "Pass not found", 404);
-      if (res.status === "conflict") {
-        throw new ApiError("PASS_NOT_PENDING", String(res.reason), 409,
-          [{ currentStatus: res.current_status }]);
+  // A mark is written by the party on the proof, and the proof is never the caller's to name:
+  // 131's trigger reads the counterparty's card out of the booking and the card out of the
+  // seeker's own log row, so a seat cannot aim a bad mark at a bystander or rate itself. The
+  // duty that signs for it follows the basis — a job belongs to the desk that manages bookings,
+  // an opened card to the seeker whose credit opened it — which is why the gate is chosen from
+  // the body rather than fixed in the preHandler.
+  app.post("/directory/ratings",
+    { preHandler: [requireAuth] },
+    async (req: any) => {
+      await enforceRateLimit(`directory-rate:uid:${req.user.sub}`, 20, 3600);
+      const body = markSchema.parse(req.body);
+      const duty = body.bookingId ? "board.book" : "directory.search";
+      const held = await withTenant(req.user.tid,
+        (c) => checkPermission(c, req.user.sub, duty));
+      if (!held) {
+        throw new ApiError("FORBIDDEN", body.bookingId
+          ? "Marking a job needs the duty that manages your bookings."
+          : "Marking a card needs the directory search duty.", 403);
       }
-      return res;
+      let res: any;
+      try {
+        const r = await pool.query(
+          `select platform_auth.rate_directory_company($1,$2,$3,$4,$5,$6,$7) as r`,
+          [body.bookingId ?? null, body.searchId ?? null, body.stars, body.comment ?? null,
+           req.user.sub, actorRole(req), req.ip]);
+        res = r.rows[0]?.r ?? {};
+      } catch (e) {
+        const refusal = markGuard(e, "The mark could not be recorded.");
+        if (refusal) throw refusal;
+        throw e;
+      }
+      const refusal = markRefusal(res, body.bookingId ? "bookingId" : "searchId",
+        "The mark could not be recorded.");
+      if (refusal) throw refusal;
+      // The card comes back with the mark because it is the fact the caller cannot derive: the
+      // page that offered the stars was showing a search result, and this is the first time the
+      // seeker learns which card the platform filed their words against.
+      return { ratingId: res.rating_id, listingId: res.listing_id, stars: body.stars };
     });
 
-  app.get("/control/directory/listings", { preHandler: [requireControl] }, async (req: any) => {
-    if (!hasLicenceRole(req.control.roles ?? [])) throw new ApiError("FORBIDDEN", "Not permitted", 403);
-    const q = ((req.query as any)?.q ?? "").toString().trim();
-    const { rows } = await pool.query(
-      "select * from platform_auth.list_directory_for_control($1)", [q || null]);
-    return rows;
-  });
-
-  app.post("/control/directory/listings/:id/moderate",
-    { preHandler: [requireControl] }, async (req: any) => {
-      if (!hasLicenceRole(req.control.roles ?? [])) throw new ApiError("FORBIDDEN", "Not permitted", 403);
-      await enforceRateLimit(`listing-moderate:uid:${req.control.user_id}`, 60, 3600);
+  // The marks beside a card, on the same claim check 061 puts on the card itself. Without it the
+  // register built out of paid searches would be readable by anybody who wrote a loop over
+  // listing ids. Called inside the tenant transaction because `directory_claim_ok` answers off
+  // `app.tenant_id`, and an empty setting is a false, not an error — a read made outside the
+  // session's tenant would tell every seeker their search had expired.
+  app.get("/directory/companies/:id/ratings",
+    { preHandler: [requireAuth, requirePermission("directory.search")] },
+    async (req: any) => {
       const listingId = z.string().uuid().parse((req.params as any).id);
-      const body = z.object({
-        action: z.enum(["suspend", "reinstate", "verify", "unverify"]),
-        note: z.string().trim().max(400).optional()
-      }).strict().parse(req.body);
+      const searchId = z.string().uuid().parse((req.query as any).searchId ?? "");
+      const limit = z.coerce.number().int().min(1).max(50).default(20)
+        .parse((req.query as any).limit ?? 20);
+      const offset = z.coerce.number().int().min(0).max(5000).default(0)
+        .parse((req.query as any).offset ?? 0);
 
-      const r = await pool.query(
-        "select platform_auth.moderate_listing($1,$2,$3,$4) as r",
-        [listingId, req.control.user_id, body.action, body.note ?? null]);
-      const res = r.rows[0]?.r ?? {};
-      if (res.status === "not_found") throw new ApiError("NOT_FOUND", "Listing not found", 404);
-      if (res.status === "invalid") {
-        throw new ApiError("VALIDATION_FAILED", String(res.reason), 400,
-          [{ field: body.action === "suspend" ? "note" : "action" }]);
-      }
-      return res;
+      return withTenant(req.user.tid, async (c) => {
+        const r = await c.query(
+          "select platform_auth.directory_ratings_for($1,$2,$3,$4) as r",
+          [listingId, searchId, limit, offset]);
+        const res = r.rows[0]?.r ?? {};
+        if (res.status === "claim_expired") {
+          throw new ApiError("SEARCH_EXPIRED",
+            "This search has timed out. Run a new one to read the marks on a card.", 410,
+            [{ reason: "claim_expired" }]);
+        }
+        return { listingId, marks: res.rows ?? [], summary: res.summary ?? null };
+      });
     });
+
+  // What the caller has written, wherever it landed. No duty is asked for: reading your own
+  // words back is not a permission, and 131's policy already keeps the row visible to the tenant
+  // that wrote it. This is the seeker's history page and the seat's own list of marks at once.
+  app.get("/directory/ratings/mine",
+    { preHandler: [requireAuth] },
+    async (req: any) => {
+      const limit = z.coerce.number().int().min(1).max(100).default(30)
+        .parse((req.query as any).limit ?? 30);
+      const offset = z.coerce.number().int().min(0).max(5000).default(0)
+        .parse((req.query as any).offset ?? 0);
+      return withTenant(req.user.tid, async (c) => {
+        const { rows } = await c.query(
+          `select id, listing_id, listed_name, stars, comment, basis, booking_id, search_id,
+                  created_at, updated_at, reply, replied_at, withdrawn_at, hidden_at
+           from directory_ratings
+           where rater_user_id = $1
+           order by created_at desc limit $2 offset $3`,
+          [req.user.sub, limit, offset]);
+        return { marks: rows };
+      });
+    });
+
+  // Everything anybody has said about this company's card. RLS gives the tenant the rows it
+  // stands under — both as the card's owner and as a rater — so the filter that matters here is
+  // the one that keeps the list to marks *received*, and the summary is the same definer the
+  // seeker's paid read uses, so the mean on the company's page cannot disagree with the board.
+  app.get("/directory/ratings/received",
+    { preHandler: [requireAuth, requirePermission("directory.view")] },
+    async (req: any) => {
+      return withTenant(req.user.tid, async (c) => {
+        const card = await c.query(
+          `select id, company_name, status, is_verified from directory_listings
+            where tenant_id = $1 and deleted_at is null`, [req.user.tid]);
+        if (!card.rowCount) {
+          throw new ApiError("NO_LISTING",
+            "Publish a directory listing to see the marks on your card.", 404);
+        }
+        const listingId = card.rows[0].id;
+        const limit = z.coerce.number().int().min(1).max(100).default(30)
+          .parse((req.query as any).limit ?? 30);
+        const offset = z.coerce.number().int().min(0).max(5000).default(0)
+          .parse((req.query as any).offset ?? 0);
+        const { rows } = await c.query(
+          `select id, stars, comment, basis, booking_id, search_id, rater_name, rater_kind,
+                  created_at, reply, replied_at, withdrawn_at, hidden_at, hidden_reason
+           from directory_ratings
+           where listing_id = $1 and listed_tenant_id = $2
+           order by created_at desc limit $3 offset $4`,
+          [listingId, req.user.tid, limit, offset]);
+        const summary = await c.query(
+          "select platform_auth.directory_rating_summary($1) as s", [listingId]);
+        // canAnswer is the desk's own question, not a hint: the reply is written once, so a
+        // page that offered a box on an answered mark would be a form that fails on Save.
+        return {
+          listing: card.rows[0], marks: rows,
+          summary: summary.rows[0]?.s ?? null,
+          canAnswer: await checkPermission(c, req.user.sub, "directory.manage")
+        };
+      });
+    });
+
+  // The company's side of a mark, once. The definer checks the hand against the card, so a seat
+  // that holds the duty but stands under a different account is refused there rather than here.
+  app.post("/directory/ratings/:id/reply",
+    { preHandler: [requireAuth, requirePermission("directory.manage")] },
+    async (req: any) => {
+      await enforceRateLimit(`directory-reply:uid:${req.user.sub}`, 20, 3600);
+      const ratingId = z.string().uuid().parse((req.params as any).id);
+      const body = replySchema.parse(req.body);
+      const r = await pool.query(
+        "select platform_auth.reply_to_rating($1,$2,$3,$4,$5) as r",
+        [ratingId, body.reply, req.user.sub, actorRole(req), req.ip]);
+      const res = r.rows[0]?.r ?? {};
+      const refusal = markRefusal(res, "reply", "The answer could not be recorded.");
+      if (refusal) throw refusal;
+      return { ratingId: res.rating_id, repliedAt: res.replied_at };
+    });
+
+  // The author takes their own mark off the board. The row and its slot both stay — 131 drew it
+  // that way so that deleting a review is not how anybody earns a second one.
+  app.post("/directory/ratings/:id/withdraw",
+    { preHandler: [requireAuth] },
+    async (req: any) => {
+      await enforceRateLimit(`directory-withdraw:uid:${req.user.sub}`, 20, 3600);
+      const ratingId = z.string().uuid().parse((req.params as any).id);
+      const r = await pool.query(
+        "select platform_auth.withdraw_rating($1,$2,$3,$4) as r",
+        [ratingId, req.user.sub, actorRole(req), req.ip]);
+      const res = r.rows[0]?.r ?? {};
+      const refusal = markRefusal(res, "ratingId", "The mark could not be withdrawn.");
+      if (refusal) throw refusal;
+      return { ratingId: res.rating_id, withdrawnAt: res.withdrawn_at, already: res.already ?? false };
+    });
+
+  // Retyping one's own mark, up until the company answers it. The keeper trigger is what makes
+  // that deadline real; this door only names the author and checks the shape, and says so when
+  // the answer has already landed, because "your words changed under my reply" is a sentence the
+  // desk needs to read out loud rather than discover in a silent 409.
+  app.post("/directory/ratings/:id/edit",
+    { preHandler: [requireAuth] },
+    async (req: any) => {
+      await enforceRateLimit(`directory-edit:uid:${req.user.sub}`, 20, 3600);
+      const ratingId = z.string().uuid().parse((req.params as any).id);
+      const body = editSchema.parse(req.body);
+      const r = await pool.query(
+        "select platform_auth.edit_rating($1,$2,$3,$4,$5,$6) as r",
+        [ratingId, body.stars, body.comment ?? null, req.user.sub, actorRole(req), req.ip]);
+      const res = r.rows[0]?.r ?? {};
+      const refusal = markRefusal(res, "stars", "The mark could not be retyped.");
+      if (refusal) throw refusal;
+      return {
+        ratingId: res.rating_id, stars: res.stars, comment: res.comment,
+        listingId: res.listing_id
+      };
+    });
+
+  // The office's own directory desk — passes, listings, marks and the register of holds — lives
+  // in control-directory.routes.ts on `control.directory.*` duties. The four routes 061 minted
+  // here were gated by a role test and moved there in 131's stage.
 }

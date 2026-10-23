@@ -5,6 +5,7 @@ import {
   ShieldAlert, Truck
 } from "lucide-react";
 import { apiFetch } from "../api-client";
+import { fmtDateTime } from "../../portal/labels";
 
 function errorText(json: any, fallback: string): string {
   const d = json?.error?.details;
@@ -41,6 +42,24 @@ type Payload = {
 };
 
 type GeoRegion = { id: number; code: string; name_en: string };
+
+/** `/directory/ratings/received` is the tenant's own read of its card: RLS already keeps the rows
+ *  to the tenant that wrote them or stands under them, so this carries the two states a seeker's
+ *  board never shows — a mark the office has hidden, and the reason it wrote. */
+type ReceivedMark = {
+  id: string; stars: number; comment: string | null; basis: string;
+  booking_id: string | null; search_id: string | null; rater_name: string | null;
+  rater_kind: string; created_at: string; reply: string | null; replied_at: string | null;
+  withdrawn_at: string | null; hidden_at: string | null; hidden_reason: string | null;
+};
+
+/** The same definer the seeker reads under a card, so the mean on your own page cannot disagree
+ *  with the number a seeker sees beside your name. */
+type MarkSummary = {
+  marks: number; mean: string | number; five: number; four: number; three: number;
+  two: number; one: number; from_companies: number; from_seekers: number;
+  answered: number; since: string | null;
+};
 
 /** The body the 061 editor writes. Blank optional fields are omitted, never "" —
  *  the column CHECKs demand a length once a value exists. */
@@ -85,6 +104,20 @@ function ago(iso: string | null | undefined): string {
   const hrs = Math.round(mins / 60);
   if (hrs < 36) return `${hrs} h ago`;
   return `${Math.round(hrs / 24)} d ago`;
+}
+
+/** 131's mark drawn as the five it is. `dim` is a row the register keeps but nobody counts any
+ *  more — withdrawn by its author, or hidden by the office — so the stars stay readable without
+ *  pretending the mark is still on the board. */
+function Stars({ n, dim }: { n: number; dim?: boolean }) {
+  const filled = Math.max(0, Math.min(5, Math.round(n)));
+  return (
+    <span role="img" aria-label={`${filled} out of 5`}
+      className="inline-flex items-center gap-[2px] text-sm"
+      style={{ color: dim ? "var(--line)" : "var(--gold)" }}>
+      {[1, 2, 3, 4, 5].map(i => <span key={i} aria-hidden>{i <= filled ? "★" : "☆"}</span>)}
+    </span>
+  );
 }
 
 function Field(props: {
@@ -135,6 +168,54 @@ export default function CompanyDirectoryPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [armed, setArmed] = useState<"" | "publish" | "withdraw">("");
   const [preview, setPreview] = useState(false);
+
+  // 131's marks on this company's own card.
+  const [marks, setMarks] = useState<ReceivedMark[] | null>(null);
+  const [markSum, setMarkSum] = useState<MarkSummary | null>(null);
+  const [canAnswer, setCanAnswer] = useState(false);
+  const [markRefused, setMarkRefused] = useState<string | null>(null);
+  const [replyFor, setReplyFor] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [replyBusy, setReplyBusy] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [replyNotice, setReplyNotice] = useState<string | null>(null);
+
+  const loadMarks = useCallback(async () => {
+    const res = await apiFetch("/directory/ratings/received?limit=100");
+    const json = await res.json().catch(() => ({}));
+    if (res.status === 404) { setMarks([]); setMarkSum(null); return; }
+    if (res.status === 403) {
+      setMarkRefused("Your role can read the board copy but not the marks on it.");
+      return;
+    }
+    if (!res.ok) {
+      setMarkRefused(errorText(json, "The marks register would not answer."));
+      return;
+    }
+    setMarkRefused(null);
+    setMarks(json.marks ?? []);
+    setMarkSum(json.summary ?? null);
+    setCanAnswer(json.canAnswer === true);
+  }, []);
+
+  useEffect(() => { loadMarks(); }, [loadMarks]);
+
+  /** Written once, so the box closes the moment the answer lands — and the reload that follows a
+   *  reply re-reads the register, never the row the desk was looking at. */
+  async function sendReply(id: string) {
+    setReplyBusy(true); setReplyError(null);
+    try {
+      const res = await apiFetch(`/directory/ratings/${id}/reply`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reply: replyText.trim() })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setReplyError(errorText(json, "The answer could not be recorded.")); return; }
+      setReplyFor(null); setReplyText("");
+      setReplyNotice("Answered. Your words sit under their mark on the card, and cannot be rewritten.");
+      await loadMarks();
+    } finally { setReplyBusy(false); }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -569,6 +650,172 @@ export default function CompanyDirectoryPage() {
           </div>
         </form>
       )}
+
+      <section className={`${CARD} mt-24`} style={CARD_STYLE}>
+        <div className="flex flex-wrap items-start justify-between gap-16">
+          <div>
+            <p className="pv-title">What dealing with you was like</p>
+            <p className="mt-6 max-w-[560px] text-xs leading-relaxed" style={{ color: "var(--ink-soft)" }}>
+              A mark is written by a company you completed a booked job with, or by a seeker who
+              opened your card from a paid search. Nothing else writes here, and your own seats
+              cannot mark their own card.
+            </p>
+          </div>
+          {!!markSum && markSum.marks > 0 && (
+            <div className="shrink-0 text-right">
+              <p className="text-3xl font-bold tabular-nums leading-none" style={{ color: "var(--ink)" }}>
+                {Number(markSum.mean).toFixed(1)}
+              </p>
+              <p className="mt-6 flex items-center justify-end gap-8">
+                <Stars n={Number(markSum.mean)} />
+                <span className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                  {markSum.marks} mark{markSum.marks === 1 ? "" : "s"}
+                </span>
+              </p>
+            </div>
+          )}
+        </div>
+
+        {!!markSum && markSum.marks > 0 && (
+          <p className="mt-10 text-[11px] leading-relaxed" style={{ color: "var(--ink-soft)" }}>
+            {markSum.from_seekers} from seekers, {markSum.from_companies} from other companies,{" "}
+            {markSum.answered} answered{markSum.since ? ` · first ${ago(markSum.since)}` : ""}. The
+            mean is the figure a seeker sees beside your name — a mark its author withdrew, or the
+            office hid, stays listed below but is out of that number.
+          </p>
+        )}
+
+        {markRefused && (
+          <div role="alert" className="mt-16 px-12 py-8 text-sm"
+            style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>
+            {markRefused}
+          </div>
+        )}
+        {replyNotice && (
+          <div role="status" className="mt-16 px-12 py-8 text-sm"
+            style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>
+            {replyNotice}
+          </div>
+        )}
+
+        {!marks ? (
+          <p className="pane-note mt-16 text-xs">Reading the marks register…</p>
+        ) : marks.length === 0 ? (
+          <p className="mt-16 rounded-card px-16 py-12 text-xs leading-relaxed"
+            style={{ background: "var(--milk)", color: "var(--ink-soft)" }}>
+            {listing
+              ? "Nobody has marked this card yet. Marks land when a booked job is done or a seeker opens your card from a search — there is no way to ask for one, and no way to write your own."
+              : "Save and publish the card first. A mark can only stand on a company a seeker or a counterparty actually dealt with on WAISHA."}
+          </p>
+        ) : (
+          <ul className="mt-16 space-y-12">
+            {marks.map(m => {
+              const hidden = !!m.hidden_at;
+              const withdrawn = !!m.withdrawn_at;
+              const quiet = hidden || withdrawn;
+              const words = replyText.trim();
+              return (
+                <li key={m.id} className="rounded-card p-16"
+                  style={{
+                    background: quiet ? "var(--milk)" : "color-mix(in srgb, var(--gold) 8%, var(--surface))",
+                    border: `1px solid ${hidden ? "var(--danger)" : "var(--line)"}`
+                  }}>
+                  <div className="flex flex-wrap items-center justify-between gap-8">
+                    <div className="flex flex-wrap items-center gap-10">
+                      <Stars n={m.stars} dim={quiet} />
+                      <p className="text-sm font-bold" style={{ color: "var(--ink)" }}>
+                        {m.rater_name ?? "a mark on WAISHA"}
+                      </p>
+                      <span className="chip">{m.basis === "booking" ? "booked job" : "opened card"}</span>
+                    </div>
+                    <p className="text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                      {m.basis === "booking" ? "left on a booked job" : "left after opening their card"}
+                      {" · "}{fmtDateTime(m.created_at)}
+                    </p>
+                  </div>
+
+                  {m.comment && (
+                    <p className="mt-10 text-sm leading-relaxed" style={{ color: "var(--ink)" }}>
+                      {m.comment}
+                    </p>
+                  )}
+                  {!m.comment && (
+                    <p className="mt-10 text-xs" style={{ color: "var(--ink-soft)" }}>
+                      Stars only — they gave no words.
+                    </p>
+                  )}
+
+                  {hidden && (
+                    <p className="mt-10 text-[11px] leading-relaxed" style={{ color: "var(--danger)" }}>
+                      Taken off the board by the office {fmtDateTime(m.hidden_at)} —{" "}
+                      {m.hidden_reason ?? "no reason was recorded"}. A seeker does not see it and it
+                      is out of your mean, so answering it would go nowhere.
+                    </p>
+                  )}
+                  {withdrawn && (
+                    <p className="mt-10 text-[11px] leading-relaxed" style={{ color: "var(--ink-soft)" }}>
+                      Withdrawn by whoever wrote it {fmtDateTime(m.withdrawn_at)}. The row is kept so
+                      this register stays complete, and the slot it took stays taken.
+                    </p>
+                  )}
+
+                  {m.reply ? (
+                    <div className="mt-12 rounded-card p-12"
+                      style={{ background: "var(--milk)", borderLeft: "3px solid var(--gold)" }}>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+                        Your answer · {fmtDateTime(m.replied_at)}
+                      </p>
+                      <p className="mt-6 text-sm leading-relaxed" style={{ color: "var(--ink)" }}>{m.reply}</p>
+                    </div>
+                  ) : canAnswer && !quiet ? (
+                    replyFor === m.id ? (
+                      <div className="mt-12">
+                        <textarea rows={3} maxLength={600} value={replyText}
+                          onChange={e => { setReplyText(e.target.value); setReplyError(null); }}
+                          placeholder="What actually happened on that job — the next seeker reads this before they call."
+                          className={INPUT} style={INPUT_STYLE} />
+                        <p className="mt-4 text-[10px] tabular-nums"
+                          style={{ color: words.length >= 8 ? "var(--ink-soft)" : "var(--warning)" }}>
+                          {words.length}/8…600 — written once, and it cannot be retyped afterwards.
+                        </p>
+                        {replyError && (
+                          <p role="alert" className="mt-8 text-xs" style={{ color: "var(--danger)" }}>{replyError}</p>
+                        )}
+                        <div className="mt-10 flex flex-wrap gap-8">
+                          <button type="button" disabled={replyBusy || words.length < 8}
+                            onClick={() => sendReply(m.id)}
+                            className="waisha-btn rounded-input px-16 py-8 text-xs font-semibold">
+                            {replyBusy ? "Sending…" : "Send answer"}
+                          </button>
+                          <button type="button" disabled={replyBusy}
+                            onClick={() => { setReplyFor(null); setReplyText(""); setReplyError(null); }}
+                            className="rounded-input border px-16 py-8 text-xs font-semibold"
+                            style={{ borderColor: "var(--line)", color: "var(--ink)" }}>
+                            Leave it
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button type="button"
+                        onClick={() => { setReplyFor(m.id); setReplyText(""); setReplyError(null); setReplyNotice(null); }}
+                        className="mt-12 rounded-input border px-16 py-8 text-xs font-semibold"
+                        style={{ borderColor: "var(--gold)", color: "var(--ink)" }}>
+                        Answer this mark
+                      </button>
+                    )
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <p className="mt-16 text-[11px] leading-relaxed" style={{ color: "var(--ink-soft)" }}>
+          An answer is one per mark, written by a seat of this account and published under your
+          company name. Only the office can take somebody else&apos;s mark off the board, and it
+          must write why — that reason is shown above.
+        </p>
+      </section>
     </div>
   );
 }

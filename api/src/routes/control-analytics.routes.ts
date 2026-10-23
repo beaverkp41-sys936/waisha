@@ -110,7 +110,11 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       // The data register (129). `gdpr` opens the copy and the preview; `erase` raises an erasure
       // and asks for a signature it cannot spend. A held duty that is not probed here is a tab
       // that never appears, which is how 067's control.staff.view behaved for three roles.
-      "control.customers.gdpr", "control.customers.erase"];
+      "control.customers.gdpr", "control.customers.erase",
+      // The marketplace desk (131). `view` reads the marks, the holds, the passes and the listings;
+      // `moderate` hides a mark, suspends a card or confirms a money reference; `exclusion` raises
+      // a hold and asks for the second seat's signature, which it cannot spend itself.
+      "control.directory.view", "control.directory.moderate", "control.directory.exclusion"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });
 

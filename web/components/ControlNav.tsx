@@ -48,7 +48,13 @@ const SCREENS: Screen[] = [
   // the last of which is also the only seat allowed to read a whole identity number back.
   { href: "/control/customers", label: "Verification", icon: ShieldCheck,
     keys: ["control.customers.view", "control.customers.verify", "control.customers.manage"] },
-  { href: "/control/directory", label: "Directory", icon: Globe, roles: LICENCE },
+  // The marketplace desk (131). Three duties because it does three different jobs: reading the four
+  // registers, moving a mark or a card, and raising a dated hold — the last of which it can only
+  // raise, never sign. `roles` stays so a licence seat that predates the matrix keeps the door it
+  // always had; the keys are what let compliance_officer, platform_analyst, support_engineer and
+  // customer_service_agent see it at all.
+  { href: "/control/directory", label: "Directory", icon: Globe, roles: LICENCE,
+    keys: ["control.directory.view", "control.directory.moderate", "control.directory.exclusion"] },
   { href: "/control/recommendations", label: "Inbox", icon: Lightbulb,
     keys: ["control.recommendations.view", "control.recommendations.manage"] },
   { href: "/control/staff", label: "Staff", icon: UserCog, keys: ["control.staff.view", "control.staff.manage"] },

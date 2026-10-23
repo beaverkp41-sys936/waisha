@@ -104,6 +104,26 @@ function errText(json: any, fallback: string): string {
   return json?.error?.message ?? fallback;
 }
 
+/** 131's stars, tapped rather than typed. A booked job is marked once and the mark is aimed at
+ *  the company on the other side of it, so there is no sensible default to start from. */
+function StarPick({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  return (
+    <span role="group" aria-label="Stars, one to five" className="inline-flex items-center gap-4">
+      {[1, 2, 3, 4, 5].map(n => (
+        <button key={n} type="button" aria-pressed={value === n} onClick={() => onChange(n)}
+          className="rounded-input px-6 py-2 text-base leading-none"
+          style={{
+            border: `1px solid ${value >= n ? "var(--gold)" : "var(--line)"}`,
+            background: value === n ? "color-mix(in srgb, var(--gold) 18%, transparent)" : "transparent",
+            color: value >= n ? "var(--gold)" : "var(--line)"
+          }}>
+          ★
+        </button>
+      ))}
+    </span>
+  );
+}
+
 const VEHICLE_LABELS: Record<string, string> = {
   truck_head: "Truck head", trailer: "Trailer", tanker: "Tanker", flatbed: "Flatbed",
   tipper: "Tipper", reefer: "Reefer", box_truck: "Box truck", van: "Van",
@@ -184,6 +204,14 @@ export default function BoardPage() {
   const [releaseReason, setReleaseReason] = useState("");
   const [releaseBusy, setReleaseBusy] = useState(false);
   const [releaseError, setReleaseError] = useState<string | null>(null);
+  // 131's mark on a booked job. `markOf` is this seat's own marks keyed by booking, read with the
+  // bookings so an already-marked job does not offer a form the register is going to refuse.
+  const [markOf, setMarkOf] = useState<Record<string, number>>({});
+  const [markOpen, setMarkOpen] = useState<string | null>(null);
+  const [markStars, setMarkStars] = useState(0);
+  const [markWords, setMarkWords] = useState("");
+  const [markBusy, setMarkBusy] = useState(false);
+  const [markError, setMarkError] = useState<string | null>(null);
   const [meName, setMeName] = useState("");
   const [, setClock] = useState(0);
 
@@ -361,6 +389,13 @@ export default function BoardPage() {
       const res = await apiFetch("/my-bookings");
       if (!res.ok) { setBookingsError("Your bookings could not be loaded. Try again."); return; }
       setBookings(await res.json());
+      const mine = await apiFetch("/directory/ratings/mine?limit=100");
+      if (mine.ok) {
+        const j = await mine.json();
+        const by: Record<string, number> = {};
+        for (const m of (j.marks ?? [])) if (m.booking_id && !m.withdrawn_at) by[m.booking_id] = m.stars;
+        setMarkOf(by);
+      } else setMarkOf({});
     } catch (e: any) {
       if (e.message !== "session ended") setBookingsError("Your bookings could not be loaded. Try again.");
     } finally { setBookingsLoading(false); }
@@ -438,6 +473,30 @@ export default function BoardPage() {
     } catch (e: any) {
       if (e.message !== "session ended") setReleaseError("The booking could not be cancelled. Try again.");
     } finally { setReleaseBusy(false); }
+  }
+
+  // 131's mark, from the side that booked the job. The stars are the only thing the caller names:
+  // the definer works out which company is being marked from the booking, so this seat cannot aim
+  // a mark at a bystander — and the register's own sentence is what comes back when the other side
+  // trades without a directory card.
+  async function sendMark(b: Booking) {
+    setMarkBusy(true); setMarkError(null);
+    try {
+      const words = markWords.trim();
+      const res = await apiFetch("/directory/ratings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookingId: b.id, stars: markStars, comment: words.length ? words : null })
+      });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) { setMarkError(errText(j, "The mark could not be recorded.")); return; }
+      const stars = markStars;
+      setMarkOpen(null); setMarkStars(0); setMarkWords("");
+      setNotice(`Marked ${b.company_name} ${stars} out of 5 — your words go on the card they trade under, beside the one you booked.`);
+      loadBookings();
+    } catch (e: any) {
+      if (e.message !== "session ended") setMarkError("The mark could not be recorded.");
+    } finally { setMarkBusy(false); }
   }
 
   const activeBookings = bookings.filter(
@@ -944,6 +1003,72 @@ export default function BoardPage() {
                       )}
                     </div>
                   )}
+                  {b.status === "confirmed" && (markOf[b.id] ? (
+                    <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
+                      You marked this job {markOf[b.id]} out of 5. A booking is marked once — the
+                      company can answer it under its own card.
+                    </p>
+                  ) : markOpen === b.id ? (
+                    <div className="mt-12 rounded-card p-12"
+                      style={{ background: "var(--milk)", border: "1px solid var(--line)" }}>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.1em]"
+                        style={{ color: "var(--ink-soft)" }}>
+                        How was dealing with {b.company_name}?
+                      </p>
+                      <div className="mt-8">
+                        <StarPick value={markStars} onChange={setMarkStars} />
+                      </div>
+                      <textarea rows={3} maxLength={600} value={markWords}
+                        onChange={e => setMarkWords(e.target.value)}
+                        placeholder="Optional — what they did well or where it went wrong. Eight characters at least if you write anything."
+                        className="mt-8 w-full rounded-input border px-12 py-8 text-sm" style={inputStyle} />
+                      <p className="mt-4 text-[10px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                        {markWords.trim().length === 0 ? "no comment"
+                          : markWords.trim().length < 8 ? `${markWords.trim().length}/8 before it counts`
+                            : `${markWords.trim().length}/600`}
+                      </p>
+                      {markError && (
+                        <p role="alert" className="mt-6 text-xs" style={{ color: "var(--danger)" }}>
+                          {markError}
+                        </p>
+                      )}
+                      <div className="mt-8 flex gap-8">
+                        <button type="button"
+                          disabled={markBusy || markStars < 1
+                            || (markWords.trim().length > 0 && markWords.trim().length < 8)}
+                          onClick={() => sendMark(b)}
+                          className="rounded-input px-12 py-6 text-xs font-semibold"
+                          style={{
+                            background: "var(--brand)", color: "var(--on-solid)",
+                            opacity: markBusy || markStars < 1
+                              || (markWords.trim().length > 0 && markWords.trim().length < 8) ? 0.55 : 1
+                          }}>
+                          {markBusy ? "Recording…" : "Mark this job"}
+                        </button>
+                        <button type="button" disabled={markBusy}
+                          onClick={() => { setMarkOpen(null); setMarkStars(0); setMarkWords(""); setMarkError(null); }}
+                          className="rounded-input border px-12 py-6 text-xs font-semibold"
+                          style={{ borderColor: "var(--line)", color: "var(--ink)" }}>
+                          Not now
+                        </button>
+                      </div>
+                      <p className="mt-8 text-[10px] leading-relaxed" style={{ color: "var(--ink-soft)" }}>
+                        Filed against the card {b.company_name} trades on the directory, not against
+                        this load. If they have no card, the register says so.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="mt-12">
+                      <button type="button"
+                        onClick={() => {
+                          setMarkOpen(b.id); setMarkStars(0); setMarkWords(""); setMarkError(null);
+                        }}
+                        className="rounded-input border px-12 py-6 text-xs font-semibold"
+                        style={{ borderColor: "var(--gold)", color: "var(--ink)" }}>
+                        Mark how it went…
+                      </button>
+                    </div>
+                  ))}
                 </article>
               );
             })}

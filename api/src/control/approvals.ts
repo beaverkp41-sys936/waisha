@@ -44,16 +44,17 @@ export const DECIDE = "control.approvals.decide";
 const TENANTS_MANAGE = "control.tenants.manage";
 const REFUND_MANAGE = "control.payments.manage";
 const CUSTOMERS_ERASE = "control.customers.erase";
+const DIRECTORY_EXCLUSION = "control.directory.exclusion";
 
 /**
  * What can be signed, and what signing it does.
  *
  * A kind with no apply path here would be a signature that can never be spent, so the
  * registry is deliberately exhaustive: every entry names the effect its released signature
- * buys. Three effects exist today because the platform has three kinds of thing the rule
- * covers — a company's access, money going back out, and a person's data leaving the
- * registers — and a fourth joins by naming its own definer rather than by restating the
- * transaction below.
+ * buys. Four effects exist today because the platform has four kinds of thing the rule
+ * covers — a company's access, money going back out, a person's data leaving the
+ * registers, and a company held off the trading board — and a fifth joins by naming its own
+ * definer rather than by restating the transaction below.
  *
  * `proposable` is the one field the desk cannot ignore. A refund paper's payload is the
  * figure and the call it belongs to, and those are read out of the row by
@@ -66,7 +67,7 @@ export interface ApprovalKind {
   /** Which duty the proposing seat must hold. */
   proposeDuty: string;
   /** What a released signature is spent on. */
-  effect: "tenant_action" | "refund_release" | "data_erasure";
+  effect: "tenant_action" | "refund_release" | "data_erasure" | "directory_exclusion";
   /** The `tenant_actions` verb a ban releases into. */
   tenantAction?: "block" | "close";
   /** Whether this desk may raise it at all. */
@@ -98,6 +99,15 @@ export const KINDS: Record<string, ApprovalKind> = {
   "customer.erase": {
     action: "customer.erase", label: "Erase an account's personal data",
     proposeDuty: CUSTOMERS_ERASE, effect: "data_erasure", proposable: false
+  },
+  // Raised from the Directory desk against one exclusion paper (131). The paper already carries
+  // the subject, the reason and the window, and `propose_directory_exclusion` reads all three
+  // out of the row and hashes them — so the second seat signs a dated hold on a named company,
+  // never a sentence typed into a body beside a fresh id. A company is held off the board by at
+  // most one live paper, so this signature is the only hand that can move the card.
+  "directory.exclusion": {
+    action: "directory.exclusion", label: "Hold a company, vehicle or driver off the board",
+    proposeDuty: DIRECTORY_EXCLUSION, effect: "directory_exclusion", proposable: false
   }
 };
 
@@ -111,7 +121,7 @@ export function kindOf(action: string): ApprovalKind {
 }
 
 /**
- * The six statements the register answers on, exported so 121's verify script runs the
+ * The statements the register answers on, exported so 121's verify script runs the
  * same strings a handler runs rather than a copy of them.
  */
 /** Params: action, target kind, target id, payload, reason, actor, role, ip, ua. */
@@ -129,6 +139,9 @@ export const REFUND_APPLY_SQL =
 /** Params: approval, actor, role, ip. 129's mask, which re-reads the categories off the payload. */
 export const ERASE_APPLY_SQL =
   "select platform_auth.apply_data_erasure($1,$2,$3,$4) as r";
+/** Params: approval, actor, role, ip. 131's hold, which replays the window off the payload. */
+export const EXCLUSION_APPLY_SQL =
+  "select platform_auth.apply_directory_exclusion($1,$2,$3,$4) as r";
 /** Params: status, action, search, limit, offset. */
 export const BOARD_SQL = "select platform_auth.approvals_board($1,$2,$3,$4,$5) as b";
 /** Params: id. */
@@ -260,16 +273,22 @@ export async function reject(req: any, id: string, note: string) {
  * proposer beside them. The trigger reads that pair and lets the row through only if a
  * real, matching, second-seat proposal stands behind it.
  *
- * The effects share the order and nothing else after it. A refund paper and an erasure are both
- * finished inside the transaction — the row itself is the receipt, and there is no caller to email
- * about a signature — so the notice, its cached gate clearing and its delivery receipt all stay on
- * the ban branch, where 078 put them for the reason that still holds: a mail provider that is down
- * must never leave a company two people agreed to shut still trading.
+ * The effects share the order and nothing else after it. A refund paper, an erasure and an
+ * exclusion are each finished inside the transaction — the row itself is the receipt, and there
+ * is no caller to email about a signature — so the notice, its cached gate clearing and its
+ * delivery receipt all stay on the ban branch, where 078 put them for the reason that still
+ * holds: a mail provider that is down must never leave a company two people agreed to shut
+ * still trading.
  */
 type Spent =
-  | { kind: ApprovalKind; tenant: AppliedAction; refund?: undefined; erasure?: undefined }
-  | { kind: ApprovalKind; tenant?: undefined; refund: Record<string, unknown>; erasure?: undefined }
-  | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure: Record<string, unknown> };
+  | { kind: ApprovalKind; tenant: AppliedAction; refund?: undefined; erasure?: undefined;
+      exclusion?: undefined }
+  | { kind: ApprovalKind; tenant?: undefined; refund: Record<string, unknown>; erasure?: undefined;
+      exclusion?: undefined }
+  | { kind: ApprovalKind; tenant?: undefined; refund?: undefined;
+      erasure: Record<string, unknown>; exclusion?: undefined }
+  | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
+      exclusion: Record<string, unknown> };
 
 export async function releaseAndApply(req: any, id: string, note: string) {
   const a = actor(req);
@@ -328,6 +347,29 @@ export async function releaseAndApply(req: any, id: string, note: string) {
         return { kind, erasure: eff };
       }
 
+      if (kind.effect === "directory_exclusion") {
+        const res = await run(c, EXCLUSION_APPLY_SQL, [id, a.id, a.role, a.ip]);
+        const eff = res.r as (Record<string, any> | undefined);
+        if (!eff) throw new ApiError("UPSTREAM_ERROR", "The hold could not be recorded.", 502);
+        // The definer replays the window off the approval's own payload and refuses the paper if
+        // it no longer matches, so a hold that started under a signature is provably the hold the
+        // second seat read. Any "no" here rolls the claim back with it: an unspent signature must
+        // not be recorded as one that suspended a card.
+        if (eff.status !== "ok") {
+          throw new ApiError(eff.status === "not_found" ? "NOT_FOUND" : "CONFLICT",
+            eff.message ?? "The paper changed under this signature. Nothing was held.",
+            eff.status === "not_found" ? 404 : 409);
+        }
+        await run(c, SETTLE_SQL, [id, JSON.stringify({
+          exclusion_id: eff.exclusion_id, ref: eff.ref, subject_kind: eff.subject_kind,
+          subject_name: eff.subject_name, company_name: eff.company_name,
+          company_tenant_id: eff.company_tenant_id, listing_id: eff.listing_id,
+          days: eff.days, starts_at: eff.starts_at, ends_at: eff.ends_at,
+          exclusion_status: eff.exclusion_status, activated_by: eff.activated_by
+        })]);
+        return { kind, exclusion: eff };
+      }
+
       const payload = cl.r.payload as { tenant_id: string; reason_code: string; note: string };
       const res = await run(c, APPLY_SQL, [
         payload.tenant_id, kind.tenantAction!, payload.reason_code, payload.note,
@@ -370,6 +412,13 @@ export async function releaseAndApply(req: any, id: string, note: string) {
   // answer, and the desk that raised the paper reads it back from there.
   if (spent.kind.effect === "data_erasure") {
     return { ...spent.erasure, approval_id: id };
+  }
+  // A held card is its own announcement: the company's listing editor reads back
+  // `status = 'suspended'` with the paper's note as the reason, and the seeker simply stops
+  // being shown it. There is no director email for a signature on a trading board, so the
+  // register row is the answer here too.
+  if (spent.kind.effect === "directory_exclusion") {
+    return { ...spent.exclusion, approval_id: id };
   }
 
   const applied = spent.tenant!;
