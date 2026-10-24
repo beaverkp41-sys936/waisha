@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Activity, Banknote, Boxes, Bug, Building2, CreditCard, Globe, Headphones, Languages, Lightbulb, LogOut,
+  Activity, Banknote, BookOpen, Boxes, Bug, Building2, CreditCard, Globe, Headphones, Languages, Lightbulb, LogOut,
   Megaphone, Scale, ScrollText, Settings2, ShieldCheck, Stamp, Tag, TrendingUp, UserCog, Users, type LucideIcon
 } from "lucide-react";
 
@@ -36,6 +36,12 @@ const SCREENS: Screen[] = [
   // "my customer paid and nothing happened".
   { href: "/control/gateway", label: "Gateway", icon: CreditCard,
     keys: ["control.gateway.view", "control.gateway.manage"] },
+  // The office's own book (133). It is called Ledger, not Money, because `Money` above is the
+  // subscriptions desk's takings — a seat looking for the double-entry register looks for the book.
+  // Three duties, deliberately split: reading it, writing in it, and stopping an account are three
+  // different authorities, and a compliance officer who can freeze a line cannot post through it.
+  { href: "/control/money", label: "Ledger", icon: BookOpen,
+    keys: ["control.money.view", "control.money.post", "control.money.freeze"] },
   { href: "/control/tenants", label: "Tenants", icon: Building2, roles: LICENCE, keys: ["control.tenants.manage"] },
   // The second seat's desk. Both keys open it because the register is read by people who
   // cannot sign as well as by people who can — a ban that needs a second opinion must be

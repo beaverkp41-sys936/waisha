@@ -114,7 +114,11 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       // The marketplace desk (131). `view` reads the marks, the holds, the passes and the listings;
       // `moderate` hides a mark, suspends a card or confirms a money reference; `exclusion` raises
       // a hold and asks for the second seat's signature, which it cannot spend itself.
-      "control.directory.view", "control.directory.moderate", "control.directory.exclusion"];
+      "control.directory.view", "control.directory.moderate", "control.directory.exclusion",
+      // The office's book (133). `view` reads the chart, the register and whether the two sides agree;
+      // `post` opens an account and writes a movement; `freeze` stops an account, and is deliberately
+      // not `post` — the hand that halts somebody else's money is the one that settles disputes.
+      "control.money.view", "control.money.post", "control.money.freeze"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });
 
