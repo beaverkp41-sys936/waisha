@@ -1,12 +1,39 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { ControlNav } from "@/components/ControlNav";
+import { MoneyMoves, type Desk, type MovesTab } from "./moves";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
 const VIEW = "control.money.view";
 const POST = "control.money.post";
 const FREEZE = "control.money.freeze";
+const PAY = "control.money.pay";
+const ESCROW = "control.money.escrow";
+const REVEAL = "control.money.reveal";
+
+type Tab = MovesTab | "book";
+const TABS: [Tab, string][] = [
+  ["book", "The book"], ["wallets", "Wallets"], ["escrow", "Escrow holds"],
+  ["payouts", "Payouts"], ["batches", "Batches"]];
+
+/** What each tab is for, in the words the desk itself uses. The book answers "does it agree with
+ *  itself"; the three registers above it (134) each answer a different question about money that has
+ *  not moved yet, and a clerk who cannot see which question is being asked reads the wrong answer. */
+const HEAD: Record<Tab, string> = {
+  book: "Double-entry book",
+  wallets: "Holders’ wallets",
+  escrow: "Money parked against a job",
+  payouts: "Money the office owes out",
+  batches: "Payouts carried together"
+};
+const SUB: Record<Tab, string> = {
+  book: "Every movement the office has written, counted from its legs.",
+  wallets: "A holder’s balance is a line of the book, not a column someone maintains beside it.",
+  escrow: "Money stopped against a booking, a cargo file, a call or a dispute — and the plan a second seat has to sign.",
+  payouts: "Drafted, signed, accrued, then answered on the day the cash actually goes.",
+  batches: "Many papers under one signature, closed only when none of them is still owed."
+};
 
 const KINDS = ["asset", "liability", "equity", "income", "expense"];
 const SOURCE_KINDS = ["opening", "manual", "adjustment", "reversal", "invoice", "payment",
@@ -174,10 +201,14 @@ export default function ControlMoneyPage() {
   // key, and a value born during render makes the server's HTML and the browser's disagree.
   const [idem, setIdem] = useState("");
   const [armed, setArmed] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("book");
 
   const canView = perms.includes(VIEW);
   const canPost = perms.includes(POST);
   const canFreeze = perms.includes(FREEZE);
+  const canPay = perms.includes(PAY);
+  const canEscrow = perms.includes(ESCROW);
+  const canReveal = perms.includes(REVEAL);
   const picked = accounts.find(a => a.id === pickedId) ?? null;
 
   async function load() {
@@ -240,6 +271,34 @@ export default function ControlMoneyPage() {
     const j = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(message(j, `The desk refused (${res.status})`));
     return j;
+  }
+
+  /** A file the browser keeps, not a tab it opens. The payout export answers with an attachment, so
+   *  the reply is read as a blob and handed to a throwaway anchor — a `window.open` would carry no
+   *  session cookie at all and would show the seat a login page instead of its own register.
+   *  Nothing throws: a call made with `void` has nobody left to catch it, so the fault is reported
+   *  the same way every other fault on this desk is. */
+  async function download(path: string, filename: string): Promise<void> {
+    setError(null); setNotice(null);
+    try {
+      const res = await fetch(`${API}/api/v1${path}`, { credentials: "include" });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(message(j, `The export would not answer (${res.status})`));
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setNotice(`${filename} saved — ${Math.max(1, Math.round(blob.size / 1024))} KB of the register the filters still named.`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   /** Every write ends with the same three reads it started from, so what the desk says afterwards is
@@ -429,6 +488,31 @@ export default function ControlMoneyPage() {
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   };
 
+  /** A tab asks a different question, so neither the sentence one panel wrote nor the fault another
+   *  provoked follows the clerk across it. `desk.go` is the same move from inside a panel: a wallet
+   *  that hands a withdrawal to the payout register changes the tab on the desk's side, not its own. */
+  function pickTab(t: Tab) {
+    setTab(t); setError(null); setNotice(null);
+    // Every register above the book writes into it: funding a wallet posts a movement, releasing a
+    // payout accrues one. The counters were read the last time the book was open, so they are read
+    // again on the way back rather than shown as the figures from before the money moved.
+    if (t === "book" && tab !== "book") void load();
+  }
+
+  /**
+   * The four registers that sit on top of the book (134) are handed this desk rather than given their
+   * own session: the same cookies, the same duty list, the same green strip that says what the doors
+   * answered. A payout booked from a wallet therefore reports itself beside the movement it created,
+   * and a seat without `control.money.pay` sees the same closed pen here as on the book.
+   */
+  const desk: Desk = {
+    call, download, fig, when, today, cents, mint,
+    notify: (s) => { setError(null); setNotice(s); setTimeout(() => setNotice(null), 12000); },
+    fault: (s) => { setNotice(null); setError(s); },
+    can: { pay: canPay, escrow: canEscrow, reveal: canReveal },
+    go: pickTab,
+  };
+
   const cell = "w-full rounded-input border px-8 py-8 text-sm";
   const cellStyle = { borderColor: "var(--adm-line)", background: "var(--milk)" };
   const labelCls = "mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]";
@@ -458,6 +542,13 @@ export default function ControlMoneyPage() {
               <code>{FREEZE}</code>, and 133 gives the two to different seats — the hand that stops
               somebody else&rsquo;s money is the one that settles disputes, not the one that holds a pen.
             </p>
+            <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+              The three registers above the book need duties of their own: <code>{PAY}</code> funds a
+              wallet and raises, signs off or declines a payout; <code>{ESCROW}</code> parks money
+              against a job, halts a dispute, decides a plan and stops a holder&rsquo;s wallet;{" "}
+              <code>{REVEAL}</code> is the only one that reads a payee&rsquo;s whole number out of the
+              encrypted line, and each time it does, the register records that it did.
+            </p>
           </div>
         </main>
       </div>
@@ -478,7 +569,40 @@ export default function ControlMoneyPage() {
       </header>
 
       <main className="mx-auto max-w-[1100px] px-16 py-32">
-        <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Double-entry book</h1>
+        <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>{HEAD[tab]}</h1>
+        <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>{SUB[tab]}</p>
+
+        {/* One page, five registers. Every tab is a read of `control.money.view`; the pens inside them
+            are separate duties, so a seat that may fund a wallet but may not halt one sees the same
+            five buttons and a different set of arms beneath them. */}
+        <div className="mt-16 mb-8 flex flex-wrap gap-8" role="tablist"
+          aria-label="The book and the three registers above it">
+          {TABS.map(([k, l]) => (
+            <button key={k} role="tab" aria-selected={k === tab} className={btn}
+              onClick={() => pickTab(k)}
+              style={k === tab
+                ? { background: "var(--adm-accent)", color: "var(--brand-deep)", fontWeight: 800 }
+                : { background: "var(--milk)", color: "var(--ink)" }}>
+              {l}
+            </button>
+          ))}
+        </div>
+
+        {notice && (
+          <div className="mb-16 rounded-input px-12 py-8 text-sm" role="status"
+            style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>
+            {notice}
+          </div>
+        )}
+        {error && (
+          <div className="mb-16 rounded-input px-12 py-8 text-sm" role="alert"
+            style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>
+            {error}
+          </div>
+        )}
+
+        {tab === "book" && (
+          <>
 
         {/* The one fact this desk exists to state, counted from the legs and not from the running
             columns the legs also keep. */}
@@ -526,19 +650,6 @@ export default function ControlMoneyPage() {
             {drifted.length === 1 ? "One account" : `${drifted.length} accounts`} carry cached totals
             that disagree with their own legs: {drifted.map(a => a.code).join(", ")}. The recomputed
             column is the truth until the trigger is fixed.
-          </div>
-        )}
-
-        {notice && (
-          <div className="mb-16 rounded-input px-12 py-8 text-sm" role="status"
-            style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)", borderLeft: "4px solid var(--success)" }}>
-            {notice}
-          </div>
-        )}
-        {error && (
-          <div className="mb-16 rounded-input px-12 py-8 text-sm" role="alert"
-            style={{ background: "color-mix(in srgb, var(--danger) 8%, transparent)", borderLeft: "4px solid var(--danger)" }}>
-            {error}
           </div>
         )}
 
@@ -1046,6 +1157,10 @@ export default function ControlMoneyPage() {
           This is the office&rsquo;s own book — a company&rsquo;s ledger is the same tables under a
           different seat and is not reachable from a control session.
         </p>
+          </>
+        )}
+
+        {tab !== "book" && <MoneyMoves tab={tab} desk={desk} />}
       </main>
     </div>
   );

@@ -118,7 +118,11 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       // The office's book (133). `view` reads the chart, the register and whether the two sides agree;
       // `post` opens an account and writes a movement; `freeze` stops an account, and is deliberately
       // not `post` — the hand that halts somebody else's money is the one that settles disputes.
-      "control.money.view", "control.money.post", "control.money.freeze"];
+      // The money that waits and the money that leaves (134). `pay` opens and funds a wallet and
+      // raises a payout; `escrow` holds a payment and plans its discharge, both of which end on a
+      // second seat's signature; `reveal` unseals one payee line and is audited every time it is used.
+      "control.money.view", "control.money.post", "control.money.freeze",
+      "control.money.pay", "control.money.escrow", "control.money.reveal"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });
 

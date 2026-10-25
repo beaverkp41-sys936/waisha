@@ -45,16 +45,21 @@ const TENANTS_MANAGE = "control.tenants.manage";
 const REFUND_MANAGE = "control.payments.manage";
 const CUSTOMERS_ERASE = "control.customers.erase";
 const DIRECTORY_EXCLUSION = "control.directory.exclusion";
+// 134's two signatures are raised against a paper that already carries the figures, so the seat that
+// raises one is the seat that may put money somewhere or take it out.
+const MONEY_PAY = "control.money.pay";
+const MONEY_ESCROW = "control.money.escrow";
 
 /**
  * What can be signed, and what signing it does.
  *
  * A kind with no apply path here would be a signature that can never be spent, so the
  * registry is deliberately exhaustive: every entry names the effect its released signature
- * buys. Four effects exist today because the platform has four kinds of thing the rule
+ * buys. Six effects exist today because the platform has six kinds of thing the rule
  * covers — a company's access, money going back out, a person's data leaving the
- * registers, and a company held off the trading board — and a fifth joins by naming its own
- * definer rather than by restating the transaction below.
+ * registers, a company held off the trading board, money leaving the office, and money
+ * leaving escrow — and a seventh joins by naming its own definer rather than by restating
+ * the transaction below.
  *
  * `proposable` is the one field the desk cannot ignore. A refund paper's payload is the
  * figure and the call it belongs to, and those are read out of the row by
@@ -67,7 +72,8 @@ export interface ApprovalKind {
   /** Which duty the proposing seat must hold. */
   proposeDuty: string;
   /** What a released signature is spent on. */
-  effect: "tenant_action" | "refund_release" | "data_erasure" | "directory_exclusion";
+  effect: "tenant_action" | "refund_release" | "data_erasure" | "directory_exclusion"
+    | "payout_release" | "escrow_discharge";
   /** The `tenant_actions` verb a ban releases into. */
   tenantAction?: "block" | "close";
   /** Whether this desk may raise it at all. */
@@ -108,6 +114,21 @@ export const KINDS: Record<string, ApprovalKind> = {
   "directory.exclusion": {
     action: "directory.exclusion", label: "Hold a company, vehicle or driver off the board",
     proposeDuty: DIRECTORY_EXCLUSION, effect: "directory_exclusion", proposable: false
+  },
+  // Raised by 134's own payout doors — `propose_money_payout` and `propose_money_payout_batch` read
+  // the payee, the rail, the figure, the fee and the payee line's keyed hash out of the paper and
+  // hash what they read, so the second seat signs an instruction rather than a sentence typed beside
+  // a fresh id. Spending it accrues the obligation; the cash is confirmed afterwards by its own door.
+  "money.payout": {
+    action: "money.payout", label: "Release a payout to a company, driver or staff member",
+    proposeDuty: MONEY_PAY, effect: "payout_release", proposable: false
+  },
+  // Raised by `propose_escrow_discharge` against one hold. The plan is the signature: what the payee
+  // takes, what goes back to the payer and what the office keeps have to add up to the money held
+  // before a paper exists, so the desk is never asked to sign a plan that cannot be paid.
+  "money.escrow": {
+    action: "money.escrow", label: "Discharge a hold out of escrow",
+    proposeDuty: MONEY_ESCROW, effect: "escrow_discharge", proposable: false
   }
 };
 
@@ -142,6 +163,12 @@ export const ERASE_APPLY_SQL =
 /** Params: approval, actor, role, ip. 131's hold, which replays the window off the payload. */
 export const EXCLUSION_APPLY_SQL =
   "select platform_auth.apply_directory_exclusion($1,$2,$3,$4) as r";
+/** Params: approval, actor, role, ip. 134's accrual — one line, or every line under a batch. */
+export const PAYOUT_APPLY_SQL =
+  "select platform_auth.apply_payout_release($1,$2,$3,$4) as r";
+/** Params: approval, actor, role, ip. 134's discharge, which replays the three figures off the payload. */
+export const ESCROW_APPLY_SQL =
+  "select platform_auth.apply_escrow_discharge($1,$2,$3,$4) as r";
 /** Params: status, action, search, limit, offset. */
 export const BOARD_SQL = "select platform_auth.approvals_board($1,$2,$3,$4,$5) as b";
 /** Params: id. */
@@ -273,22 +300,41 @@ export async function reject(req: any, id: string, note: string) {
  * proposer beside them. The trigger reads that pair and lets the row through only if a
  * real, matching, second-seat proposal stands behind it.
  *
- * The effects share the order and nothing else after it. A refund paper, an erasure and an
- * exclusion are each finished inside the transaction — the row itself is the receipt, and there
- * is no caller to email about a signature — so the notice, its cached gate clearing and its
- * delivery receipt all stay on the ban branch, where 078 put them for the reason that still
- * holds: a mail provider that is down must never leave a company two people agreed to shut
- * still trading.
+ * The effects share the order and nothing else after it. A refund paper, an erasure, an exclusion
+ * and 134's two money effects are each finished inside the transaction — the row itself is the
+ * receipt, and there is no caller to email about a signature — so the notice, its cached gate
+ * clearing and its delivery receipt all stay on the ban branch, where 078 put them for the reason
+ * that still holds: a mail provider that is down must never leave a company two people agreed to
+ * shut still trading.
  */
 type Spent =
   | { kind: ApprovalKind; tenant: AppliedAction; refund?: undefined; erasure?: undefined;
-      exclusion?: undefined }
+      exclusion?: undefined; payout?: undefined; escrow?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund: Record<string, unknown>; erasure?: undefined;
-      exclusion?: undefined }
+      exclusion?: undefined; payout?: undefined; escrow?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund?: undefined;
-      erasure: Record<string, unknown>; exclusion?: undefined }
+      erasure: Record<string, unknown>; exclusion?: undefined; payout?: undefined;
+      escrow?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
-      exclusion: Record<string, unknown> };
+      exclusion: Record<string, unknown>; payout?: undefined; escrow?: undefined }
+  | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
+      exclusion?: undefined; payout: Record<string, any>; escrow?: undefined }
+  | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
+      exclusion?: undefined; payout?: undefined; escrow: Record<string, any> };
+
+/**
+ * 134's two apply doors answer in the register's own shape — `ok:false` plus an `error` word and a
+ * sentence — rather than in the `status` words 121's deciders use. Both refusals mean the paper moved
+ * under the signature, so the claim is rolled back with them and the desk hears why.
+ */
+function moneyRefusal(eff: any, nothing: string): ApiError {
+  if (eff?.error === "not_found") {
+    return new ApiError("NOT_FOUND",
+      eff?.message ?? `There is no paper behind this signature. ${nothing}.`, 404);
+  }
+  return new ApiError("CONFLICT",
+    eff?.message ?? `The paper changed under this signature. ${nothing}.`, 409);
+}
 
 export async function releaseAndApply(req: any, id: string, note: string) {
   const a = actor(req);
@@ -370,6 +416,45 @@ export async function releaseAndApply(req: any, id: string, note: string) {
         return { kind, exclusion: eff };
       }
 
+      if (kind.effect === "payout_release") {
+        const res = await run(c, PAYOUT_APPLY_SQL, [id, a.id, a.role, a.ip]);
+        const eff = res.r as (Record<string, any> | undefined);
+        if (!eff) throw new ApiError("UPSTREAM_ERROR", "The payout could not be recorded.", 502);
+        // The door re-reads the payee, the rail, the figure, the fee and the payee line's hash against
+        // the payload this signature was cut on, so an accrual that lands is provably the instruction
+        // the second seat read. A batch is one call: the batch is stamped released before its lines,
+        // because each line's own guard asks the batch what state its signature is in.
+        if (eff.ok !== true) throw moneyRefusal(eff, "Nothing was accrued");
+        await run(c, SETTLE_SQL, [id, JSON.stringify({
+          target_kind: eff.target_kind, ref: eff.ref,
+          payout_id: eff.payout_id ?? null, batch_id: eff.batch_id ?? null,
+          payee: eff.payee ?? null, amount: eff.amount ?? eff.total_amount ?? null,
+          fee_amount: eff.fee_amount ?? null, currency: eff.currency,
+          lines: eff.lines ?? null, accrued: eff.accrued ?? null,
+          posting: eff.posting?.ref ?? null, released_by: eff.released_by
+        })]);
+        return { kind, payout: eff };
+      }
+
+      if (kind.effect === "escrow_discharge") {
+        const res = await run(c, ESCROW_APPLY_SQL, [id, a.id, a.role, a.ip]);
+        const eff = res.r as (Record<string, any> | undefined);
+        if (!eff) throw new ApiError("UPSTREAM_ERROR", "The discharge could not be recorded.", 502);
+        // Money only leaves escrow on the plan that was signed: the payee's wallet is re-read (a desk
+        // can stop a wallet inside the seven days) and the three figures are compared against the
+        // payload before a leg is cut. Any "no" rolls the claim back with it.
+        if (eff.ok !== true) throw moneyRefusal(eff, "Nothing left escrow");
+        await run(c, SETTLE_SQL, [id, JSON.stringify({
+          hold_id: eff.hold_id, ref: eff.ref, subject_kind: eff.subject_kind,
+          subject_ref: eff.subject_ref, amount: eff.amount, currency: eff.currency,
+          discharge_kind: eff.discharge_kind, to_payee: eff.to_payee,
+          back_to_payer: eff.back_to_payer, fee_amount: eff.fee_amount,
+          payee_wallet_id: eff.payee_wallet_id ?? null,
+          posting: eff.posting?.ref ?? null, discharged_by: eff.discharged_by
+        })]);
+        return { kind, escrow: eff };
+      }
+
       const payload = cl.r.payload as { tenant_id: string; reason_code: string; note: string };
       const res = await run(c, APPLY_SQL, [
         payload.tenant_id, kind.tenantAction!, payload.reason_code, payload.note,
@@ -420,6 +505,15 @@ export async function releaseAndApply(req: any, id: string, note: string) {
   if (spent.kind.effect === "directory_exclusion") {
     return { ...spent.exclusion, approval_id: id };
   }
+  // A payout that has been accrued is not a payout that has been paid: the desk confirms the cash
+  // separately through 134's own door, and the register row already carries the posting ref, the
+  // payee and the figure the second seat signed. There is no email to a payee about a signature.
+  if (spent.kind.effect === "payout_release") {
+    return { ...spent.payout, approval_id: id };
+  }
+  if (spent.kind.effect === "escrow_discharge") {
+    return { ...spent.escrow, approval_id: id };
+  }
 
   const applied = spent.tenant!;
   forgetSuspensions();
@@ -431,6 +525,26 @@ export async function releaseAndApply(req: any, id: string, note: string) {
 
 const STATUSES = ["pending", "approved", "applied", "rejected", "lapsed"] as const;
 
+/**
+ * A payout paper's payload carries the keyed hash of the payee's account number, because 134's
+ * apply door re-reads the line and compares it to prove the signature still describes the money.
+ * That hash is only safe as long as nobody can test a candidate number against it, and this board
+ * is read by a duty that has no right to the number at all: `control.approvals.view` is granted to
+ * seats that cannot spend the audited, twelve-an-hour reveal. So the board would be the one door
+ * that hands out a linkability token for free. The payout detail route already drops the key; a
+ * proposal copy of the same paper has to drop it too.
+ *
+ * The row is a copy and the register keeps its bytes — the signature's own sha256 was cut over the
+ * payload including the hash, and nothing here is allowed to change what was signed.
+ */
+function withoutPayeeHash<T>(row: T): T {
+  const r = row as Record<string, any>;
+  const p = r?.payload;
+  if (!p || typeof p !== "object" || !("payee_ref_hash" in p)) return row;
+  const { payee_ref_hash: _dropped, ...payload } = p;
+  return { ...r, payload } as T;
+}
+
 export async function board(query: any) {
   const q = z.object({
     status: z.enum(STATUSES).optional(),
@@ -441,7 +555,8 @@ export async function board(query: any) {
   }).parse(query ?? {});
   const r = await run(pool, BOARD_SQL,
     [q.status ?? null, q.action ?? null, q.q || null, q.limit, q.offset]);
-  return (r.b ?? { rows: [], counts: {} }) as Record<string, unknown>;
+  const b = (r.b ?? { rows: [], counts: {} }) as Record<string, any>;
+  return { ...b, rows: (b.rows ?? []).map(withoutPayeeHash) };
 }
 
 export async function detail(id: string) {
@@ -449,5 +564,5 @@ export async function detail(id: string) {
   if (!r.d || r.d.status === "not_found") {
     throw new ApiError("NOT_FOUND", `No approval ${id}.`, 404);
   }
-  return r.d as Record<string, unknown>;
+  return withoutPayeeHash(r.d as Record<string, unknown>);
 }

@@ -15,7 +15,17 @@ interface ApprovalRow {
     request_id?: string; ref?: string; ticket_ref?: string; amount?: string;
     currency?: string; pay_back?: string; company_name?: string; reason?: string;
     kind?: string; register_tenant_id?: string; company_tenant_id?: string;
-    closed_at?: string; categories?: string[] };
+    closed_at?: string; categories?: string[];
+    // 134's papers. Every figure arrives as the text the proposer's own function printed, so a
+    // signature can disagree with its paper only by the paper's own digits, not by jsonb rounding.
+    hold_id?: string; payout_id?: string; batch_id?: string; subject_kind?: string;
+    subject_ref?: string; discharge_kind?: string; to_payee?: string; back_to_payer?: string;
+    fee_amount?: string; payer_holder?: string; payee_holder?: string; plan_note?: string;
+    payee?: string; payee_kind?: string; rail?: string; rail_code?: string; rail_family?: string;
+    payee_ref_tail?: string; total_out?: string; source_kind?: string; source_ref?: string;
+    purpose?: string; raised_by_name?: string; label?: string; lines?: number;
+    fee_total?: string; total_amount?: string;
+    pays?: { ref?: string; payee?: string; amount?: string; fee?: string; rail?: string }[] };
   payload_sha256: string;
   proposed_name: string | null; proposed_role: string | null; proposed_at: string;
   decided_name: string | null; decided_role: string | null;
@@ -24,7 +34,10 @@ interface ApprovalRow {
   result: { action_id?: string; new_status?: string; sessions_revoked?: number | null;
     request_id?: string; ref?: string; amount?: string; currency?: string;
     pay_back?: string; request_status?: string;
-    reached?: Record<string, number>; kept?: { key: string; label: string; rows: number }[] } | null;
+    reached?: Record<string, number>; kept?: { key: string; label: string; rows: number }[];
+    target_kind?: string; payout_id?: string; batch_id?: string; hold_id?: string;
+    payee?: string; fee_amount?: string; lines?: number; accrued?: number; posting?: string;
+    discharge_kind?: string; to_payee?: string; back_to_payer?: string; subject_ref?: string } | null;
   expires_at: string;
 }
 interface Counts {
@@ -65,9 +78,30 @@ interface SpentErasure {
   approval_id: string; payload_sha256?: string;
 }
 
+/**
+ * The answer to a spent money signature. A payout that has been accrued is not a payout that has
+ * been paid — 134 books the obligation on this signature and answers the cash later, on the day it
+ * actually goes, through its own door — so this panel's whole job is to say which of the two
+ * happened. A batch answers with one posting per line, keyed by the line's own ref, and a single
+ * payout or a discharge with one movement.
+ */
+interface SpentMoney {
+  approval_id: string; ref?: string; target_kind?: string;
+  payout_id?: string; batch_id?: string; hold_id?: string;
+  payee?: string; payee_id?: string; amount?: string; fee_amount?: string; currency?: string;
+  source_kind?: string; source_id?: string;
+  label?: string; total_amount?: string; lines?: number; accrued?: number;
+  postings?: Record<string, string>;
+  subject_kind?: string; subject_ref?: string; discharge_kind?: string;
+  to_payee?: string; back_to_payer?: string; payee_wallet_id?: string;
+  posting?: { ref?: string; id?: string };
+  raised_by?: string; released_by?: string; discharged_by?: string;
+}
+
 const ACTIONS: [string, string][] = [
   ["", "Any act"], ["tenant.block", "A proposed block"], ["tenant.close", "A proposed close"],
-  ["service.refund", "A proposed refund"], ["customer.erase", "A proposed erasure"]
+  ["service.refund", "A proposed refund"], ["customer.erase", "A proposed erasure"],
+  ["money.payout", "A proposed payout"], ["money.escrow", "A proposed escrow plan"]
 ];
 const TABS: [string, string][] = [
   ["pending", "Waiting"], ["applied", "Done"], ["rejected", "Refused"],
@@ -82,18 +116,77 @@ const reasonLabel = (k?: string) => ({
 const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
 const seat = (name: string | null, role: string | null) =>
   name ? `${name}${role ? ` (${role})` : ""}` : (role ?? "a platform seat");
+/** A figure as the office writes it. Money payloads carry text, not jsonb numbers. */
+const fig = (v?: string | number | null) =>
+  v === undefined || v === null || v === "" ? "—" : new Intl.NumberFormat("en-GB").format(Number(v));
 const isRefund = (r: ApprovalRow) => r.action === "service.refund";
 /** An erasure is a third act on the same board: it names no company state and no figure, but a
  *  list of categories the mask will blank out. Its target is a `data_request`, so the board's
  *  `target_name` is the uuid behind the paper — and nobody signs a uuid. */
 const isErase = (r: ApprovalRow) => r.action === "customer.erase";
+/**
+ * 134's two signatures ride this same register: a payout is accrued by a released signature and a
+ * hold is discharged by one. Both are raised by the money doors themselves, which read the payee,
+ * the rail, the figure, the fee and the payee line's hash out of the paper and hash what they read —
+ * so the row's payload is the paper, and the sentence below is what a second seat is signing.
+ */
+const isMoney = (r: ApprovalRow) => r.action === "money.payout" || r.action === "money.escrow";
+const isHold = (r: ApprovalRow) => r.action === "money.escrow";
+/** A batch is one signature over many papers, so it says how many before it says anything else. */
+const isBatch = (r: ApprovalRow) => r.action === "money.payout" && r.target_kind === "payout_batch";
+const isPayout = (r: ApprovalRow) => r.action === "money.payout" && !isBatch(r);
 /** What the row is about, said the way a seat can act on it. A refund paper's target_name is
  *  the uuid behind the request, and no one signs a uuid — the armed tap and the export both
  *  have to carry the ref the caller was quoted. */
 const subject = (r: ApprovalRow) =>
-  isRefund(r) || isErase(r) ? r.payload?.ref ?? r.target_name : r.target_name;
+  isRefund(r) || isErase(r) || isMoney(r) ? r.payload?.ref ?? r.target_name : r.target_name;
 /** The rows on the board whose subject is a paper rather than a company. */
-const isPaper = (r: ApprovalRow) => isRefund(r) || isErase(r);
+const isPaper = (r: ApprovalRow) => isRefund(r) || isErase(r) || isMoney(r);
+/** The words that follow a paper's ref on the row's first line. A refund or an erasure is about the
+ *  caller's company; a payout is about who it pays and how the money travels; a batch is about how
+ *  many papers one signature covers; a hold is about whose wallet the money is waiting on. */
+const about = (r: ApprovalRow) =>
+  isHold(r) ? `${r.payload?.payee_holder ?? "a waiting payee"} · held against `
+    + `${r.payload?.subject_kind ?? "a job"}`
+    : isBatch(r) ? `${r.payload?.lines ?? "?"} line(s) · ${r.payload?.label ?? "a batch"}`
+      : isPayout(r) ? `${r.payload?.payee ?? "a payee"} · `
+        + `${r.payload?.rail ?? r.payload?.rail_code ?? "a rail"}`
+        : r.payload?.company_name ?? "a caller";
+
+/**
+ * What the money signature actually buys, read off the hashed payload rather than typed into this
+ * page. The three figures of a plan add up to the money parked — that is the CHECK on the paper and
+ * the comparison the discharge door replays — and a payout sentence is an accrual, never a payment.
+ */
+function moneyWords(r: ApprovalRow): string {
+  const p = r.payload ?? {};
+  if (isHold(r)) {
+    return `The plan ${p.discharge_kind === "refunded" ? "puts the money back on the payer"
+      : p.discharge_kind === "split" ? "splits the money"
+        : "releases the money to the payee"}: ${fig(p.to_payee)} to `
+      + `${p.payee_holder ?? "the payee's wallet"}, ${fig(p.back_to_payer)} back to `
+      + `${p.payer_holder ?? "the payer"}, ${fig(p.fee_amount)} kept by the office — out of `
+      + `${fig(p.amount)} ${p.currency ?? ""} held against ${p.subject_kind ?? "a job"}`
+      + `${p.subject_ref ? ` ${p.subject_ref}` : ""}. The three figures add up to the money parked, `
+      + "and the door re-reads them, the wallets and the plan before it cuts a leg.";
+  }
+  if (isBatch(r)) {
+    const pays = (p.pays ?? []).map(x =>
+      `${x.ref ?? "a line"} ${x.payee ?? "—"} ${fig(x.amount)}${x.fee && x.fee !== "0.00" ? ` + ${fig(x.fee)} fee` : ""}`)
+      .join(" · ");
+    return `One signature accrues ${p.lines ?? "?"} line(s) under “${p.label ?? "this batch"}” `
+      + `totalling ${fig(p.total_amount)} ${p.currency ?? ""}, with ${fig(p.fee_total)} of fees on top`
+      + `${pays ? `: ${pays}` : ""}. The batch is stamped released before its lines, because each `
+      + "line's own guard asks the batch what state its signature is in.";
+  }
+  return `Accrues ${fig(p.amount)} ${p.currency ?? ""} to ${p.payee ?? "a payee"}`
+    + ` (${p.payee_kind ?? "a holder"}) on ${p.rail ?? p.rail_code ?? "a rail"}`
+    + `${p.payee_ref_tail ? `, account ending ${p.payee_ref_tail}` : ""} — the office keeps `
+    + `${fig(p.fee_amount)} of fee, so ${fig(p.total_out)} leaves its fund in total`
+    + `${p.source_kind ? `, standing on ${p.source_kind}${p.source_ref ? ` ${p.source_ref}` : ""}` : ""}.`
+    + " This is the obligation being booked, not the cash being sent: the day it goes, a seat"
+    + " answers it on the ledger desk and the book takes its second movement.";
+}
 
 /** The list a signature is spent against, read off the payload the proposer's own function hashed. */
 const categoryList = (c?: string[]) =>
@@ -113,8 +206,71 @@ function erasureWords(e: { reached?: Record<string, number> | null;
     + "register holds that an erasure cannot reach";
 }
 
-/** Left as it was, or already shut? The badge has to answer without reading the sentence. */
-function statusTone(s: string) {
+/** What a spent money signature left behind, read off the result the register wrote in the same
+ *  transaction that spent it. A payout accrual is not a payment and a discharge is only as good as
+ *  the plan it replayed, so the line has to name the movement and keep saying which of the two it is.
+ *  A batch has one movement per line, so it counts them instead of quoting a ref. */
+function appliedMoneyWords(r: ApprovalRow): string {
+  const e = r.result ?? {};
+  const ref = e.ref ?? r.payload?.ref ?? "the paper";
+  if (isHold(r)) {
+    return `${ref} discharged as ${e.discharge_kind ?? "the plan named"} — ${fig(e.to_payee)} to the `
+      + `payee, ${fig(e.back_to_payer)} back to the payer, ${fig(e.fee_amount)} kept by the office`
+      + `${e.posting ? `, movement ${e.posting}` : ""}`;
+  }
+  return `${ref} accrued${e.amount ? ` · ${fig(e.amount)} ${e.currency ?? ""}` : ""}`
+    + (isBatch(r) ? ` · ${e.accrued ?? 0} of ${e.lines ?? "?"} line(s) booked` : "")
+    + " — the obligation is in the book, and the cash is answered on the ledger desk the day it goes"
+    + `${e.posting ? `, movement ${e.posting}` : ""}`;
+}
+
+/**
+ * What the desk is told the moment its money signature is spent. The receipt names the movement the
+ * book cut, and a payout panel has to keep saying that an accrual is not a payment: 134 books the
+ * obligation here and answers the cash in a second posting on the day it goes, and a desk that reads
+ * this line as "paid" is the desk that pays the same paper twice.
+ */
+function MoneySpent({ e }: { e: SpentMoney }) {
+  const hold = !!e.hold_id;
+  const batch = !!e.batch_id;
+  const postings = Object.keys(e.postings ?? {}).length;
+  return (
+    <div role="status" className="mb-16 rounded-input px-12 py-8 text-sm"
+      style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)",
+        borderLeft: "4px solid var(--success)", color: "var(--ink)" }}>
+      <p className="text-xs font-semibold uppercase tracking-[0.12em]">
+        {hold ? "Signed and discharged" : "Signed and accrued"} · {e.ref ?? "the paper"} ·{" "}
+        {hold ? (e.discharge_kind ?? "the plan named")
+          : batch ? `${e.accrued ?? 0} of ${e.lines ?? "?"} line(s)` : e.payee ?? "one payee"}
+      </p>
+      <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+        {hold
+          ? <>{fig(e.to_payee)} to the payee, {fig(e.back_to_payer)} back to the payer and{" "}
+            {fig(e.fee_amount)} kept by the office, out of {fig(e.amount)} {e.currency ?? ""} held
+            against {e.subject_kind ?? "a job"}{e.subject_ref ? ` ${e.subject_ref}` : ""}
+            {e.posting?.ref ? ` · movement ${e.posting.ref}` : ""}.</>
+          : <>{fig(e.amount ?? e.total_amount)} {e.currency ?? ""}{" "}
+            {batch ? `across ${e.lines ?? 0} line(s) under “${e.label ?? "this batch"}”`
+              : `owed to ${e.payee ?? "a payee"}`} has been accrued in the book
+            {e.posting?.ref ? ` — movement ${e.posting.ref}`
+              : postings ? ` — ${postings} movements, one per line` : ""}
+            {e.source_kind ? `, standing on ${e.source_kind}` : ""}.</>}
+      </p>
+      <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+        {hold
+          ? <>The money left escrow the moment this signature was spent. Read the paper back on the{" "}
+            <Link href="/control/money" className="underline"
+              style={{ color: "var(--adm-accent)" }}>Escrow holds</Link> panel.</>
+          : <>Nothing has been sent yet: the cash is confirmed on the{" "}
+            <Link href="/control/money" className="underline"
+              style={{ color: "var(--adm-accent)" }}>Payouts</Link> panel on the day it goes, and the
+            book takes its second movement then. No payee is emailed about a signature.</>}
+      </p>
+    </div>
+  );
+}
+
+/** Left as it was, or already shut? The badge has to answer without reading the sentence. */function statusTone(s: string) {
   return s === "pending" ? "var(--warning)"
     : s === "applied" ? "var(--danger)"
     : s === "rejected" ? "var(--ink-soft)"
@@ -139,6 +295,7 @@ export default function ApprovalsPage() {
   const [spent, setSpent] = useState<Applied | null>(null);
   const [spentRefund, setSpentRefund] = useState<SpentRefund | null>(null);
   const [spentErasure, setSpentErasure] = useState<SpentErasure | null>(null);
+  const [spentMoney, setSpentMoney] = useState<SpentMoney | null>(null);
 
   const LIMIT = 30;
 
@@ -182,7 +339,7 @@ export default function ApprovalsPage() {
 
   function openRow(id: string) {
     setSign(sign === id ? null : id); setNote(""); setArmed(null);
-    setSpent(null); setSpentRefund(null); setSpentErasure(null);
+    setSpent(null); setSpentRefund(null); setSpentErasure(null); setSpentMoney(null);
   }
 
   /**
@@ -197,7 +354,7 @@ export default function ApprovalsPage() {
    */
   async function decide(row: ApprovalRow, decision: "approve" | "reject") {
     setBusy(true); setError(null);
-    setSpent(null); setSpentRefund(null); setSpentErasure(null);
+    setSpent(null); setSpentRefund(null); setSpentErasure(null); setSpentMoney(null);
     try {
       const res = await fetch(`${API}/api/v1/control/approvals/${row.id}/${decision}`, {
         method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
@@ -220,6 +377,11 @@ export default function ApprovalsPage() {
       if (decision === "approve") {
         if (row.action === "service.refund") setSpentRefund(j as SpentRefund);
         else if (row.action === "customer.erase") setSpentErasure(j as SpentErasure);
+        // Both of 134's effects answer with their own receipt — a payout names the paper it accrued
+        // and the movement it cut, a discharge replays the three figures the plan promised — and
+        // neither is the ban's shape. Reading one as the other would sign money and show a blank.
+        else if (row.action === "money.payout" || row.action === "money.escrow")
+          setSpentMoney(j as SpentMoney);
         else setSpent(j as Applied);
         setNote("");
       } else {
@@ -288,7 +450,15 @@ export default function ApprovalsPage() {
             className="underline" style={{ color: "var(--adm-accent)" }}>Customers desk</Link>, and signing
           it runs the mask in this same call — the categories on the row below are what the register blanks
           out, and there is no undo and no notice to the caller, because the paper itself is the answer.
-          The seat that raised a proposal cannot sign it, and a proposal nobody signs lapses after a week.
+          Two money papers arrive from the <Link href="/control/money"
+            className="underline" style={{ color: "var(--adm-accent)" }}>ledger desk</Link>: a payout and a
+          plan for a hold. Signing a payout <span className="font-semibold"
+            style={{ color: "var(--ink)" }}>accrues the obligation</span> into the double-entry book and
+          sends nothing — the cash is confirmed by its own door on the day it goes, and the book takes its
+          second movement then — while signing a plan moves the money out of escrow in this same call. The
+          figures, the rail and the payee are read out of the paper the proposing door wrote and hashed,
+          and this page shows the last digits of a payee&apos;s account number, never the whole of it. The
+          seat that raised a proposal cannot sign it, and a proposal nobody signs lapses after a week.
         </p>
 
         {counts && (
@@ -362,6 +532,8 @@ export default function ApprovalsPage() {
           </div>
         )}
 
+        {spentMoney && <MoneySpent e={spentMoney} />}
+
         <div className="mb-16 flex flex-wrap items-center gap-8">
           {TABS.map(([v, l]) => (
             <button key={v} type="button" onClick={() => { setOffset(0); setStatus(v); setSign(null); }}
@@ -413,9 +585,12 @@ export default function ApprovalsPage() {
                 ? <>A ban raised on the <Link href="/control/tenants" className="underline"
                   style={{ color: "var(--adm-accent)" }}>Tenants</Link> desk, a refund raised on the{" "}
                   <Link href="/control/service" className="underline"
-                    style={{ color: "var(--adm-accent)" }}>Service</Link> desk and an erasure raised on the{" "}
+                    style={{ color: "var(--adm-accent)" }}>Service</Link> desk, an erasure raised on the{" "}
                   <Link href="/control/customers" className="underline"
-                    style={{ color: "var(--adm-accent)" }}>Customers</Link> desk all appear here the moment
+                    style={{ color: "var(--adm-accent)" }}>Customers</Link> desk and a payout or an escrow
+                  plan raised on the{" "}
+                  <Link href="/control/money" className="underline"
+                    style={{ color: "var(--adm-accent)" }}>ledger desk</Link> all appear here the moment
                   they are proposed, and stay until a second seat signs them or a week passes.</>
                 : "Try Everything, or widen the search."}
             </p>
@@ -431,9 +606,8 @@ export default function ApprovalsPage() {
           // it names a list of categories and blanks them, and no one is told it happened.
           const refund = isRefund(r);
           const erase = isErase(r);
-          const figure = r.payload?.amount
-            ? `${new Intl.NumberFormat("en-GB").format(Number(r.payload.amount))} ${r.payload.currency ?? ""}`
-            : null;
+          const money = isMoney(r);
+          const figure = r.payload?.amount ? `${fig(r.payload.amount)} ${r.payload.currency ?? ""}` : null;
           const lapsedAt = new Date(r.expires_at).getTime() - Date.now();
           return (
             <section key={r.id} className="mb-16 rounded-card border p-16"
@@ -450,7 +624,7 @@ export default function ApprovalsPage() {
                   </h2>
                   <p className="mt-8 break-words text-sm font-semibold" style={{ color: "var(--ink)" }}>
                     {isPaper(r) && r.payload?.ref
-                      ? `${r.payload.ref} · ${r.payload.company_name ?? "a caller"}`
+                      ? `${r.payload.ref} · ${about(r)}`
                       : r.target_name}
                   </p>
                   <p className="mt-4 text-[10px] uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
@@ -491,7 +665,12 @@ export default function ApprovalsPage() {
                   company's own register carries the receipt. A refund paper is never sent
                   anywhere: the paper is the record, and the money is paid from it. */}
               <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
-                {erase
+                {money
+                  ? <>{moneyWords(r)} Read the paper back on the{" "}
+                    <Link href="/control/money" className="underline"
+                      style={{ color: "var(--adm-accent)" }}>ledger desk</Link> — nothing is messaged or
+                    emailed to a payee about a signature, so the register row is the answer here too.</>
+                  : erase
                   ? <>Nothing is posted, messaged or emailed about this act: the paper on the{" "}
                     <Link href="/control/customers" className="underline"
                       style={{ color: "var(--adm-accent)" }}>Customers register</Link> is the answer the
@@ -515,9 +694,14 @@ export default function ApprovalsPage() {
                         ? `The company would be told: ${r.payload?.note || "—"}`
                         : `Never sent. The note would have read: ${r.payload?.note || "—"}`}
               </p>
-              {!isPaper(r) && (
+              {/* The reason code is the ban's vocabulary, and 134's hold reuses it for a different
+                  question — why the money was stopped rather than why a company is being shut — so
+                  the line says which of the two it is answering. A payout paper carries no code at
+                  all, and "For —" is not a reason a seat can sign against. */}
+              {r.payload?.reason_code && (!isPaper(r) || isHold(r)) && (
                 <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
-                  For {reasonLabel(r.payload?.reason_code)}
+                  {isHold(r) ? "The money was stopped for " : "For "}
+                  {reasonLabel(r.payload.reason_code)}
                 </p>
               )}
               <p className="mt-8 break-all font-mono text-[10px]" style={{ color: "var(--ink-soft)" }}>
@@ -536,20 +720,26 @@ export default function ApprovalsPage() {
                   Applied {when(r.applied_at)}
                   {r.result?.new_status ? ` · company is now ${r.result.new_status}` : ""}
                   {r.result?.sessions_revoked ? ` · ${r.result.sessions_revoked} sessions revoked` : ""}
-                  {r.result?.request_status && erase
-                    ? ` · ${r.result.ref ?? "the paper"} is now ${r.result.request_status} — `
-                      + erasureWords({ reached: r.result.reached, kept: r.result.kept })
-                    : r.result?.request_status
-                      ? ` · paper ${r.result.ref ?? r.result.request_id} is now ${r.result.request_status}`
-                        + ` — the office has agreed to pay it, not paid it`
-                      : ""}
+                  {money ? ` · ${appliedMoneyWords(r)}`
+                    : r.result?.request_status && erase
+                      ? ` · ${r.result.ref ?? "the paper"} is now ${r.result.request_status} — `
+                        + erasureWords({ reached: r.result.reached, kept: r.result.kept })
+                      : r.result?.request_status
+                        ? ` · paper ${r.result.ref ?? r.result.request_id} is now ${r.result.request_status}`
+                          + ` — the office has agreed to pay it, not paid it`
+                        : ""}
                 </p>
               )}
 
               {waiting && canDecide === false && (
                 <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
                   Your seat can read this register but not sign it. Ask a platform seat that can sign a
-                  ban — the same duty signs a refund or an erasure.
+                  ban — the same duty signs a refund, an erasure or a money paper. A payout needs{" "}
+                  <span className="font-semibold" style={{ color: "var(--ink)" }}>
+                    control.money.pay</span> and a plan for a hold needs{" "}
+                  <span className="font-semibold" style={{ color: "var(--ink)" }}>
+                    control.money.escrow</span>, and the seat that raised one of those papers cannot
+                  sign it.
                 </p>
               )}
 
@@ -570,8 +760,10 @@ export default function ApprovalsPage() {
                   style={{ borderColor: "var(--adm-accent)", color: "var(--ink)" }}>
                   {refund ? "Sign or refuse this refund"
                     : erase ? "Sign or refuse this erasure"
-                      : r.action === "tenant.close" ? "Sign or refuse this close"
-                        : "Sign or refuse this block"}
+                      : isHold(r) ? "Sign or refuse this plan"
+                        : money ? "Sign or refuse this payout"
+                          : r.action === "tenant.close" ? "Sign or refuse this close"
+                            : "Sign or refuse this block"}
                 </button>
               )}
 
@@ -600,10 +792,13 @@ export default function ApprovalsPage() {
                         : { borderColor: "var(--danger)", color: "var(--ink)" }}>
                       {armed === `sign-${r.id}`
                         ? `Tap again to ${refund ? "release" : erase ? "mask"
-                          : r.action === "tenant.close" ? "close" : "block"} ${subject(r)}`
+                          : isHold(r) ? "discharge" : money ? "accrue"
+                            : r.action === "tenant.close" ? "close" : "block"} ${subject(r)}`
                         : `Sign and ${refund ? "release the paper"
                           : erase ? "run the mask, which cannot be undone"
-                            : r.action === "tenant.close" ? "close the account" : "block access"}`}
+                            : isHold(r) ? "move the money out of escrow"
+                              : money ? "accrue the obligation, not pay it"
+                                : r.action === "tenant.close" ? "close the account" : "block access"}`}
                     </button>
                     <button type="button" disabled={busy || note.trim().length < 4}
                       onClick={() => decide(r, "reject")}
