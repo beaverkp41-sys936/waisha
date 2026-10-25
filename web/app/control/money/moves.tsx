@@ -38,7 +38,7 @@ export interface Desk {
   mint: () => string;
   notify: (s: string) => void;
   fault: (s: string) => void;
-  can: { pay: boolean; escrow: boolean; reveal: boolean };
+  can: { pay: boolean; escrow: boolean; reveal: boolean; recon: boolean };
   go: (t: MovesTab) => void;
 }
 

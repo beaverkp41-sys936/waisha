@@ -94,6 +94,10 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       "control.departments.view", "control.departments.manage",
       "control.tickets.view", "control.tickets.manage",
       "control.gateway.view", "control.gateway.manage",
+      // The retry of a delivery a rail pushed and the office never acted on (135). Deliberately not
+      // `manage`: a support seat closes a charge the rail already answered for while waiting on that
+      // rail, and must not thereby be able to switch the gateway off for every company on the platform.
+      "control.gateway.retry",
       // The two-person register. Reading it and signing it are separate duties: a seat
       // that can see a ban waiting but cannot sign it is the second opinion the rule asks
       // for, and 121 seeded `decide` only onto the roles that can already manage tenants.
@@ -121,8 +125,11 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       // The money that waits and the money that leaves (134). `pay` opens and funds a wallet and
       // raises a payout; `escrow` holds a payment and plans its discharge, both of which end on a
       // second seat's signature; `reveal` unseals one payee line and is audited every time it is used.
+      // The count (135). `recon` raises a run, reads its findings and signs another seat's paper, and
+      // is not `post` — a reconciliation a seat can order because it can move money is a report that
+      // cannot catch that seat. A statement of one line is a read of the book, so it stays on `view`.
       "control.money.view", "control.money.post", "control.money.freeze",
-      "control.money.pay", "control.money.escrow", "control.money.reveal"];
+      "control.money.pay", "control.money.escrow", "control.money.reveal", "control.money.recon"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });
 

@@ -1,8 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
 import { ControlNav } from "@/components/ControlNav";
+import { WebhookLog } from "./webhooks";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
+/** 135's key. Held by the seats that settle charges, deliberately not by 114's manage duty — so
+ *  the desk can hand a support seat the re-drive button without handing them the rail switch. */
+const RETRY = "control.gateway.retry";
 
 interface Rail {
   providerKey: string;
@@ -35,6 +39,12 @@ type Draft = Partial<Record<"label" | "baseUrl" | "environment" | "clientId" | "
  * Credentials are write-only. The desk shows `credentialHint` — six characters of the app id, or
  * the last four of a secret — and never the stored value, because the register keeps them sealed
  * and the reader that feeds this list was written without the credential columns in it.
+ *
+ * 135 added the board under the rails: every webhook the platform received, whether its signature
+ * matched, whether the office acted on it, and every time a seat has since re-driven it. The rails
+ * above and the deliveries below are the same question asked of one rail — is this network working,
+ * and what did it tell us — so they share a screen. The board reads through definer doors and the
+ * register it describes is insert-only: nothing on this page can rewrite a rail&rsquo;s message.
  */
 export default function ControlGatewayPage() {
   const [rails, setRails] = useState<Rail[]>([]);
@@ -45,10 +55,16 @@ export default function ControlGatewayPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [canRetry, setCanRetry] = useState(false);
 
   async function load() {
     const me = await fetch(`${API}/api/v1/control/auth/me`, { credentials: "include" });
     if (!me.ok) { window.location.href = "/control/login"; return; }
+    // The delivery log below is gated on a duty this register read does not answer for, so the
+    // seat's keys are asked for separately — and a probe that fails is not treated as "no duty",
+    // it just leaves the button unoffered, which is the same shape as a seat that lacks it.
+    const p = await fetch(`${API}/api/v1/control/auth/permissions`, { credentials: "include" });
+    if (p.ok) setCanRetry(((await p.json().catch(() => ({}))).permissions ?? []).includes(RETRY));
     const res = await fetch(`${API}/api/v1/control/gateway`, { credentials: "include" });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) { setError(j?.error?.message ?? "Could not read the gateway register"); setReady(true); return; }
@@ -118,6 +134,11 @@ export default function ControlGatewayPage() {
   }
 
   const live = rails.find(r => r.enabled) ?? null;
+  // A re-drive speaks in this desk's own voice, not in a panel of its own: the answer names the
+  // attempt number the ledger filed and what the idempotent completion said back, which is the two
+  // facts a seat needs before pressing again.
+  const notify = (s: string) => { setError(null); setNotice(s); setTimeout(() => setNotice(null), 9000); };
+  const fault = (s: string) => { setNotice(null); setError(s); };
   const cell = "w-full rounded-input border px-8 py-8 text-sm";
   const cellStyle = { borderColor: "var(--adm-line)", background: "var(--milk)" };
   const labelCls = "mb-4 block text-[11px] font-semibold uppercase tracking-[0.14em]";
@@ -328,11 +349,25 @@ export default function ControlGatewayPage() {
           );
         })}
 
-        <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
+        <p className="mt-8 mb-24 text-xs" style={{ color: "var(--ink-soft)" }}>
           A rail whose badge says &ldquo;adapter not written yet&rdquo; can hold credentials but cannot
           take money: the code that speaks to that network does not exist yet, and switching it on
           would tell you the payment path is open when it is not. Only AzamPay can be activated today.
         </p>
+
+        {/* The other half of a rail is what it pushes back. Filed here rather than on a page of its
+            own because the first thing a desk does with a stalled charge is look at the row the rail
+            left and the register above it in the same screen. */}
+        <h2 className="mb-8 text-lg font-bold" style={{ color: "var(--ink)" }}>
+          What the rails pushed back
+        </h2>
+        <p className="mb-16 max-w-[88ch] text-xs" style={{ color: "var(--ink-soft)" }}>
+          Every webhook the platform has received since 005 opened the register, with the office&rsquo;s
+          own state beside it. Nothing here can rewrite a delivery — the register is insert-only — and a
+          re-drive asks 009&rsquo;s idempotent completion to close a charge the rail already answered for,
+          so it cannot bill anybody twice.
+        </p>
+        <WebhookLog hooks={{ call, notify, fault, canRetry, retryKey: RETRY }} />
       </main>
     </div>
   );

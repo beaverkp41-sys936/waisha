@@ -36,14 +36,87 @@ import { build, hint, invalidate, loadGatewayByKey, seal } from "../payments/reg
  * waiting for an adapter; switching one on would otherwise leave a desk that says "live" while
  * the API quietly keeps charging nobody. The refusal is this route's answer, not a silent
  * fallback.
+ *
+ * **The other half of a rail is what it pushes back.** 135 added the delivery board below: every
+ * webhook the platform received, whether its signature matched, whether the office acted on it, and
+ * every time a seat has since asked the completion to land. 005's `payment_webhooks` is insert-only
+ * for the API role, so nothing on this desk can rewrite a rail's message — the board reads through
+ * definer doors, and a retry appends to 135's own ledger rather than touching the delivery.
+ *
+ * **A retry is not a second charge.** It re-asks 009's `complete_payment`, which is idempotent and
+ * answers `already_final` for a charge it has already closed, so the ceiling of five attempts per
+ * delivery is about a person's time and a rail's support ticket, not about money. The door files its
+ * own audit row inside its own transaction, which is why the routes below file none: the ledger is the
+ * history, and a second copy of the same act in `audit_logs` is how an office ends up with two answers
+ * about the same webhook.
  */
 
 const VIEW = "control.gateway.view";
 const MANAGE = "control.gateway.manage";
+/** 135's key. Re-driving a delivery spends no money and switches off no rail: it re-asks 009's
+ *  idempotent completion to close a charge the rail already answered for, which is the act a support
+ *  seat does while waiting on a rail — and deliberately not the key that can take a gateway away from
+ *  every company on the platform. */
+const RETRY = "control.gateway.retry";
 
 export const GATEWAY_LIST_SQL = "select * from platform_auth.list_payment_gateways()";
 
 const KEY = z.string().trim().regex(/^[a-z0-9_]{2,32}$/, "Unknown gateway");
+
+/** Params: book, provider|null, state|null, search|null, limit, offset. */
+const WEBHOOK_BOARD_SQL = "select platform_auth.gateway_webhook_board($1,$2,$3,$4,$5,$6) as r";
+/** Params: book, delivery. */
+const WEBHOOK_DETAIL_SQL = "select platform_auth.gateway_webhook_detail($1,$2) as r";
+/** Params: book, delivery, actor, role, ip, ua. */
+const WEBHOOK_RETRY_SQL = "select platform_auth.retry_gateway_webhook($1,$2,$3,$4,$5,$6) as r";
+
+/** The five piles 135's board can be asked for, plus `all`. Gated here because the door answers a word
+ *  it does not know with an empty page, and an empty page of stuck deliveries is a serious thing to
+ *  read when the pile is actually full. */
+const STATE = z.enum(["all", "stuck", "unverified", "landed", "retried", "orphan"]);
+const PAGE = z.coerce.number().int().min(1).max(200).default(60);
+const OFFSET = z.coerce.number().int().min(0).max(20000).default(0);
+const SEARCH = z.string().trim().min(1).max(140).optional();
+
+const uaOf = (req: any) => String(req.headers?.["user-agent"] ?? "").slice(0, 300) || null;
+const roleOf = (req: any) => (req.control?.roles ?? [])[0] ?? null;
+
+const readDoor = async (sql: string, params: unknown[]) =>
+  (await pool.query(sql, params as any[])).rows[0]?.r;
+
+/**
+ * 135's reads answer `{rows: [], error: '…'}` instead of raising, so an empty board can be a filter
+ *  that found nothing or a sentence about the session. The door's own words go out unedited; only the
+ *  status is this desk's guess, and it has two branches because the delivery is a row the seat quoted
+ *  and a uuid nobody can act on when it is wrong.
+ */
+function readRefusal(j: any): ApiError | null {
+  if (!j || typeof j !== "object" || typeof j.error !== "string" || !j.error.trim()) return null;
+  if (/not that (book|desk)/i.test(j.error)) return new ApiError("FORBIDDEN", j.error, 403);
+  return new ApiError("NOT_FOUND", j.error, 404);
+}
+
+/**
+ * `retry_gateway_webhook` answers `{ok:false, error, message}` and writes a ledger row before it
+ * answers for two of those words — an unverified delivery and a payload that names no charge are
+ * exactly the button-presses 135's ledger exists to count. Both are 409s: the fact that stopped the
+ * press belongs to the delivery, which the seat could only learn by pressing.
+ */
+const RETRY_REFUSALS: Record<string, [string, number]> = {
+  not_the_office: ["FORBIDDEN", 403],
+  not_found: ["NOT_FOUND", 404],
+  attempts_spent: ["CONFLICT", 409],
+  not_verified: ["CONFLICT", 409],
+  no_reference: ["CONFLICT", 409]
+};
+
+function retryRefusal(j: any, fallback: string): ApiError | null {
+  if (!j || typeof j !== "object" || j.ok !== false) return null;
+  const words = typeof j.message === "string" && j.message.trim() ? j.message : fallback;
+  const reason = String(j.error ?? "");
+  const [code, status] = RETRY_REFUSALS[reason] ?? ["VALIDATION_FAILED", 400];
+  return new ApiError(code, words, status, [{ reason: reason || null, attempt: j.attempt ?? null }]);
+}
 
 /** The desk's answer when trying a rail threw. An ApiError is already plain English written by
  *  the registry ("no adapter", "not configured"); a network failure is a fetch error, and a
@@ -267,5 +340,81 @@ export async function controlGatewayRoutes(app: FastifyInstance, _opts: unknown)
       after: { provider_key: key, credentials_removed: true, disabled: true }
     }));
     return { status: "ok", providerKey: key };
+  });
+
+  // ============================
+  // THE DELIVERY BOARD — what the rails pushed, whether it landed, and who has asked twice
+  // ============================
+
+  /**
+   * Every webhook the platform has received, newest first, with the office's own state beside each:
+   * whether the signature matched, whether the completion landed, how many times a seat has re-driven
+   * it, and which charge it names.
+   *
+   * The heading counts the piles the `state` chips offer, under the same search the rows are filtered
+   * by, so a desk that says "3 stuck" and shows one row cannot happen — the number and the page are
+   * the door's own two answers to one set of predicates. The pile that has no other way of being seen
+   * is `stuck`: a verified delivery the office never acted on, in a register 005 made insert-only.
+   */
+  app.get("/control/gateway/webhooks", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, VIEW);
+    await enforceRateLimit(`gateway:webhooks:${req.control.user_id}`, 240, 60);
+    const q = z.object({
+      provider: KEY.optional(),
+      state: STATE.default("all"),
+      search: SEARCH,
+      limit: PAGE,
+      offset: OFFSET
+    }).strict().parse(req.query);
+    const j = await readDoor(WEBHOOK_BOARD_SQL, [req.control.tenant_id, q.provider ?? null,
+      q.state === "all" ? null : q.state, q.search ?? null, q.limit, q.offset]);
+    const miss = readRefusal(j);
+    if (miss) throw miss;
+    return j;
+  });
+
+  /**
+   * One delivery whole: the scrubbed payload and the keys it came with, the charge it names, the
+   * rail's own row from the register above, every attempt filed against it, and `can_retry` with the
+   * sentence of why not.
+   *
+   * `can_retry` is the door's answer rather than this route's, because the four tests behind it — a
+   * signature that matched, a charge still open, a reference present, five attempts unspent — are the
+   * ones the retry will re-run. A desk that decided them itself would be a second opinion the door is
+   * free to disagree with.
+   */
+  app.get("/control/gateway/webhooks/:id", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, VIEW);
+    await enforceRateLimit(`gateway:webhook-detail:${req.control.user_id}`, 240, 60);
+    const id = z.string().uuid().parse((req.params as { id: string }).id);
+    const j = await readDoor(WEBHOOK_DETAIL_SQL, [req.control.tenant_id, id]);
+    const miss = readRefusal(j);
+    if (miss) throw miss;
+    return j;
+  });
+
+  /**
+   * Ask the completion to land again.
+   *
+   * Nothing is sent to a rail here: this calls the same 009 door the webhook route called the first
+   * time, and the ledger row says what it answered. So a green light on the register's `test` button
+   * is not needed for this to work, and a rail that is switched off can still have its delivery
+   * finished — the message already arrived, and the office is only catching up with it.
+   *
+   * The ceiling is the door's, the audit row is the door's, and an attempt that refused is filed as
+   * faithfully as one that worked, which is the difference between a retry desk and a button.
+   */
+  app.post("/control/gateway/webhooks/:id/retry", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, RETRY);
+    await enforceRateLimit(`gateway:webhook-retry:${req.control.user_id}`, 20, 3600);
+    const id = z.string().uuid().parse((req.params as { id: string }).id);
+    const j = await readDoor(WEBHOOK_RETRY_SQL, [req.control.tenant_id, id,
+      req.control.user_id, roleOf(req), req.ip, uaOf(req)]);
+    const miss = retryRefusal(j, "The delivery could not be re-driven.");
+    if (miss) throw miss;
+    return {
+      status: "attempted", attempt: j.attempt, outcome: j.outcome, message: j.message,
+      answer: j.answer, delivery: j.delivery
+    };
   });
 }

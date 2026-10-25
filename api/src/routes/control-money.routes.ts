@@ -7,6 +7,9 @@ import { enforceRateLimit } from "../security/ratelimit.js";
 import { writeAudit } from "../audit/audit.js";
 import { requireControl } from "./control.routes.js";
 import { requireControlPermission } from "./control-analytics.routes.js";
+import { buildPdf } from "../export/pdf.js";
+import { buildXlsx } from "../export/xlsx.js";
+import { fileName, money as moneyText, type PreparedTable } from "../export/table.js";
 
 /**
  * The office's book (133; task #344) — the chart, the movements, and the three hands that can touch
@@ -39,11 +42,31 @@ import { requireControlPermission } from "./control-analytics.routes.js";
  * Reading the book and writing in it are separate duties, and freezing an account is a third, charged
  * to the seat that settles disputes rather than to whoever holds a pen — which is why a finance
  * officer can post and cannot stop, and a compliance officer can stop and cannot post.
+ *
+ * **The count is a fourth duty, and it is not a pen.** 135 raised `control.money.recon` for the seats
+ * that check the book against the papers, because a reconciliation a seat can raise merely because it
+ * can post is a report that cannot catch that seat. The three writes below — raise, sign, throw away —
+ * and the two reads of a run all ask that key; a statement, which is only a read of the book, stays on
+ * `control.money.view` so an office can hand its own accountant a line of the ledger.
+ *
+ * **These two sections write no audit rows, with one exception.** 135's doors each call
+ * `platform_auth.money_audit(...)` inside their own transaction, so a route that filed a second row
+ * would give the office's history two answers to the same act — and the door's row carries the
+ * figures it actually used, which a route could only guess at. The exception is a printed statement:
+ * it is the route that read the book and built the file, so the route is the only thing that can say
+ * who held the paper and when.
+ *
+ * **A statement file is built here, not posted from the desk.** `/exports/table` takes the rows a
+ * browser already has, which is the right contract for a screen's own register and the wrong one for
+ * a statement: the figure a clerk is handed by an office must be the figure the book holds, so the
+ * walk below asks `money_statement` for every page of the window and prints what the door answered,
+ * including the opening and closing balances no page of the register shows.
  */
 
 const VIEW = "control.money.view";
 const POST = "control.money.post";
 const FREEZE = "control.money.freeze";
+const RECON = "control.money.recon";
 
 /** 133's thirteen kinds, spelled as the row spells them. `manual` and `adjustment` are the office's
  *  own pen; the rest name the registers that settle into this book in the stages after 133. */
@@ -53,6 +76,11 @@ const sourceKind = z.enum([
 /** 126's pair, unchanged. A movement that changes money is two movements and an exchange line. */
 const currency = z.enum(["TZS", "USD"]);
 const direction = z.enum(["debit", "credit"]);
+
+/** 135's seven scopes, spelled as the run row spells them. The board filters against the same list,
+ *  because a door that is handed a word it does not know answers an empty page, and an empty page of
+ *  counts reads as a quiet month rather than as a typo. */
+const SCOPE = z.enum(["book", "wallet", "escrow", "payout", "refund", "gateway", "all"]);
 
 const KINDS = ["asset", "liability", "equity", "income", "expense"] as const;
 
@@ -97,6 +125,19 @@ const POST_SQL = `select platform_auth.record_money_posting(
 const REVERSE_SQL = "select platform_auth.reverse_money_posting($1,$2,$3,$4) as r";
 /** Params: book, account, reason, actor, frozen. */
 const FREEZE_SQL = "select platform_auth.freeze_money_account($1,$2,$3,$4,$5) as r";
+
+/** Params: book, scope|null, status|null, currency|null, search|null, limit, offset. */
+const RECON_BOARD_SQL = "select platform_auth.money_recon_board($1,$2,$3,$4,$5,$6,$7) as r";
+/** Params: book, run. */
+const RECON_DETAIL_SQL = "select platform_auth.money_recon_detail($1,$2) as r";
+/** Params: book, scope, currency, from, to, actor, role, ip, ua. */
+const RECON_RUN_SQL = `select platform_auth.run_money_reconciliation($1,$2,$3,$4,$5,$6,$7,$8,$9) as r`;
+/** Params: book, run, note, actor, role, ip, ua. */
+const RECON_SIGN_SQL = "select platform_auth.sign_money_reconciliation_run($1,$2,$3,$4,$5,$6,$7) as r";
+/** Params: book, run, reason, actor, role, ip, ua. */
+const RECON_DISCARD_SQL = "select platform_auth.delete_money_reconciliation_run($1,$2,$3,$4,$5,$6,$7) as r";
+/** Params: book, account, from, to, limit, offset. */
+const STATEMENT_SQL = "select platform_auth.money_statement($1,$2,$3,$4,$5,$6) as r";
 
 const tenantOf = (req: any) => String(req.control.tenant_id);
 const role = (req: any) => (req.control?.roles ?? [])[0] ?? null;
@@ -207,6 +248,56 @@ async function write<T extends Record<string, any>>(req: any, fallback: string,
 const ask = async (c: PoolClient, sql: string, params: unknown[]) =>
   (await c.query(sql, params)).rows[0]?.r;
 
+/** One definer call, one answer. A door that needs no audit row of its own — because it writes the
+ *  audit row itself, inside its transaction — does not need a client to be held open for it. */
+const read = async (sql: string, params: unknown[]) =>
+  (await pool.query(sql, params as any[])).rows[0]?.r;
+
+/**
+ * 135's three count doors answer `{ok:false, error:'…', message:'…'}` and the message is already the
+ *  sentence a clerk can act on — it names the run, the seat that raised it, the day it was signed and
+ *  the number of attempts spent. So nothing here paraphrases it. The table below only decides which
+ *  HTTP status the desk hears it under, and the `error` word travels in `details` so the web can
+ *  branch on the fact rather than on the prose.
+ *
+ * Anything unrecognised is a 400 about the form rather than a 502: every branch of these doors that
+ *  answers `ok:false` writes a message first, so a new word is a new refusal somebody typed, not a
+ *  failure of the server.
+ */
+const COUNT_REFUSALS: Record<string, [string, number]> = {
+  not_the_office: ["FORBIDDEN", 403],
+  not_found: ["NOT_FOUND", 404],
+  already_signed: ["CONFLICT", 409],
+  signed_and_kept: ["CONFLICT", 409],
+  same_seat: ["CONFLICT", 409],
+  attempts_spent: ["CONFLICT", 409]
+};
+
+function countRefusal(j: any, fallback: string): ApiError | null {
+  if (!j || typeof j !== "object" || j.ok !== false) return null;
+  const words = typeof j.message === "string" && j.message.trim() ? j.message : fallback;
+  const reason = String(j.error ?? "");
+  const [code, status] = COUNT_REFUSALS[reason] ?? ["VALIDATION_FAILED", 400];
+  return new ApiError(code, words, status, [{ reason: reason || null }]);
+}
+
+/**
+ * 135's reads answer `{rows: [], error: '…'}` instead of raising, so an empty page is a fact the door
+ *  decided and not a filter that found nothing. Three of its sentences are about the session or the
+ *  window rather than the row, and the desk has to hear them differently: a seat that is not the
+ *  office's book is a 403, a day that has not happened yet is a 400, anything else is the account or
+ *  the run the desk quoted not being in this book.
+ */
+function readRefusal(j: any): ApiError | null {
+  if (!j || typeof j !== "object" || typeof j.error !== "string" || !j.error.trim()) return null;
+  const words = j.error;
+  if (/not that (book|desk)/i.test(words)) return new ApiError("FORBIDDEN", words, 403);
+  if (/no day|window runs backwards|which days/i.test(words)) {
+    return new ApiError("VALIDATION_FAILED", words, 400);
+  }
+  return new ApiError("NOT_FOUND", words, 404);
+}
+
 /** A `date` column arrives as a Date at midnight in the server's own zone, so its JSON form lands on
  *  the day before east of Greenwich (090's lesson). The register prints the day as text already; the
  *  detail door hands back the column, so it is cut from the local parts that survive the trip. */
@@ -214,6 +305,131 @@ function dayOf(value: unknown): unknown {
   if (!(value instanceof Date)) return value;
   const p = (n: number) => String(n).padStart(2, "0");
   return `${value.getFullYear()}-${p(value.getMonth() + 1)}-${p(value.getDate())}`;
+}
+
+// ============================
+// THE STATEMENT FILE
+// ============================
+
+/** 135 clamps a statement page to 500 legs; a file is walked a page at a time until the window's own
+ *  `legs` count is spent. */
+const STATEMENT_PAGE = 500;
+/** Eight thousand legs on one line is years of the office's own book. A window wider than that is not
+ *  a statement, it is a data dump, and the desk that asks for one wants a month at a time. */
+const STATEMENT_MAX = 8000;
+/** The printed page stops earlier for the reason `/exports/table` gives: a file that size is hundreds
+ *  of pages of drawText on the API box, and Excel is the register for that. */
+const STATEMENT_PDF_MAX = 3000;
+
+/** The statement's own columns, in the order a ledger is read. `running` is text because a column that
+ *  is a balance has no total — the writers add one to every numeric column, and a sum of running
+ *  balances is a number that means nothing standing beside the closing figure that means everything. */
+const STATEMENT_COLUMNS: PreparedTable["columns"] = [
+  { key: "line", label: "Line", type: "text", width: 52 },
+  { key: "day", label: "Day", type: "date", width: 92 },
+  { key: "ref", label: "Movement", type: "text", width: 150 },
+  { key: "memo", label: "Memo", type: "text", width: 240 },
+  { key: "direction", label: "Side", type: "text", width: 66 },
+  { key: "amount", label: "Amount", type: "money", width: 110 },
+  { key: "moved", label: "In the account's own side", type: "money", width: 130 },
+  { key: "running", label: "Running", type: "text", width: 110 },
+  { key: "other_side", label: "Other side", type: "text", width: 150 },
+  { key: "source_kind", label: "Source", type: "text", width: 96 },
+  { key: "source_ref", label: "Source reference", type: "text", width: 140 },
+  { key: "posting_status", label: "Status", type: "text", width: 80 },
+  { key: "posted_by", label: "Posted by", type: "text", width: 140 },
+  { key: "detail", label: "Leg detail", type: "text", width: 180 }
+];
+
+/** The door's own row shape, which is what a CSV is: every field a statement leg carries, named as the
+ *  book names it, with no formatting a spreadsheet would have to undo. */
+const STATEMENT_FIELDS = [...STATEMENT_COLUMNS.map((c) => c.key), "raised_at"];
+
+/** The book's figures are `numeric(14,2)` and arrive through jsonb as numbers; a column the door did
+ *  not print as text is asked to print itself before it reaches a page. */
+function figure(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Walk the window. The refusal and the row ceiling both come from the first page's own header, so a
+ *  file that cannot fit is refused before a single further query is spent on it. */
+async function walkStatement(tenant: string, account: string, from: string, to: string,
+  cap: number): Promise<{ head: Record<string, any>; rows: Record<string, any>[] }> {
+  const head = await read(STATEMENT_SQL, [tenant, account, from, to, STATEMENT_PAGE, 0]);
+  const refusal = readRefusal(head);
+  if (refusal) throw refusal;
+  const legs = Number(head.legs ?? 0);
+  if (legs > cap) {
+    throw new ApiError("VALIDATION_FAILED",
+      `${head.code} moved ${legs} legs between ${from} and ${to}, and a statement file stops at `
+      + `${cap}. Narrow the days, or read the register on the desk one page at a time.`, 413);
+  }
+  const rows: Record<string, any>[] = [...(head.rows ?? [])];
+  for (let offset = rows.length; offset < legs; offset += STATEMENT_PAGE) {
+    const page = await read(STATEMENT_SQL, [tenant, account, from, to, STATEMENT_PAGE, offset]);
+    const more: Record<string, any>[] = page?.rows ?? [];
+    if (!more.length) break;
+    rows.push(...more);
+  }
+  return { head, rows };
+}
+
+function statementTable(head: Record<string, any>, rows: Record<string, any>[],
+  actor: string, generatedAt: Date): PreparedTable {
+  const cur = String(head.currency ?? "TZS");
+  const drift = head.drift ?? {};
+  const agrees = drift.agrees === null || drift.agrees === undefined
+    ? "not checked (the window does not close today)"
+    : drift.agrees ? "yes — the cached total equals this statement's closing figure"
+      : `NO — cached ${moneyText(figure(drift.cached_balance) ?? 0)} ${cur} against `
+        + `statement ${moneyText(figure(drift.statement_balance) ?? 0)} ${cur}`;
+  return {
+    report: "money-statement",
+    title: `Statement of ${head.code}`,
+    subtitle: `The office's own book, ${head.label}`,
+    meta: [
+      { label: "Account", value: `${head.code} — ${head.label} (${head.kind}, natural side `
+        + `${head.natural_side})` },
+      { label: "Currency", value: cur },
+      { label: "Days", value: `${head.from_day} to ${head.to_day}` },
+      { label: "Opening", value: `${moneyText(figure(head.opening) ?? 0)} ${cur}` },
+      { label: "Debited", value: `${moneyText(figure(head.debited) ?? 0)} ${cur}` },
+      { label: "Credited", value: `${moneyText(figure(head.credited) ?? 0)} ${cur}` },
+      { label: "Moved", value: `${moneyText(figure(head.moved) ?? 0)} ${cur}` },
+      { label: "Closing", value: `${moneyText(figure(head.closing) ?? 0)} ${cur}` },
+      { label: "Legs in window", value: String(head.legs ?? 0) },
+      { label: "Book agrees", value: agrees }
+    ],
+    columns: STATEMENT_COLUMNS,
+    cells: rows.map((r) => [
+      String(r.line ?? ""), r.day ?? null, r.ref ?? null, r.memo ?? null, r.direction ?? null,
+      figure(r.amount), figure(r.moved),
+      r.running === null || r.running === undefined ? null : moneyText(figure(r.running) ?? 0),
+      r.other_side ?? null, r.source_kind ?? null, r.source_ref ?? null,
+      r.posting_status ?? null, r.posted_by ?? null, r.detail ?? null
+    ]),
+    generatedAt,
+    actor
+  };
+}
+
+/** Control characters are legal in a memo typed at a desk, and a purpose that starts with an operator
+ *  is a formula the moment the CSV reaches a spreadsheet — so text is neutralised. A figure is not: a
+ *  statement's `moved` column is negative half the time, and `'-1,000` is a number a spreadsheet can
+ *  no longer add. */
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "number") return Number.isFinite(v) ? String(v) : "";
+  if (typeof v === "boolean") return v ? "true" : "false";
+  let s = v instanceof Date ? v.toISOString() : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function statementCsv(rows: Record<string, any>[]): string {
+  return [STATEMENT_FIELDS.join(","),
+  ...rows.map((r) => STATEMENT_FIELDS.map((f) => csvCell(r[f])).join(","))].join("\r\n");
 }
 
 export async function controlMoneyRoutes(app: FastifyInstance, _opts: unknown) {
@@ -408,4 +624,211 @@ export async function controlMoneyRoutes(app: FastifyInstance, _opts: unknown) {
             reversal_ref: j.reversal?.ref ?? null }
         }));
     });
+
+  // ============================
+  // THE COUNT — raise a run, read the pile, sign for a second seat, throw a draft away
+  // ============================
+
+  /**
+   * The runs this book has already made, newest first, with the three worst exceptions folded onto
+   * each row and the whole window's figures in the heading.
+   *
+   * A board that only said "12 findings, net 4,000.00" cannot be triaged from, so the door carries the
+   * three lines an exception count is a name for; the rest is one read away in the detail.
+   */
+  app.get("/control/money/recon", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, RECON);
+    await enforceRateLimit(`money-recon-board:${req.control.user_id}`, 240, 60);
+    const q = z.object({
+      scope: SCOPE.optional(),
+      status: z.enum(["all", "open", "reviewed"]).default("all"),
+      currency: currency.optional(),
+      search: SEARCH,
+      limit: LIMIT,
+      offset: OFFSET
+    }).strict().parse(req.query);
+    // `all` is the desk's word for "do not filter", not a scope a run can be filed under — so it is
+    // answered here as a null. Left to the door, a board asked for `scope=all` would answer with an
+    // empty pile, because no run is ever written with that word in its scope column.
+    const j = await read(RECON_BOARD_SQL, [tenantOf(req),
+      q.scope && q.scope !== "all" ? q.scope : null,
+      q.status === "all" ? null : q.status, q.currency ?? null, q.search ?? null,
+      q.limit, q.offset]);
+    const refusal = readRefusal(j);
+    if (refusal) throw refusal;
+    return j;
+  });
+
+  /**
+   * Ask the book and the papers the same question over a window of days, and write down everywhere
+   * they disagree.
+   *
+   * `from` and `to` are the days the desk means, and the door refuses a window that runs backwards or
+   * ends on a day that has not happened yet — both said in its own words, because either one is the
+   * desk's typo and not the server's fault. The run is the office's own row: 135's checks read the
+   * registers, never another company's book, and the answers travel as `details` so the desk can name
+   * the scope that was refused without reading a sentence back to itself.
+   *
+   * The run is minted here and audited by the door that minted it, with the figures it used. A route
+   * that filed its own audit row would give the office's history two versions of the same count.
+   */
+  app.post("/control/money/recon/run", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, RECON);
+    await enforceRateLimit(`money-recon-run:${req.control.user_id}`, 12, 3600);
+    const body = z.object({
+      scope: SCOPE.default("all"),
+      currency: currency.default("TZS"),
+      from: DAY,
+      to: DAY
+    }).strict().parse(req.body ?? {});
+    const j = await read(RECON_RUN_SQL, [tenantOf(req), body.scope, body.currency,
+      realDay(body.from), realDay(body.to), req.control.user_id, role(req), req.ip, uaOf(req)]);
+    const refusal = countRefusal(j, "The count could not be raised.");
+    if (refusal) throw refusal;
+    return j.run;
+  });
+
+  /** One run whole: every exception, the checks counted by name, and whether this desk may still sign. */
+  app.get("/control/money/recon/:id", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, RECON);
+    await enforceRateLimit(`money-recon-detail:${req.control.user_id}`, 240, 60);
+    const id = uuidOf(req.params.id, "count");
+    const j = await read(RECON_DETAIL_SQL, [tenantOf(req), id]);
+    const refusal = readRefusal(j);
+    if (refusal) throw refusal;
+    return j;
+  });
+
+  /**
+   * Sign for a count another seat raised.
+   *
+   * The note is required and the door refuses it if it is shorter than eight characters, because the
+   * sentence beside these figures months from now is the whole product of the second pair of eyes —
+   * and the door refuses the seat that raised the run, which is the only reason a signature on a
+   * report means anything. Both refusals arrive here as the door's own words.
+   */
+  app.post("/control/money/recon/:id/sign", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, RECON);
+    await enforceRateLimit(`money-recon-sign:${req.control.user_id}`, 20, 3600);
+    const id = uuidOf(req.params.id, "count");
+    const body = z.object({ note: SENTENCE }).strict().parse(req.body ?? {});
+    const j = await read(RECON_SIGN_SQL,
+      [tenantOf(req), id, body.note, req.control.user_id, role(req), req.ip, uaOf(req)]);
+    const refusal = countRefusal(j, "The count could not be signed.");
+    if (refusal) throw refusal;
+    return j.run;
+  });
+
+  /**
+   * Throw a draft count away.
+   *
+   * A `POST …/discard` rather than a `DELETE`, because the reason is the row's remaining value: the
+   * findings go with the run, so this sentence is the only thing that will explain the gap in the
+   * numbering — and a DELETE whose body a proxy dropped would leave that gap with nothing beside it.
+   * A signed run refuses: 135's guard keeps a paper somebody answered for.
+   */
+  app.post("/control/money/recon/:id/discard", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, RECON);
+    await enforceRateLimit(`money-recon-discard:${req.control.user_id}`, 20, 3600);
+    const id = uuidOf(req.params.id, "count");
+    const body = z.object({ reason: SENTENCE }).strict().parse(req.body ?? {});
+    const j = await read(RECON_DISCARD_SQL,
+      [tenantOf(req), id, body.reason, req.control.user_id, role(req), req.ip, uaOf(req)]);
+    const refusal = countRefusal(j, "The count could not be discarded.");
+    if (refusal) throw refusal;
+    return { status: "discarded", ref: j.discarded?.ref ?? null, discarded: j.discarded };
+  });
+
+  // ============================
+  // THE STATEMENT — one line of the book over a window of days, on screen or on paper
+  // ============================
+
+  /** Both ends of a window, typed as the papers carry them, in the order the door wants them. */
+  const windowOf = (q: { from: string; to: string }) => {
+    const from = realDay(q.from);
+    const to = realDay(q.to);
+    if (from > to) {
+      throw new ApiError("VALIDATION_FAILED",
+        "The window runs backwards: the first day has to be the earlier one.", 400,
+        [{ field: "to", message: "The end day is before the start day." }]);
+    }
+    return { from, to };
+  };
+
+  const STATEMENT_QUERY = z.object({ from: DAY, to: DAY }).strict();
+  const STATEMENT_LIMIT = z.coerce.number().int().min(1).max(STATEMENT_PAGE).default(200);
+
+  /**
+   * One page of a statement, with the opening, the window's totals and the closing above it.
+   *
+   * The figures in the heading are the whole window's and not this page's — the door says so in its
+   * own `basis` sentence — so a desk that paginates a statement never has to add anything up to find
+   * the balance, which is the one thing a clerk is asked for.
+   */
+  app.get("/control/money/accounts/:id/statement", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, VIEW);
+    await enforceRateLimit(`money-statement:${req.control.user_id}`, 120, 60);
+    const q = z.object({
+      from: DAY, to: DAY, limit: STATEMENT_LIMIT, offset: OFFSET
+    }).strict().parse(req.query);
+    const days = windowOf(q);
+    const j = await read(STATEMENT_SQL, [tenantOf(req), uuidOf(req.params.id, "account"),
+      days.from, days.to, q.limit, q.offset]);
+    const refusal = readRefusal(j);
+    if (refusal) throw refusal;
+    return j;
+  });
+
+  /**
+   * The same statement as a file, walked off the book rather than posted up from the desk.
+   *
+   * Three formats of one read: the CSV is the door's own row shape for anyone who will add up the
+   * column themselves, and the workbook and the printed page carry the header figures the book
+   * produced, so the closing balance on a file an accountant is handed is the closing balance the
+   * office holds.
+   *
+   * This is the one route in the two new sections that files an audit row, and it is the one act here
+   * that is not a definer door: the seat that printed the office's book out of it is a fact only the
+   * route knows.
+   */
+  const statementFile = (ext: "csv" | "xlsx" | "pdf") => async (req: any, reply: any) => {
+    await requireControlPermission(req, VIEW);
+    await enforceRateLimit(`money-statement-${ext}:${req.control.user_id}`, 20, 3600);
+    const days = windowOf(STATEMENT_QUERY.parse(req.query));
+    const account = uuidOf(req.params.id, "account");
+    const { head, rows } = await walkStatement(tenantOf(req), account, days.from, days.to,
+      ext === "pdf" ? STATEMENT_PDF_MAX : STATEMENT_MAX);
+
+    const generatedAt = new Date();
+    const table = statementTable(head, rows, String(req.control.full_name ?? req.control.user_id),
+      generatedAt);
+    const text = ext === "csv" ? statementCsv(rows) : null;
+    const bytes = text === null
+      ? await (ext === "pdf" ? buildPdf(table) : buildXlsx(table))
+      : Buffer.from(text, "utf8");
+
+    await withTenant(tenantOf(req), (c) => writeAudit(c, {
+      tenantId: tenantOf(req), actorUserId: req.control.user_id, actorRole: role(req),
+      ip: req.ip, userAgent: uaOf(req), requestId: req.requestId,
+      entity: "money_accounts", entityId: account, action: `control.money.statement_${ext}`,
+      before: null,
+      after: { code: head.code, currency: head.currency, from_day: days.from, to_day: days.to,
+        legs: head.legs, rows: rows.length, opening: head.opening, closing: head.closing,
+        agrees: head.drift?.agrees ?? null, bytes: bytes.length }
+    }));
+
+    reply.header("Content-Disposition", `attachment; filename="${fileName(table, ext)}"`);
+    reply.header("Cache-Control", "no-store");
+    reply.type(ext === "pdf" ? "application/pdf"
+      : ext === "csv" ? "text/csv; charset=utf-8"
+        : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return bytes;
+  };
+
+  app.get("/control/money/accounts/:id/statement.csv",
+    { preHandler: [requireControl] }, statementFile("csv"));
+  app.get("/control/money/accounts/:id/statement.xlsx",
+    { preHandler: [requireControl] }, statementFile("xlsx"));
+  app.get("/control/money/accounts/:id/statement.pdf",
+    { preHandler: [requireControl] }, statementFile("pdf"));
 }

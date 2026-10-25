@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ControlNav } from "@/components/ControlNav";
 import { MoneyMoves, type Desk, type MovesTab } from "./moves";
+import { AccountStatement, MoneyRecon } from "./recon";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
@@ -11,11 +12,12 @@ const FREEZE = "control.money.freeze";
 const PAY = "control.money.pay";
 const ESCROW = "control.money.escrow";
 const REVEAL = "control.money.reveal";
+const RECON = "control.money.recon";
 
-type Tab = MovesTab | "book";
+type Tab = MovesTab | "book" | "count";
 const TABS: [Tab, string][] = [
   ["book", "The book"], ["wallets", "Wallets"], ["escrow", "Escrow holds"],
-  ["payouts", "Payouts"], ["batches", "Batches"]];
+  ["payouts", "Payouts"], ["batches", "Batches"], ["count", "Reconciliation"]];
 
 /** What each tab is for, in the words the desk itself uses. The book answers "does it agree with
  *  itself"; the three registers above it (134) each answer a different question about money that has
@@ -25,14 +27,16 @@ const HEAD: Record<Tab, string> = {
   wallets: "Holders’ wallets",
   escrow: "Money parked against a job",
   payouts: "Money the office owes out",
-  batches: "Payouts carried together"
+  batches: "Payouts carried together",
+  count: "The book against the papers"
 };
 const SUB: Record<Tab, string> = {
   book: "Every movement the office has written, counted from its legs.",
   wallets: "A holder’s balance is a line of the book, not a column someone maintains beside it.",
   escrow: "Money stopped against a booking, a cargo file, a call or a dispute — and the plan a second seat has to sign.",
   payouts: "Drafted, signed, accrued, then answered on the day the cash actually goes.",
-  batches: "Many papers under one signature, closed only when none of them is still owed."
+  batches: "Many papers under one signature, closed only when none of them is still owed.",
+  count: "A count asks the book and the papers beside it the same question, and keeps everywhere they disagree until a second seat signs it."
 };
 
 const KINDS = ["asset", "liability", "equity", "income", "expense"];
@@ -209,6 +213,7 @@ export default function ControlMoneyPage() {
   const canPay = perms.includes(PAY);
   const canEscrow = perms.includes(ESCROW);
   const canReveal = perms.includes(REVEAL);
+  const canCount = perms.includes(RECON);
   const picked = accounts.find(a => a.id === pickedId) ?? null;
 
   async function load() {
@@ -509,7 +514,7 @@ export default function ControlMoneyPage() {
     call, download, fig, when, today, cents, mint,
     notify: (s) => { setError(null); setNotice(s); setTimeout(() => setNotice(null), 12000); },
     fault: (s) => { setNotice(null); setError(s); },
-    can: { pay: canPay, escrow: canEscrow, reveal: canReveal },
+    can: { pay: canPay, escrow: canEscrow, reveal: canReveal, recon: canCount },
     go: pickTab,
   };
 
@@ -549,6 +554,12 @@ export default function ControlMoneyPage() {
               <code>{REVEAL}</code> is the only one that reads a payee&rsquo;s whole number out of the
               encrypted line, and each time it does, the register records that it did.
             </p>
+            <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+              Counting the book against the papers beside it needs <code>{RECON}</code>, which 135
+              keeps away from <code>{POST}</code> on purpose: a reconciliation a seat can raise merely
+              because it can post is a report that cannot catch that seat. A statement of one account is
+              only a reading, so it stays on <code>{VIEW}</code>.
+            </p>
           </div>
         </main>
       </div>
@@ -572,11 +583,12 @@ export default function ControlMoneyPage() {
         <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>{HEAD[tab]}</h1>
         <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>{SUB[tab]}</p>
 
-        {/* One page, five registers. Every tab is a read of `control.money.view`; the pens inside them
-            are separate duties, so a seat that may fund a wallet but may not halt one sees the same
-            five buttons and a different set of arms beneath them. */}
+        {/* One page, six tabs. Every one of them is a read of `control.money.view`; the pens inside
+            them are separate duties, so a seat that may fund a wallet but may not halt one, or read
+            the book but raise no count, sees the same buttons and a different set of arms beneath
+            them. */}
         <div className="mt-16 mb-8 flex flex-wrap gap-8" role="tablist"
-          aria-label="The book and the three registers above it">
+          aria-label="The book, the registers above it and the counts made of both">
           {TABS.map(([k, l]) => (
             <button key={k} role="tab" aria-selected={k === tab} className={btn}
               onClick={() => pickTab(k)}
@@ -845,6 +857,12 @@ export default function ControlMoneyPage() {
                   hold. Movements still post through this account as before.
                 </p>
               )}
+
+              {/* Counted on the line, not in the register below: the office is asked &ldquo;what sat on
+                  this account in March?&rdquo; and the answer is a window of legs with an opening, a
+                  closing and the papers beside them. Read on `control.money.view` — the same duty that
+                  opened this panel — because a statement is a reading of the book and not a pen. */}
+              <AccountStatement key={picked.id} desk={desk} account={picked} />
             </div>
           )}
         </section>
@@ -1160,7 +1178,9 @@ export default function ControlMoneyPage() {
           </>
         )}
 
-        {tab !== "book" && <MoneyMoves tab={tab} desk={desk} />}
+        {tab === "count" && <MoneyRecon desk={desk} />}
+
+        {(tab !== "book" && tab !== "count") && <MoneyMoves tab={tab} desk={desk} />}
       </main>
     </div>
   );
