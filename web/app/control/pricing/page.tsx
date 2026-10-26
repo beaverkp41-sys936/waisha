@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ControlNav } from "@/components/ControlNav";
 import { PricingAsk, type Corridor, type Desk, type Dim } from "./ask";
 import { PricingCardPanel } from "./card";
+import { ChargePanel, ChargesBoard, type AddKind } from "./charges";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
@@ -20,8 +21,11 @@ const td = "border-b px-8 py-8 align-top text-sm";
 const PAGE = 30;
 const ROAD_PAGE = 60;
 
-type Tab = "lists" | "roads" | "ask";
-const TABS: [Tab, string][] = [["lists", "Price lists"], ["roads", "Roads it prices"], ["ask", "Ask the register"]];
+type Tab = "lists" | "charges" | "roads" | "ask";
+const TABS: [Tab, string][] = [
+  ["lists", "Price lists"], ["charges", "Levies and codes"],
+  ["roads", "Roads it prices"], ["ask", "Ask the register"]
+];
 
 /** The five states a card can be in, and the pile the desk filters it into. `counts` from the board
  *  answer only names the states that have rows, so the pile list is the register's own and not a guess. */
@@ -32,17 +36,23 @@ const PILES: [string, string][] = [
 
 const HEAD: Record<Tab, string> = {
   lists: "The office’s price lists",
+  charges: "The levies and the codes that sit on top of a price",
   roads: "The corridors this book can price",
   ask: "What a job costs"
 };
 const SUB: Record<Tab, string> = {
   lists: "Every version the office has opened, is being asked to sign, has stood live or has stopped — "
     + "with the figures, the paper raised against it and the memory of what a signature changed.",
+  charges: "A surcharge and a discount code are one register wearing two signs, and both are put on a "
+    + "quote after the freight is priced: a levy stacked on it, a code taken off it, each with its own "
+    + "ceiling, its own window and its own version ladder. A code also hands out places, and the ceiling "
+    + "is counted from the claims, never stored on the row.",
   roads: "A price that names a road prices that road. The register refuses a per-kilometre figure on a "
     + "corridor nobody measured, so this board says which of its roads have a distance and how many lists "
     + "already carry a line along them.",
-  ask: "Two questions the register answers itself: what stands for one scope on one day, and what a job "
-    + "of a given size costs. Neither is worked out on this screen."
+  ask: "Three questions the register answers itself: what stands for one scope on one day, what a job of "
+    + "a given size costs, and what the whole quote comes to once the levies on it and the code off it "
+    + "are applied. None of them is worked out on this screen."
 };
 
 interface BoardRow {
@@ -131,6 +141,15 @@ export default function ControlPricingPage() {
   const [roadQ, setRoadQ] = useState({ search: "", offset: 0 });
   const [dims, setDims] = useState<Dim[]>([]);
   const [pickedId, setPickedId] = useState<string | null>(null);
+  // 141's kinds are the catalog the register itself answers with on the charges board, and the panel
+  // opened from a row of that board needs the same list to build its basis picker — a second read would
+  // be a second answer.
+  const [kinds, setKinds] = useState<AddKind[]>([]);
+  const [pickedChargeId, setPickedChargeId] = useState<string | null>(null);
+  // A press on a charge panel changes the row the board above is showing. The board owns its own filters,
+  // so the page asks for a re-read by counting rather than by holding the board's query here too.
+  const [chargesNonce, setChargesNonce] = useState(0);
+  const refreshCharges = useCallback(async () => { setChargesNonce(n => n + 1); }, []);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -515,6 +534,22 @@ export default function ControlPricingPage() {
               <PricingCardPanel key={pickedId} desk={desk} cardId={pickedId} dims={dims}
                 corridors={corridors.rows} onClose={() => setPickedId(null)}
                 onGoto={setPickedId} refresh={() => readBoard(f)} />
+            )}
+          </>
+        )}
+
+        {tab === "charges" && (
+          <>
+            {/* Keyed on the charge, not on the panel: a second levy opened beside this one must not inherit
+                the reason typed into the first one's paper. Cloning is the same case from the other side —
+                the door's answer is a different charge, so the desk moves to it. */}
+            <ChargesBoard desk={desk} dims={dims} corridors={corridors.rows} kinds={kinds}
+              onKinds={setKinds} nonce={chargesNonce} pickedId={pickedChargeId}
+              onPick={(id) => setPickedChargeId(id || null)} />
+            {pickedChargeId && (
+              <ChargePanel key={pickedChargeId} desk={desk} dims={dims} corridors={corridors.rows}
+                kinds={kinds} chargeId={pickedChargeId} onClose={() => setPickedChargeId(null)}
+                onGoto={setPickedChargeId} refresh={refreshCharges} />
             )}
           </>
         )}

@@ -58,11 +58,11 @@ const PRICING_PUBLISH = "control.pricing.publish";
  *
  * A kind with no apply path here would be a signature that can never be spent, so the
  * registry is deliberately exhaustive: every entry names the effect its released signature
- * buys. Seven effects exist today because the platform has seven kinds of thing the rule
+ * buys. Eight effects exist today because the platform has eight kinds of thing the rule
  * covers — a company's access, money going back out, a person's data leaving the
  * registers, a company held off the trading board, money leaving the office, money
- * leaving escrow, and a price going live — and an eighth joins by naming its own definer
- * rather than by restating the transaction below.
+ * leaving escrow, a price going live and a charge going live — and a ninth joins by naming
+ * its own definer rather than by restating the transaction below.
  *
  * `proposable` is the one field the desk cannot ignore. A refund paper's payload is the
  * figure and the call it belongs to, and those are read out of the row by
@@ -76,7 +76,7 @@ export interface ApprovalKind {
   proposeDuty: string;
   /** What a released signature is spent on. */
   effect: "tenant_action" | "refund_release" | "data_erasure" | "directory_exclusion"
-    | "payout_release" | "escrow_discharge" | "price_publish";
+    | "payout_release" | "escrow_discharge" | "price_publish" | "addendum_publish";
   /** The `tenant_actions` verb a ban releases into. */
   tenantAction?: "block" | "close";
   /** Whether this desk may raise it at all. */
@@ -141,6 +141,16 @@ export const KINDS: Record<string, ApprovalKind> = {
   "pricing.publish": {
     action: "pricing.publish", label: "Put a freight price list in force",
     proposeDuty: PRICING_PUBLISH, effect: "price_publish", proposable: false
+  },
+  // Raised by 141's `propose_pricing_addendum` against one surcharge or discount code. It is a second
+  // action and not the same action on a second target because 121 keeps one open paper per
+  // (action, target kind, target id) — a levy and the price list it stands on cannot share a slot.
+  // The paper carries its own figure, its ceiling and its dates, so the second seat signs a number read
+  // off the row; the duty is 140's `.publish`, because a seat that may not sign a rate has no business
+  // signing a discount.
+  "pricing.addendum": {
+    action: "pricing.addendum", label: "Put a surcharge or discount code in force",
+    proposeDuty: PRICING_PUBLISH, effect: "addendum_publish", proposable: false
   }
 };
 
@@ -184,6 +194,9 @@ export const ESCROW_APPLY_SQL =
 /** Params: approval, actor, role, ip. 140's publish, which re-hashes the card before it goes live. */
 export const PUBLISH_APPLY_SQL =
   "select platform_auth.apply_pricing_publish($1,$2,$3,$4) as r";
+/** Params: approval, actor, role, ip. 141's publish of a charge, which re-hashes the addendum paper. */
+export const ADDENDUM_APPLY_SQL =
+  "select platform_auth.apply_pricing_addendum($1,$2,$3,$4) as r";
 /** Params: status, action, search, limit, offset. */
 export const BOARD_SQL = "select platform_auth.approvals_board($1,$2,$3,$4,$5) as b";
 /** Params: id. */
@@ -316,29 +329,37 @@ export async function reject(req: any, id: string, note: string) {
  * real, matching, second-seat proposal stands behind it.
  *
  * The effects share the order and nothing else after it. A refund paper, an erasure, an exclusion,
- * 134's two money effects and 140's publish are each finished inside the transaction — the row itself
- * is the receipt, and there is no caller to email about a signature — so the notice, its cached gate
- * clearing and its delivery receipt all stay on the ban branch, where 078 put them for the reason
- * that still holds: a mail provider that is down must never leave a company two people agreed to
- * shut still trading.
+ * 134's two money effects, 140's price publish and 141's charge publish are each finished inside the
+ * transaction — the row itself is the receipt, and there is no caller to email about a signature — so
+ * the notice, its cached gate clearing and its delivery receipt all stay on the ban branch, where 078
+ * put them for the reason that still holds: a mail provider that is down must never leave a company
+ * two people agreed to shut still trading.
  */
 type Spent =
   | { kind: ApprovalKind; tenant: AppliedAction; refund?: undefined; erasure?: undefined;
-      exclusion?: undefined; payout?: undefined; escrow?: undefined; publish?: undefined }
+      exclusion?: undefined; payout?: undefined; escrow?: undefined; publish?: undefined;
+      addendum?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund: Record<string, unknown>; erasure?: undefined;
-      exclusion?: undefined; payout?: undefined; escrow?: undefined; publish?: undefined }
+      exclusion?: undefined; payout?: undefined; escrow?: undefined; publish?: undefined;
+      addendum?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund?: undefined;
       erasure: Record<string, unknown>; exclusion?: undefined; payout?: undefined;
-      escrow?: undefined; publish?: undefined }
+      escrow?: undefined; publish?: undefined; addendum?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
       exclusion: Record<string, unknown>; payout?: undefined; escrow?: undefined
-      publish?: undefined }
+      publish?: undefined; addendum?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
-      exclusion?: undefined; payout: Record<string, any>; escrow?: undefined; publish?: undefined }
+      exclusion?: undefined; payout: Record<string, any>; escrow?: undefined; publish?: undefined;
+      addendum?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
-      exclusion?: undefined; payout?: undefined; escrow: Record<string, any>; publish?: undefined }
+      exclusion?: undefined; payout?: undefined; escrow: Record<string, any>; publish?: undefined;
+      addendum?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
-      exclusion?: undefined; payout?: undefined; escrow?: undefined; publish: Record<string, any> };
+      exclusion?: undefined; payout?: undefined; escrow?: undefined; publish: Record<string, any>;
+      addendum?: undefined }
+  | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
+      exclusion?: undefined; payout?: undefined; escrow?: undefined; publish?: undefined;
+      addendum: Record<string, any> };
 
 /**
  * 134's and 140's apply doors answer in their own shape — `ok:false` plus an `error` word and a
@@ -494,6 +515,29 @@ export async function releaseAndApply(req: any, id: string, note: string) {
         return { kind, publish: receipt };
       }
 
+      if (kind.effect === "addendum_publish") {
+        const res = await run(c, ADDENDUM_APPLY_SQL, [id, a.id, a.role, a.ip]);
+        const eff = res.r as (Record<string, any> | undefined);
+        if (!eff) throw new ApiError("UPSTREAM_ERROR", "The charge could not be published.", 502);
+        // The door rebuilds the charge's paper and compares it to the hash this signature was cut on, so
+        // a levy or a discount that goes live is provably the figure and the window the second seat read.
+        // It refuses a code whose places ran out while its paper waited, because a signature spent on a
+        // discount nobody can be given is a signature that changed nothing. Any "no" rolls the claim back.
+        if (eff.ok !== true) throw moneyRefusal(eff, "Nothing was published");
+        await run(c, SETTLE_SQL, [id, JSON.stringify({
+          addendum_id: eff.addendum_id, ref: eff.ref, code: eff.code, kind: eff.kind,
+          version: eff.version, basis: eff.basis, value: eff.value, currency: eff.currency,
+          max_uses: eff.max_uses, uses_taken: eff.uses_taken,
+          effective_from: eff.effective_from, superseded_versions: eff.superseded_versions,
+          published_by: eff.published_by
+        })]);
+        // `addendum` is the whole detail — the scope it stands on, the version ladder and the memory
+        // rows. The desk that signed asks for it by itself a moment later; the register receipt keeps
+        // the figure the signature bought.
+        const { addendum: _detail, ...receipt } = eff;
+        return { kind, addendum: receipt };
+      }
+
       const payload = cl.r.payload as { tenant_id: string; reason_code: string; note: string };
       const res = await run(c, APPLY_SQL, [
         payload.tenant_id, kind.tenantAction!, payload.reason_code, payload.note,
@@ -558,6 +602,12 @@ export async function releaseAndApply(req: any, id: string, note: string) {
   // signed. There is no director to email about a tariff, so the register row is the answer here too.
   if (spent.kind.effect === "price_publish") {
     return { ...spent.publish, approval_id: id };
+  }
+  // A charge that went live is a line on a quote, not a letter to a director: the register desk reads
+  // the addendum back as `published`, the version it replaced carries the day it closed, and 141's own
+  // memory rows name the seat that signed. So the register row is the answer here too.
+  if (spent.kind.effect === "addendum_publish") {
+    return { ...spent.addendum, approval_id: id };
   }
 
   const applied = spent.tenant!;
