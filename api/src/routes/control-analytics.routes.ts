@@ -129,7 +129,12 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       // is not `post` — a reconciliation a seat can order because it can move money is a report that
       // cannot catch that seat. A statement of one line is a read of the book, so it stays on `view`.
       "control.money.view", "control.money.post", "control.money.freeze",
-      "control.money.pay", "control.money.escrow", "control.money.reveal", "control.money.recon"];
+      "control.money.pay", "control.money.escrow", "control.money.reveal", "control.money.recon",
+      // The rate cards (140). Reading a price, writing a draft and putting a price live are three
+      // duties, and `.publish` is kept away from `.manage` the way 135 kept `.recon` away from `.post`:
+      // a seat that can set the figures and sign them alone has never needed a second person. Withdrawing
+      // sits under `.manage` — it is the act that stops a wrong price being quoted an hour longer.
+      "control.pricing.view", "control.pricing.manage", "control.pricing.publish"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });
 

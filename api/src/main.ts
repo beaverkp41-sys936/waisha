@@ -32,6 +32,7 @@ import { controlCustomersRoutes } from "./routes/control-customers.routes.js";
 import { controlDirectoryRoutes } from "./routes/control-directory.routes.js";
 import { controlMoneyRoutes } from "./routes/control-money.routes.js";
 import { controlMoneyMovesRoutes } from "./routes/control-money-moves.routes.js";
+import { controlPricingRoutes } from "./routes/control-pricing.routes.js";
 import { errorIntakeRoutes } from "./routes/errors.routes.js";
 import { recommendationRoutes } from "./routes/recommendations.routes.js";
 import { announcementsRoutes } from "./routes/announcements.routes.js";
@@ -163,6 +164,7 @@ async function main() {
   await app.register(controlDirectoryRoutes, { prefix: "/api/v1" });
   await app.register(controlMoneyRoutes, { prefix: "/api/v1" });
   await app.register(controlMoneyMovesRoutes, { prefix: "/api/v1" });
+  await app.register(controlPricingRoutes, { prefix: "/api/v1" });
   await app.register(errorIntakeRoutes, { prefix: "/api/v1" });
   await app.register(recommendationRoutes, { prefix: "/api/v1" });
   await app.register(announcementsRoutes, { prefix: "/api/v1" });

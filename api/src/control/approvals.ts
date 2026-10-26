@@ -49,17 +49,20 @@ const DIRECTORY_EXCLUSION = "control.directory.exclusion";
 // raises one is the seat that may put money somewhere or take it out.
 const MONEY_PAY = "control.money.pay";
 const MONEY_ESCROW = "control.money.escrow";
+// 140's paper is raised by the door that reads the card's own figures, and the duty that signs a price
+// into force is the only one asked to raise it.
+const PRICING_PUBLISH = "control.pricing.publish";
 
 /**
  * What can be signed, and what signing it does.
  *
  * A kind with no apply path here would be a signature that can never be spent, so the
  * registry is deliberately exhaustive: every entry names the effect its released signature
- * buys. Six effects exist today because the platform has six kinds of thing the rule
+ * buys. Seven effects exist today because the platform has seven kinds of thing the rule
  * covers — a company's access, money going back out, a person's data leaving the
- * registers, a company held off the trading board, money leaving the office, and money
- * leaving escrow — and a seventh joins by naming its own definer rather than by restating
- * the transaction below.
+ * registers, a company held off the trading board, money leaving the office, money
+ * leaving escrow, and a price going live — and an eighth joins by naming its own definer
+ * rather than by restating the transaction below.
  *
  * `proposable` is the one field the desk cannot ignore. A refund paper's payload is the
  * figure and the call it belongs to, and those are read out of the row by
@@ -73,7 +76,7 @@ export interface ApprovalKind {
   proposeDuty: string;
   /** What a released signature is spent on. */
   effect: "tenant_action" | "refund_release" | "data_erasure" | "directory_exclusion"
-    | "payout_release" | "escrow_discharge";
+    | "payout_release" | "escrow_discharge" | "price_publish";
   /** The `tenant_actions` verb a ban releases into. */
   tenantAction?: "block" | "close";
   /** Whether this desk may raise it at all. */
@@ -129,6 +132,15 @@ export const KINDS: Record<string, ApprovalKind> = {
   "money.escrow": {
     action: "money.escrow", label: "Discharge a hold out of escrow",
     proposeDuty: MONEY_ESCROW, effect: "escrow_discharge", proposable: false
+  },
+  // Raised by 140's own publish door against one rate card. `propose_pricing_publish` reads the code,
+  // the money, the window and every figure off the card's rows and hashes what it read, so the second
+  // seat signs a price list rather than a sentence typed beside a fresh id. Spending it puts the card
+  // in force and closes the version it supersedes; the withdrawal that stops a wrong price is
+  // deliberately one-seat, and lives behind `withdraw_pricing_card` instead of here.
+  "pricing.publish": {
+    action: "pricing.publish", label: "Put a freight price list in force",
+    proposeDuty: PRICING_PUBLISH, effect: "price_publish", proposable: false
   }
 };
 
@@ -169,6 +181,9 @@ export const PAYOUT_APPLY_SQL =
 /** Params: approval, actor, role, ip. 134's discharge, which replays the three figures off the payload. */
 export const ESCROW_APPLY_SQL =
   "select platform_auth.apply_escrow_discharge($1,$2,$3,$4) as r";
+/** Params: approval, actor, role, ip. 140's publish, which re-hashes the card before it goes live. */
+export const PUBLISH_APPLY_SQL =
+  "select platform_auth.apply_pricing_publish($1,$2,$3,$4) as r";
 /** Params: status, action, search, limit, offset. */
 export const BOARD_SQL = "select platform_auth.approvals_board($1,$2,$3,$4,$5) as b";
 /** Params: id. */
@@ -300,30 +315,33 @@ export async function reject(req: any, id: string, note: string) {
  * proposer beside them. The trigger reads that pair and lets the row through only if a
  * real, matching, second-seat proposal stands behind it.
  *
- * The effects share the order and nothing else after it. A refund paper, an erasure, an exclusion
- * and 134's two money effects are each finished inside the transaction — the row itself is the
- * receipt, and there is no caller to email about a signature — so the notice, its cached gate
+ * The effects share the order and nothing else after it. A refund paper, an erasure, an exclusion,
+ * 134's two money effects and 140's publish are each finished inside the transaction — the row itself
+ * is the receipt, and there is no caller to email about a signature — so the notice, its cached gate
  * clearing and its delivery receipt all stay on the ban branch, where 078 put them for the reason
  * that still holds: a mail provider that is down must never leave a company two people agreed to
  * shut still trading.
  */
 type Spent =
   | { kind: ApprovalKind; tenant: AppliedAction; refund?: undefined; erasure?: undefined;
-      exclusion?: undefined; payout?: undefined; escrow?: undefined }
+      exclusion?: undefined; payout?: undefined; escrow?: undefined; publish?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund: Record<string, unknown>; erasure?: undefined;
-      exclusion?: undefined; payout?: undefined; escrow?: undefined }
+      exclusion?: undefined; payout?: undefined; escrow?: undefined; publish?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund?: undefined;
       erasure: Record<string, unknown>; exclusion?: undefined; payout?: undefined;
-      escrow?: undefined }
+      escrow?: undefined; publish?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
-      exclusion: Record<string, unknown>; payout?: undefined; escrow?: undefined }
+      exclusion: Record<string, unknown>; payout?: undefined; escrow?: undefined
+      publish?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
-      exclusion?: undefined; payout: Record<string, any>; escrow?: undefined }
+      exclusion?: undefined; payout: Record<string, any>; escrow?: undefined; publish?: undefined }
   | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
-      exclusion?: undefined; payout?: undefined; escrow: Record<string, any> };
+      exclusion?: undefined; payout?: undefined; escrow: Record<string, any>; publish?: undefined }
+  | { kind: ApprovalKind; tenant?: undefined; refund?: undefined; erasure?: undefined;
+      exclusion?: undefined; payout?: undefined; escrow?: undefined; publish: Record<string, any> };
 
 /**
- * 134's two apply doors answer in the register's own shape — `ok:false` plus an `error` word and a
+ * 134's and 140's apply doors answer in their own shape — `ok:false` plus an `error` word and a
  * sentence — rather than in the `status` words 121's deciders use. Both refusals mean the paper moved
  * under the signature, so the claim is rolled back with them and the desk hears why.
  */
@@ -455,6 +473,27 @@ export async function releaseAndApply(req: any, id: string, note: string) {
         return { kind, escrow: eff };
       }
 
+      if (kind.effect === "price_publish") {
+        const res = await run(c, PUBLISH_APPLY_SQL, [id, a.id, a.role, a.ip]);
+        const eff = res.r as (Record<string, any> | undefined);
+        if (!eff) throw new ApiError("UPSTREAM_ERROR", "The price could not be published.", 502);
+        // The door rebuilds the card's paper and compares it to the hash this signature was cut on, so
+        // a price that goes live is provably the set of figures the second seat read. It also closes
+        // the version it supersedes in the same statement, because two prices in force for one code is
+        // the answer no resolver on this panel should have to give. Any "no" rolls the claim back.
+        if (eff.ok !== true) throw moneyRefusal(eff, "Nothing was published");
+        await run(c, SETTLE_SQL, [id, JSON.stringify({
+          card_id: eff.card_id, ref: eff.ref, code: eff.code, version: eff.version,
+          currency: eff.currency, effective_from: eff.effective_from,
+          superseded_versions: eff.superseded_versions, published_by: eff.published_by
+        })]);
+        // `card` is the whole detail — every line, the version ladder and the memory rows. The desk
+        // that signed asks for it by itself a moment later; the register receipt keeps the figures
+        // the signature bought.
+        const { card: _detail, ...receipt } = eff;
+        return { kind, publish: receipt };
+      }
+
       const payload = cl.r.payload as { tenant_id: string; reason_code: string; note: string };
       const res = await run(c, APPLY_SQL, [
         payload.tenant_id, kind.tenantAction!, payload.reason_code, payload.note,
@@ -513,6 +552,12 @@ export async function releaseAndApply(req: any, id: string, note: string) {
   }
   if (spent.kind.effect === "escrow_discharge") {
     return { ...spent.escrow, approval_id: id };
+  }
+  // A price that went live is its own announcement: the board reads the card back as `published`, the
+  // version it replaced carries the day it closed, and 140's memory rows already name the seat that
+  // signed. There is no director to email about a tariff, so the register row is the answer here too.
+  if (spent.kind.effect === "price_publish") {
+    return { ...spent.publish, approval_id: id };
   }
 
   const applied = spent.tenant!;
