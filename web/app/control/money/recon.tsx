@@ -232,6 +232,19 @@ export function MoneyRecon({ desk }: { desk: Desk }) {
   const rows: any[] = board?.rows ?? [];
   const byCur = (k: string) => heading.reduce((a, h) => a + Number(h[k] ?? 0), 0);
 
+  /** 135 keeps `examined` as one object, not a list: the questions the run was allowed to ask, the
+   *  population each was asked against, and the sentences naming anything it had to leave alone. A check
+   *  that agrees writes no finding of its own, so the clean questions are what `questions` still names
+   *  once the checks with exceptions are taken away — and the populations are the evidence a second seat
+   *  reads before signing a report that says "nothing". */
+  const seen: any = run?.examined ?? {};
+  const askedList: string[] = Array.isArray(seen.questions) ? seen.questions : [];
+  const byCheckList: any[] = run?.by_check ?? [];
+  const cleanChecks = askedList.filter(q => !byCheckList.some(b => String(b.check) === q));
+  const populations = Object.entries(seen).filter(([, v]) => typeof v === "number")
+    .map(([k, v]) => `${words(k)} ${v}`);
+  const skipped: string[] = Array.isArray(seen.skipped) ? seen.skipped : [];
+
   return (
     <>
       {canCount && (
@@ -446,7 +459,7 @@ export function MoneyRecon({ desk }: { desk: Desk }) {
                     s: run.status === "reviewed" ? `signed by ${run.reviewed_by ?? "a second seat"}`
                       : "waiting on a signature from a seat that did not raise it" },
                   { k: "Findings", v: `${run.findings}`,
-                    s: `${run.checks} checks asked, ${(run.examined ?? []).length} came back clean` },
+                    s: `${run.checks} checks asked, ${cleanChecks.length} came back clean` },
                   { k: "Net difference", v: desk.fig(run.net_difference),
                     s: `${run.currency} — the book minus the papers, per finding` },
                   { k: "Raised", v: run.raised_by ?? "—", s: desk.when(run.raised_at) }
@@ -460,18 +473,36 @@ export function MoneyRecon({ desk }: { desk: Desk }) {
                 ))}
               </div>
 
-              {(run.examined ?? []).length > 0 && (
+              {cleanChecks.length > 0 && (
                 <div className="mb-16">
                   <p className="mb-8 text-[11px] font-semibold uppercase tracking-[0.14em]" style={soft}>
                     Asked and clean
                   </p>
                   <div className="flex flex-wrap gap-8">
-                    {(run.examined ?? []).map((c: string) => (
+                    {cleanChecks.map((c: string) => (
                       <span key={c} className="rounded-input px-8 py-4 text-[11px]"
                         style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)",
                           color: "var(--ink)" }}>{words(c)}</span>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {(populations.length > 0 || skipped.length > 0) && (
+                <div className="mb-16">
+                  <p className="mb-8 text-[11px] font-semibold uppercase tracking-[0.14em]" style={soft}>
+                    What the count looked at
+                  </p>
+                  {populations.length > 0 && (
+                    <p className="text-xs" style={ink}>{populations.join(" · ")}</p>
+                  )}
+                  {skipped.map((s) => (
+                    <p key={s} className="mt-4 max-w-[80ch] text-xs font-semibold"
+                      style={{ color: "var(--warning)" }}>{s}</p>
+                  ))}
+                  {seen.basis && (
+                    <p className="mt-4 max-w-[80ch] text-[11px]" style={soft}>{seen.basis}</p>
+                  )}
                 </div>
               )}
 

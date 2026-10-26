@@ -343,9 +343,13 @@ export function WebhookLog({ hooks }: { hooks: Hooks }) {
             <>
               <div className="mb-12 flex flex-wrap items-start justify-between gap-12">
                 <div className="min-w-0">
+                  {/* `||`, not `??`: a rail can push `reference: ""`, which is present and says nothing,
+                      and a header that ends in "· " leaves the clerk without the one word the row above
+                      already had the sense to print. */}
                   <h2 className="text-base font-bold" style={ink}>
                     {detail.provider} · {words(detail.event)} ·{" "}
-                    <span className="break-all">{detail.charge?.reference ?? detail.payload?.reference ?? "no reference"}</span>
+                    <span className="break-all">{detail.charge?.reference
+                      || detail.payload?.reference || "no reference"}</span>
                   </h2>
                   <p className="mt-4 text-xs" style={soft}>
                     Arrived {when(detail.arrived_at)} ·{" "}
