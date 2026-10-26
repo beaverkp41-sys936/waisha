@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Activity, Banknote, BookOpen, Boxes, Bug, Building2, CreditCard, Globe, Headphones, Languages, Lightbulb, LogOut,
-  Megaphone, Scale, ScrollText, Settings2, ShieldCheck, Stamp, Tag, TrendingUp, UserCog, Users, type LucideIcon
+  Megaphone, Receipt, Scale, ScrollText, Settings2, ShieldCheck, Stamp, Tag, TrendingUp, UserCog, Users, type LucideIcon
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
@@ -42,6 +42,13 @@ const SCREENS: Screen[] = [
   // different authorities, and a compliance officer who can freeze a line cannot post through it.
   { href: "/control/money", label: "Ledger", icon: BookOpen,
     keys: ["control.money.view", "control.money.post", "control.money.freeze"] },
+  // The freight price book (140). It is called Freight prices because `Pricing` above is the
+  // subscription-plan editor — two seats in one office set what a job costs and what a licence
+  // costs, and a nav that used one word for both would send a clerk to the wrong book. Three
+  // duties, the same split as the ledger: reading the lists, drafting them, and putting one up
+  // for a second seat are three authorities, and the hand that drafts never signs its own paper.
+  { href: "/control/pricing", label: "Freight prices", icon: Receipt,
+    keys: ["control.pricing.view", "control.pricing.manage", "control.pricing.publish"] },
   { href: "/control/tenants", label: "Tenants", icon: Building2, roles: LICENCE, keys: ["control.tenants.manage"] },
   // The second seat's desk. Both keys open it because the register is read by people who
   // cannot sign as well as by people who can — a ban that needs a second opinion must be

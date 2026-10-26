@@ -100,7 +100,11 @@ on conflict (kind, key) do nothing;
 -- ============================================================
 
 create sequence if not exists pricing_card_number_seq;
-grant usage, select on sequence pricing_card_number_seq to app_runtime;
+-- Deliberately granted to nobody, not even the app role. The number is taken by `open_pricing_card` and
+-- `clone_pricing_card` in section 8, and those doors run as their own owner, so no caller ever needs
+-- `nextval`. 134 and 135 say the same about the refs they mint: a role that can take a number without
+-- writing a row leaves the office a hole in its own numbering to explain. The revoke at the end of
+-- section 13 takes back what Supabase grants to every client role by default.
 
 create table if not exists pricing_rate_cards (
   id uuid primary key default gen_random_uuid(),
@@ -275,9 +279,15 @@ create or replace function platform_auth.pricing_card_is_kept() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   if OLD.published_at is not null or OLD.approval_id is not null or OLD.status <> 'draft' then
-    raise exception '140: % is a % card that % a signature, so it is kept. Withdraw it, or supersede it '
-      'with a new version.',
-      OLD.ref, OLD.status, case when OLD.approval_id is not null then 'carries' else 'never had' end;
+    raise exception '140: % is a % card that % a signature, so it is kept: %',
+      OLD.ref, OLD.status,
+      case when OLD.approval_id is not null then 'carries' else 'never had' end,
+      case when OLD.published_at is not null or OLD.status <> 'draft'
+        then 'a price a customer may have been quoted is ended by withdrawing it or by a new version, '
+          || 'never by a delete'
+        else 'a paper that anyone was asked to sign names this card, and the card is kept so the paper '
+          || 'goes on naming something'
+      end;
   end if;
   return OLD;
 end $$;
@@ -2024,6 +2034,14 @@ revoke all on function
   platform_auth.price_a_freight(uuid, date, text, uuid, text, text, text, numeric, int, numeric, int)
 from public, anon, authenticated, service_role;
 
+-- The number a card's ref is minted from. 134 says it of the three refs it cut and 135 of the run
+-- number: a client role that can take a number without writing a row leaves the office a hole in its own
+-- numbering to explain, and a ref that skips is a ref somebody has to account for at the desk. Nothing
+-- outside the doors in section 8 asks for a number, and those doors run as their own owner, so the app
+-- role is revoked along with the rest.
+revoke all on sequence pricing_card_number_seq
+  from public, anon, authenticated, app_runtime, service_role;
+
 -- ============================================================
 -- 14. say what this leaves the platform in
 -- ============================================================
@@ -2036,6 +2054,7 @@ do $$ declare
   v_words int;
   v_leaks int;
   v_trigger_grants int;
+  v_seq_holders int;
   v_live int;
 begin
   select count(*)::int into v_tables from pg_tables
@@ -2134,6 +2153,18 @@ begin
 
   if not exists (select 1 from permissions where key = 'control.pricing.publish') then
     raise exception '140: a price can be published without a duty to ask for it';
+  end if;
+
+  -- The numbering is only worth keeping if nobody outside the doors can spend it. An owner needs no
+  -- grant of its own — and once a grant has been revoked Postgres still writes the owner's own three
+  -- letters into the list — so the entry counted here is any grantee that is not the owner.
+  select coalesce(count(*)::int, 0) into v_seq_holders
+    from pg_class cl cross join aclexplode(cl.relacl) a
+   where cl.relname = 'pricing_card_number_seq' and cl.relkind = 'S'
+     and a.grantee <> cl.relowner;
+  if v_seq_holders <> 0 then
+    raise exception '140: % role(s) besides its owner can take a card number without writing a card, so '
+      'the office''s numbering can be burned from outside a door', v_seq_holders;
   end if;
 
   select count(*)::int into v_live from pricing_rate_cards where status = 'published';
