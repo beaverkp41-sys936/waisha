@@ -88,6 +88,7 @@ import { directoryRoutes } from "./routes/directory.routes.js";
 import { internalRoutes } from "./routes/internal.routes.js";
 import { startBookingTimerLoop } from "./util/booking-timer.js";
 import { startTenantPolicyLoop } from "./util/tenant-policy.js";
+import { startExpiryReminderLoop } from "./util/expiry-reminders.js";
 
 async function main() {
   const app = Fastify({
@@ -223,6 +224,9 @@ async function main() {
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
   startBookingTimerLoop(app.log);
   startTenantPolicyLoop(app.log);
+  // The paper clock (144): a vehicle's insurance, a driver's licence or a company's own transport
+  // licence inside 30, 14 or 7 days of running out. Six hours, because a rung is a day-scale thing.
+  startExpiryReminderLoop(app.log);
   // The boot line and the first beat go out only once the port is actually open: this
   // register describes the process that was serving, and a boot that died before listen
   // belongs in the log, not in the uptime figure.

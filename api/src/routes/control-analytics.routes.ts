@@ -117,8 +117,12 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       "control.customers.gdpr", "control.customers.erase",
       // The marketplace desk (131). `view` reads the marks, the holds, the passes and the listings;
       // `moderate` hides a mark, suspends a card or confirms a money reference; `exclusion` raises
-      // a hold and asks for the second seat's signature, which it cannot spend itself.
+      // a hold and asks for the second seat's signature, which it cannot spend itself. `remind`
+      // (144) warns a company about a paper that is about to run out — an act that does not stop it
+      // trading, so it needs no signature and gets no wider list than the two seats that already
+      // hold a card up or down.
       "control.directory.view", "control.directory.moderate", "control.directory.exclusion",
+      "control.directory.remind",
       // The office's book (133). `view` reads the chart, the register and whether the two sides agree;
       // `post` opens an account and writes a movement; `freeze` stops an account, and is deliberately
       // not `post` — the hand that halts somebody else's money is the one that settles disputes.

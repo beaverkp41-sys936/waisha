@@ -67,13 +67,16 @@ const SCREENS: Screen[] = [
   // the last of which is also the only seat allowed to read a whole identity number back.
   { href: "/control/customers", label: "Verification", icon: ShieldCheck,
     keys: ["control.customers.view", "control.customers.verify", "control.customers.manage"] },
-  // The marketplace desk (131). Three duties because it does three different jobs: reading the four
-  // registers, moving a mark or a card, and raising a dated hold — the last of which it can only
-  // raise, never sign. `roles` stays so a licence seat that predates the matrix keeps the door it
-  // always had; the keys are what let compliance_officer, platform_analyst, support_engineer and
-  // customer_service_agent see it at all.
+  // The marketplace desk (131, 144). Four duties because it does four different jobs: reading the
+  // registers, moving a mark or a card, raising a dated hold — the last of which it can only
+  // raise, never sign — and warning a company about a paper of its own that is about to run out.
+  // `remind` is on the list so the seat that holds it is not left with a fifth tab it cannot open;
+  // a view-only analyst keeps the link and simply sees no press. `roles` stays so a licence seat
+  // that predates the matrix keeps the door it always had; the keys are what let compliance_officer,
+  // platform_analyst, support_engineer and customer_service_agent see it at all.
   { href: "/control/directory", label: "Directory", icon: Globe, roles: LICENCE,
-    keys: ["control.directory.view", "control.directory.moderate", "control.directory.exclusion"] },
+    keys: ["control.directory.view", "control.directory.moderate", "control.directory.exclusion",
+      "control.directory.remind"] },
   { href: "/control/recommendations", label: "Inbox", icon: Lightbulb,
     keys: ["control.recommendations.view", "control.recommendations.manage"] },
   { href: "/control/staff", label: "Staff", icon: UserCog, keys: ["control.staff.view", "control.staff.manage"] },

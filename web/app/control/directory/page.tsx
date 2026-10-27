@@ -9,6 +9,7 @@ const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 const VIEW = "control.directory.view";
 const MODERATE = "control.directory.moderate";
 const EXCLUSION = "control.directory.exclusion";
+const REMIND = "control.directory.remind";
 
 // ---------- what the four registers answer ----------
 
@@ -73,6 +74,26 @@ type Paper = {
 type HeldAnswer = { ref: string; ends_at: string; reason_code: string;
   company_name: string; subject_name: string } | null;
 
+/** 144's two reads. `due` is what the register's own ladder says is owed today; `ledger` is every
+ *  warning that was ever raised, each carrying the receipt of the send that followed it. */
+type DueRow = {
+  tenant_id: string; tenant_name: string; subject_kind: string; subject_id: string;
+  subject_name: string; document_kind: string; threshold_days: number;
+  expiry_date: string; days_left: number;
+};
+type WarnRow = {
+  id: string; tenant_id: string; tenant_name: string; subject_kind: string; subject_id: string;
+  subject_name: string; document_kind: string; threshold_days: number; expiry_date: string;
+  days_left: number; days_now: number; state: "told" | "waiting" | "past"; landed: boolean;
+  paper_still_says_so: boolean; notice: string; actor_kind: "system" | "control";
+  actor_role: string | null;
+  delivery: { recipients?: number; email?: { sent: number; failed: number };
+    sms?: { sent: number; failed: number }; to?: { sms?: string; email?: string }[];
+    errors?: string[]; sent_at?: string };
+  raised_at: string; total: number;
+};
+type WarnCounts = { all: number; told: number; waiting: number; past: number; due: number };
+
 // ---------- words the desk is allowed to use ----------
 
 const METHODS: Record<string, string> = {
@@ -105,9 +126,31 @@ const HOLD_EDGES: Record<string, string> = {
 };
 const WINDOWS = [7, 14, 30, 90, 180, 365];
 
-type Tab = "passes" | "listings" | "marks" | "holds";
+/** 144's nine papers, in the words a clerk uses. The register's own sentence is what goes to the
+ *  company; these are only the labels on the rows that hold it. */
+const PAPERS: Record<string, string> = {
+  insurance: "Insurance", inspection: "Inspection certificate", road_licence: "Road licence",
+  licence: "Driving licence", regulatory_tra: "TRA licence", regulatory_brela: "BRELA certificate",
+  regulatory_tpa: "TPA licence", regulatory_other: "Regulatory licence",
+  transport_licence: "Transport licence"
+};
+const WARN_STATES: [string, string][] = [
+  ["all", "Every warning on the ledger"], ["told", "A send reached the company"],
+  ["waiting", "Raised, nothing has landed yet"], ["past", "The date went by with no notice landed"]
+];
+const WARN_SUBJECTS: [string, string][] = [
+  ["vehicle", "Vehicle papers"], ["driver", "Driving licences"],
+  ["licence", "Regulatory licences"], ["company", "A company's own licence"]
+];
+const WARN_EDGES: Record<string, string> = {
+  told: "var(--success)", waiting: "var(--warning)", past: "var(--danger)"
+};
+const RUNGS = [30, 14, 7];
+
+type Tab = "passes" | "listings" | "marks" | "holds" | "expiry";
 const TABS: [Tab, string][] = [
-  ["passes", "Passes"], ["listings", "Listings"], ["marks", "Marks"], ["holds", "Blacklist"]
+  ["passes", "Passes"], ["listings", "Listings"], ["marks", "Marks"], ["holds", "Blacklist"],
+  ["expiry", "Paper warnings"]
 ];
 /** Only two of the four registers have a file behind them; a pass queue is a screen, not a record. */
 const EXPORT_REGISTER: Partial<Record<Tab, string>> = { marks: "ratings", holds: "exclusions" };
@@ -140,6 +183,15 @@ const when = (iso: string | null | undefined) => iso
   ? new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "—";
 const day = (iso: string | null | undefined) => iso
   ? new Date(iso).toLocaleDateString("en-GB", { dateStyle: "medium" }) : "—";
+/** 144 spells its dates as `YYYY-MM-DD` text because the register's own `to_char` wrote them, and a
+ *  plain date read as UTC midnight prints the evening before it in any zone west of Greenwich — the
+ *  day-shift this repository has now been bitten by twice. Parsed at noon, it is the day it says. */
+const dateOnly = (d: string | null | undefined) => {
+  if (!d) return "—";
+  return /^\d{4}-\d{2}-\d{2}$/.test(d)
+    ? new Date(`${d}T12:00:00`).toLocaleDateString("en-GB", { dateStyle: "medium" })
+    : day(d);
+};
 const word = (list: [string, string][], key: string | null | undefined, fallback?: string) =>
   list.find(([k]) => k === key)?.[1] ?? fallback ?? "—";
 
@@ -159,6 +211,32 @@ function heldWords(j: any, fallback: string) {
   const until = d.endsAt ? ` until ${day(d.endsAt)}` : "";
   return `${errorMessage(j, fallback)} Lift ${d.ref ?? "the exclusion"}${until} on the Blacklist tab `
     + "first — this button cannot release a hold, and is not meant to.";
+}
+
+/** 144's refusals all arrive as one CONFLICT with six different reasons, and each closes the press
+ *  differently: two of them say the register has already answered, two say the date moved, one says
+ *  the rung was wrong and one says the company is not warnable at all. The register's sentence comes
+ *  first; these words say what a clerk can do next, because "conflict" alone is not an answer. */
+function warnWords(j: any, fallback: string) {
+  const d = (j?.error?.details ?? []).find((x: any) => typeof x?.reason === "string");
+  const head = errorMessage(j, fallback);
+  if (!d) return head;
+  const next: Record<string, string> = {
+    already_warned: "A new warning needs a new expiry date on the paper — until one is recorded, "
+      + "this rung stays closed and the ledger keeps what was already sent.",
+    paper_moved: `This board was read before the renewal. The paper now carries ${d.expiryDate
+      ? dateOnly(d.expiryDate) : "a different date"}; re-read the due list and press the row that names `
+      + "the date the register holds.",
+    expired: "After a date has gone by this ledger stops warning and the office acts — a hold is "
+      + "written on the Blacklist tab.",
+    not_due: `It has ${d.daysLeft} days left, so nothing is owed it yet. The clock will raise its `
+      + "30-day warning when the date comes inside the widest rung.",
+    due_rung: `Press the ${d.dueRung}-day warning instead — a rung cannot be taken out of order, `
+      + "and the register will not let a looser notice follow a tighter one.",
+    tenant_status: `This company is ${d.tenantStatus ?? "not trading"}. A lapsed, suspended or `
+      + "still-pending account is dealt with as an account, not by a paper reminder."
+  };
+  return next[d.reason] ? `${head} ${next[d.reason]}` : head;
 }
 
 export default function ControlDirectoryPage() {
@@ -189,6 +267,11 @@ export default function ControlDirectoryPage() {
   const [hCounts, setHCounts] = useState<HoldCounts | null>(null);
   const [hFilter, setHFilter] = useState({ state: "all", kind: "", q: "", limit: "30", offset: "0" });
 
+  const [due, setDue] = useState<{ rows: DueRow[]; due: number; as_of: string } | null>(null);
+  const [ledger, setLedger] = useState<{ rows: WarnRow[]; as_of: string; total: number } | null>(null);
+  const [xCounts, setXCounts] = useState<WarnCounts | null>(null);
+  const [xFilter, setXFilter] = useState({ state: "all", kind: "", limit: "30", offset: "0" });
+
   const [paper, setPaper] = useState<Paper | null>(null);
   const [paperFor, setPaperFor] = useState<string | null>(null);
 
@@ -204,6 +287,7 @@ export default function ControlDirectoryPage() {
   const canView = perms.includes(VIEW);
   const canModerate = perms.includes(MODERATE);
   const canHold = perms.includes(EXCLUSION);
+  const canRemind = perms.includes(REMIND);
 
   const seq = useRef(0);
   const pseq = useRef(0);
@@ -266,6 +350,42 @@ export default function ControlDirectoryPage() {
     setHCounts(j.counts ?? null);
   }, []);
 
+  /** What the register's own ladder says is owed a warning today. Read with the ledger rather than
+   *  instead of it: the two answer different questions, and a desk that sees only the due list cannot
+   *  tell "nothing is owed" from "everything owed has already been told". */
+  const loadDue = useCallback(async (key: number) => {
+    const res = await fetch(`${API}/api/v1/control/directory/expiry/due?limit=50`,
+      { credentials: "include" });
+    if (key !== seq.current) return;
+    if (res.status === 403) { setForbidden(true); return; }
+    if (!res.ok) {
+      setError(errorMessage(await res.json().catch(() => ({})),
+        "The paper clock would not say what it owes."));
+      setDue({ rows: [], due: 0, as_of: "" });
+      return;
+    }
+    const j = await res.json();
+    setDue({ rows: j.rows ?? [], due: Number(j.due ?? 0), as_of: j.as_of ?? "" });
+  }, []);
+
+  const loadLedger = useCallback(async (key: number, f: typeof xFilter) => {
+    const p = new URLSearchParams({ state: f.state, limit: f.limit, offset: f.offset });
+    if (f.kind) p.set("kind", f.kind);
+    const res = await fetch(`${API}/api/v1/control/directory/expiry/ledger?${p}`,
+      { credentials: "include" });
+    if (key !== seq.current) return;
+    if (res.status === 403) { setForbidden(true); return; }
+    if (!res.ok) {
+      setError(errorMessage(await res.json().catch(() => ({})),
+        "The ledger of warnings would not answer."));
+      setLedger({ rows: [], as_of: "", total: 0 });
+      return;
+    }
+    const j = await res.json();
+    setLedger({ rows: j.rows ?? [], as_of: j.as_of ?? "", total: Number(j.rows?.[0]?.total ?? 0) });
+    setXCounts(j.counts ?? null);
+  }, []);
+
   useEffect(() => {
     (async () => {
       const m = await fetch(`${API}/api/v1/control/auth/me`, { credentials: "include" });
@@ -285,11 +405,13 @@ export default function ControlDirectoryPage() {
       if (tab === "passes") loadPasses(key);
       else if (tab === "listings") loadListings(key, lq);
       else if (tab === "marks") loadMarks(key, mFilter);
+      else if (tab === "expiry") { loadDue(key); loadLedger(key, xFilter); }
       else loadHolds(key, hFilter);
     }, 260);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, canView, lq, mFilter, hFilter, loadPasses, loadListings, loadMarks, loadHolds]);
+  }, [tab, canView, lq, mFilter, hFilter, xFilter,
+      loadPasses, loadListings, loadMarks, loadHolds, loadDue, loadLedger]);
 
   /** Re-read the tab that just moved. A caption restating a fact and the row it restates must come
    *  off the same read, or the desk shows a hold that has already been lifted. */
@@ -298,10 +420,12 @@ export default function ControlDirectoryPage() {
     if (tab === "passes") loadPasses(key);
     else if (tab === "listings") loadListings(key, lq);
     else if (tab === "marks") loadMarks(key, mFilter);
+    else if (tab === "expiry") { loadDue(key); loadLedger(key, xFilter); }
     else loadHolds(key, hFilter);
     if (paperFor) readPaper(paperFor);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, lq, mFilter, hFilter, loadPasses, loadListings, loadMarks, loadHolds, paperFor]);
+  }, [tab, lq, mFilter, hFilter, xFilter, loadPasses, loadListings, loadMarks, loadHolds,
+      loadDue, loadLedger, paperFor]);
 
   async function readPaper(id: string) {
     const key = ++pseq.current;
@@ -515,6 +639,51 @@ export default function ControlDirectoryPage() {
     setHeld((await res.json()).held ?? null);
   }
 
+  // ---------- the paper warnings (144) ----------
+
+  /**
+   * One rung of one paper, from the due list or from a ledger row that never landed.
+   *
+   * The desk names the paper and the rung and nothing else: the register resolves the live date, the
+   * days left, the sentence and who at the company is told, so this press sends exactly what the
+   * clock would have sent. Two taps, because the act leaves the building — it goes to a real company
+   * on mail and SMS.
+   */
+  async function warn(c: DueRow | WarnRow) {
+    const r = await send("/control/directory/expiry/remind", {
+      subject_kind: c.subject_kind, subject_id: c.subject_id, document_kind: c.document_kind,
+      threshold_days: c.threshold_days, expiry_date: c.expiry_date
+    });
+    if (!r.ok) {
+      setError(warnWords(r.j, "The warning could not be raised."));
+      refresh();
+      return;
+    }
+    const paper = `${PAPERS[c.document_kind] ?? c.document_kind} on ${c.subject_name}`;
+    setNotice(r.j?.re_armed
+      ? `The ${c.threshold_days}-day warning on ${paper} was already on the ledger with no send on `
+        + "it, so it has been raised again against the same date."
+      : `The ${c.threshold_days}-day warning on ${paper} is on the ledger.`);
+    refresh();
+  }
+
+  /** The whole clock, on one press. Three an hour at the door because a pass walks up to fifty
+   *  papers and sends on two channels for each. */
+  async function runClock() {
+    const r = await send("/control/directory/expiry/sweep", { limit: 50 });
+    if (!r.ok) { setError(r.message); return; }
+    const o = r.j ?? {};
+    const errs: string[] = o.errors ?? [];
+    setNotice(`The clock walked ${o.due ?? 0} paper(s) owed a warning on ${dateOnly(o.as_of)}: `
+      + `${o.raised ?? 0} raised, ${o.delivered ?? 0} reached the company`
+      + `${o.skipped ? `, ${o.skipped} stood down` : ""}.`
+      + (errs.length ? ` ${errs.length} send(s) reported a fault — ${errs[0]}` : "")
+      + (o.delivered === 0 && o.raised > 0
+        ? " Nothing landed: the ledger files all of them as waiting and every one stays pressable."
+        : ""));
+    refresh();
+  }
+
   // ---------- the CSV ----------
 
   async function exportCsv() {
@@ -590,7 +759,7 @@ export default function ControlDirectoryPage() {
             </h1>
             <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
               Signed in as {me?.email ?? "a platform seat"} with {(me?.roles ?? []).join(", ")
-                || "no platform duty"}. Reading the four registers needs <code>{VIEW}</code>.
+                || "no platform duty"}. Reading the five registers needs <code>{VIEW}</code>.
             </p>
             <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
               Confirming a seeker&apos;s money reference, verifying or suspending a card and taking a
@@ -602,6 +771,13 @@ export default function ControlDirectoryPage() {
               hold takes effect on one seat&apos;s word: the signature is spent on{" "}
               <Link href="/control/approvals" className="underline">Approvals</Link> by somebody who
               did not raise it.
+            </p>
+            <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+              Warning a company about a paper that is about to run out needs{" "}
+              <code>{REMIND}</code>. It sits beside the two duties above and is deliberately neither:
+              a notice changes nothing about a company&apos;s standing, so it asks no second
+              signature — and it is not drawn wider than the desk it sits on, because the seats that
+              can put a card down are the seats that should say a date is coming.
             </p>
             <Link href="/control" className="waisha-btn mt-16 inline-block rounded-input px-16 py-8 text-xs font-semibold">
               Back to the control panel
@@ -634,6 +810,16 @@ export default function ControlDirectoryPage() {
     [hCounts?.drivers ?? "—", "On drivers"]
   ];
 
+  /** Read off the ledger's own counts, which are worked out over the whole register rather than over
+   *  the filter on screen — the same rule the two boards above it follow. */
+  const warnStats: [any, string, string?][] = [
+    [xCounts?.due ?? "—", "Owed a warning today", "var(--warning)"],
+    [xCounts?.told ?? "—", "A company was reached", "var(--success)"],
+    [xCounts?.waiting ?? "—", "Raised, nothing landed", "var(--warning)"],
+    [xCounts?.past ?? "—", "Date gone by, no notice landed", "var(--danger)"],
+    [xCounts?.all ?? "—", "Warnings on the ledger"]
+  ];
+
   const pickedCard = pick?.find((r) => r.listing_id === raise.subjectId) ?? null;
   const markOk = draft.markReason.trim().length >= SENT;
   const sigOk = draft.reason.trim().length >= SENT;
@@ -650,8 +836,9 @@ export default function ControlDirectoryPage() {
         <div>
           <p className="text-sm font-bold tracking-[0.08em] text-white">T ENGO AEGIS Control</p>
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "var(--adm-accent)" }}>
-            Marketplace desk · {canHold ? "cards, marks and holds"
-              : canModerate ? "cards and marks" : "read-only"}
+            {`Marketplace desk · ${canHold ? "cards, marks and holds"
+              : canModerate ? "cards and marks" : "read-only"}${
+              canRemind ? " · and the papers a company is warned about" : ""}`}
           </p>
         </div>
         <AnnouncementTicker />
@@ -665,11 +852,13 @@ export default function ControlDirectoryPage() {
               What a company is worth on the board, and what takes it off
             </h1>
             <p className="mt-8 max-w-[80ch] text-sm" style={{ color: "var(--ink-soft)" }}>
-              Four registers on one desk. Nothing here moves money: a pass is a reference somebody
+              Five registers on one desk. Nothing here moves money: a pass is a reference somebody
               typed after paying the office out of band. A mark is what a seeker or a counterparty
               said about a card, and the office can take it off the board but never delete it. A hold
               is a dated exclusion — written by one seat, signed by another, and the only hand that
-              pulls a company out of the searches.
+              pulls a company out of the searches. A warning is what the company was told about a date
+              before any of that: three rungs per paper, each one its own row, and a rung whose notice
+              never landed stays pressable.
             </p>
           </div>
           {canHold && (
@@ -997,6 +1186,7 @@ export default function ControlDirectoryPage() {
               {v}
               {k === "passes" && passes ? ` (${passes.length})` : ""}
               {k === "holds" && hCounts ? ` (${hCounts.total})` : ""}
+              {k === "expiry" && due ? ` (${due.due})` : ""}
             </button>
           ))}
           {EXPORT_REGISTER[tab] && (
@@ -1506,6 +1696,240 @@ export default function ControlDirectoryPage() {
                 )}
               </section>
             )}
+          </section>
+        )}
+
+        {/* ---------------- the paper clock ---------------- */}
+        {tab === "expiry" && (
+          <section className="mt-20">
+            <div className="mt-0 grid gap-12" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+              {warnStats.map(([value, text, tone]) => (
+                <div key={text} className="rounded-card border p-12"
+                  style={{ borderColor: "var(--line)", background: "var(--surface)" }}>
+                  <p className="text-base font-bold tabular-nums" style={{ color: tone ?? "var(--ink)" }}>{value}</p>
+                  <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: "var(--ink-soft)" }}>
+                    {text}
+                  </p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+              The five numbers are the whole register, not this filter. A rung counts as told only once a
+              send has <em>landed</em> — the register will not close a rung on a message the provider
+              refused, which is why &quot;raised, nothing landed&quot; is the number to act on while the
+              mail domain is unverified. Every one of those rows stays pressable, so a company that was
+              never told can still be told.
+            </p>
+
+            {canRemind && (
+              <div className="mt-16 flex flex-wrap items-center gap-12">
+                <button type="button" className={headBtn} disabled={busy}
+                  style={armed === "clock"
+                    ? { borderColor: "var(--adm-accent)", color: "var(--ink)",
+                      background: "color-mix(in srgb, var(--adm-accent) 16%, transparent)" }
+                    : { borderColor: "var(--adm-accent)", color: "var(--ink)" }}
+                  onClick={twoTap("clock", () => void runClock())}>
+                  {busy ? "Walking the register…"
+                    : armed !== "clock" ? "Run the clock now" : "Tap again — it sends to real companies"}
+                </button>
+                <p className="max-w-[60ch] text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                  The same pass the clock runs on its own every six hours, up to fifty papers. It raises
+                  only the tightest rung each paper is owed and sends the sentence the register wrote, so
+                  pressing it cannot tell a company anything the clock would not have.
+                </p>
+              </div>
+            )}
+
+            <div className="mt-28">
+              <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink)" }}>
+                Owed a warning today
+              </h2>
+              <p className="mt-6 max-w-[80ch] text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                {due
+                  ? `${due.due} paper(s) on the platform come inside one of the three rungs on ${
+                    dateOnly(due.as_of)}. This is the register's own ladder, not a screen calculation — `
+                    + "a paper appears here once and only once, at its tightest unwarned rung."
+                  : "Reading the ladder…"}
+              </p>
+              <List loading={due === null} empty={!!due && due.rows.length === 0}
+                emptyWords={"Nothing on the platform comes inside a 30, 14 or 7-day rung today. "
+                  + "Every paper here has that much warning left on it, which is the state a fleet "
+                  + "should be in."}
+                head={["The paper", "Whose", "It runs out", "Days left", "Warning owed", ""]}
+                rows={(due?.rows ?? []).map((c) => {
+                  const arm = `due-${c.subject_id}-${c.document_kind}-${c.threshold_days}`;
+                  return [
+                    <span key="a" className="break-words">
+                      <span className="font-semibold">{PAPERS[c.document_kind] ?? c.document_kind}</span>
+                      <span className="block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                        {word(WARN_SUBJECTS, c.subject_kind)}
+                      </span>
+                    </span>,
+                    <span key="b" className="break-words">
+                      <span className="font-semibold">{c.subject_name}</span>
+                      <span className="block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                        {c.tenant_name}
+                      </span>
+                    </span>,
+                    <span key="c" className="whitespace-nowrap text-[11px] tabular-nums">
+                      {dateOnly(c.expiry_date)}
+                    </span>,
+                    <span key="d" className="text-[11px] font-semibold tabular-nums"
+                      style={{ color: c.days_left <= 7 ? "var(--danger)"
+                        : c.days_left <= 14 ? "var(--warning)" : "var(--ink)" }}>
+                      {c.days_left} day(s)
+                    </span>,
+                    <span key="e">
+                      <Chip edge="var(--adm-accent)">{c.threshold_days}-day</Chip>
+                      <span className="mt-4 block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                        {RUNGS[RUNGS.length - 1] === c.threshold_days
+                          ? "the last rung before the date"
+                          : `${c.threshold_days} days out, of ${RUNGS.join(" / ")}`}
+                      </span>
+                    </span>,
+                    <span key="f">
+                      {canRemind && (
+                        <button type="button" className={mini} disabled={busy}
+                          style={armed === arm
+                            ? { borderColor: "var(--adm-accent)", color: "var(--ink)",
+                              background: "color-mix(in srgb, var(--adm-accent) 16%, transparent)" }
+                            : { borderColor: "var(--adm-accent)", color: "var(--ink)" }}
+                          onClick={twoTap(arm, () => void warn(c))}>
+                          {busy ? "Sending…" : armed !== arm ? "Warn it" : "Tap again to send"}
+                        </button>
+                      )}
+                    </span>
+                  ];
+                })}
+              />
+            </div>
+
+            <div className="mt-28">
+              <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink)" }}>
+                Every warning the ledger holds
+              </h2>
+              <div className="mt-16 flex flex-wrap gap-12">
+                <select value={xFilter.state} aria-label="Filter the ledger by state"
+                  onChange={(e) => setXFilter({ ...xFilter, state: e.target.value, offset: "0" })}
+                  className="rounded-input border px-12 py-8 text-sm" style={boxStyle}>
+                  {WARN_STATES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+                <select value={xFilter.kind} aria-label="Filter the ledger by subject"
+                  onChange={(e) => setXFilter({ ...xFilter, kind: e.target.value, offset: "0" })}
+                  className="rounded-input border px-12 py-8 text-sm" style={boxStyle}>
+                  <option value="">Any paper</option>
+                  {WARN_SUBJECTS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+              <List loading={ledger === null} empty={!!ledger && ledger.rows.length === 0}
+                emptyWords={"No warning on the ledger under this filter. On a register this young that "
+                  + "is honest — nothing has been sent yet — and the due list above is what says whether "
+                  + "anything is owed."}
+                head={["Raised", "Whose", "The paper", "What the register said", "State", "What came back", ""]}
+                rows={(ledger?.rows ?? []).map((r) => {
+                  const arm = `warn-${r.id}`;
+                  const d = r.delivery ?? {};
+                  const told = (d.email?.sent ?? 0) + (d.sms?.sent ?? 0);
+                  const missed = (d.email?.failed ?? 0) + (d.sms?.failed ?? 0);
+                  return [
+                    <span key="a" className="break-words text-[10px]">
+                      <span className="block font-semibold tabular-nums">
+                        {r.threshold_days}-day warning
+                      </span>
+                      <span className="block" style={{ color: "var(--ink-soft)" }}>
+                        {when(r.raised_at)}
+                      </span>
+                      <span className="block" style={{ color: "var(--ink-soft)" }}>
+                        {r.actor_kind === "system" ? "raised by the clock"
+                          : `raised at this desk by ${r.actor_role ?? "a seat"}`}
+                      </span>
+                    </span>,
+                    <span key="b" className="break-words">
+                      <span className="font-semibold">{r.subject_name}</span>
+                      <span className="block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                        {word(WARN_SUBJECTS, r.subject_kind)} on {r.tenant_name}
+                      </span>
+                    </span>,
+                    <span key="c" className="break-words text-[11px]">
+                      <span className="block font-semibold">
+                        {PAPERS[r.document_kind] ?? r.document_kind}
+                      </span>
+                      <span className="block tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                        warned for {dateOnly(r.expiry_date)}
+                      </span>
+                      <span className="mt-4 block text-[10px] tabular-nums"
+                        style={{ color: r.days_now < 0 ? "var(--danger)" : "var(--ink-soft)" }}>
+                        {r.days_now < 0 ? `${-r.days_now} day(s) since that date`
+                          : `${r.days_now} day(s) left on it now`}
+                      </span>
+                      {!r.paper_still_says_so && (
+                        <span className="mt-4 block">
+                          <Chip edge="var(--warning)">the paper has since moved</Chip>
+                        </span>
+                      )}
+                    </span>,
+                    <span key="d" className="max-w-[46ch] break-words text-[11px]" style={{ color: "var(--ink)" }}>
+                      {r.notice}
+                    </span>,
+                    <span key="e">
+                      <Chip edge={WARN_EDGES[r.state]}>{word(WARN_STATES, r.state, r.state)}</Chip>
+                      <span className="mt-4 block text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                        {r.landed ? "a send reached the register's rule" : "nothing has landed on it"}
+                      </span>
+                    </span>,
+                    <span key="f" className="break-words text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                      {told || missed || (d.to?.length ?? 0) > 0 ? (
+                        <>
+                          <span className="block">
+                            {d.recipients ?? 0} recipient(s) · {told} landed, {missed} not
+                          </span>
+                          {(d.to ?? []).map((t, i) => (
+                            <span key={i} className="block tabular-nums">
+                              {[t.sms, t.email].filter(Boolean).join(" / ") || "no channel on this one"}
+                            </span>
+                          ))}
+                          {d.sent_at && <span className="block">{when(d.sent_at)}</span>}
+                          {(d.errors ?? []).slice(0, 2).map((e, i) => (
+                            <span key={`e${i}`} className="block max-w-[34ch]" style={{ color: "var(--danger)" }}>
+                              {e}
+                            </span>
+                          ))}
+                        </>
+                      ) : r.state === "past" ? (
+                        <span>the date went by with no receipt on the row</span>
+                      ) : (
+                        <span>no send has answered this row yet</span>
+                      )}
+                    </span>,
+                    <span key="g">
+                      {canRemind && r.state === "waiting" && (
+                        <button type="button" className={mini} disabled={busy}
+                          style={armed === arm
+                            ? { borderColor: "var(--adm-accent)", color: "var(--ink)",
+                              background: "color-mix(in srgb, var(--adm-accent) 16%, transparent)" }
+                            : { borderColor: "var(--adm-accent)", color: "var(--ink)" }}
+                          onClick={twoTap(arm, () => void warn(r))}>
+                          {busy ? "Sending…" : armed !== arm ? "Send it again" : "Tap again to send"}
+                        </button>
+                      )}
+                      {r.state === "past" && (
+                        <span className="block max-w-[22ch] text-[10px]" style={{ color: "var(--ink-soft)" }}>
+                          the ledger keeps this as the record of a warning that never arrived; after a
+                          date has gone by the office acts on the Blacklist tab, it does not warn.
+                        </span>
+                      )}
+                    </span>
+                  ];
+                })}
+              />
+              <Pager filter={xFilter} setFilter={setXFilter} total={ledger?.total ?? 0} />
+              <p className="mt-8 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                {`Read as of ${dateOnly(ledger?.as_of)}. The clock walks this register every six hours `
+                  + "and once when the api starts, and a seat at this desk can walk it by hand; both go "
+                  + "through the same body, so the row, the audit line and the words sent are identical "
+                  + "whoever pulled the lever."}
+              </p>
+            </div>
           </section>
         )}
       </main>

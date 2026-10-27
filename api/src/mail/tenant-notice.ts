@@ -110,7 +110,10 @@ function smsText(a: AppliedAction): string {
   return raw.length > 300 ? `${raw.slice(0, 297)}…` : raw;
 }
 
-const phoneOf = (t: NoticeTarget): string | null => {
+/** Exported for `mail/expiry-notice.ts`: the same blob has to be opened the same way by every
+ *  notice the office sends, and two copies of a decrypt-and-validate is how one channel starts
+ *  quietly failing while the other looks fine. */
+export const phoneOf = (t: NoticeTarget): string | null => {
   if (!t.phone) return null;
   try {
     const plain = decryptField(Buffer.from(t.phone, "hex"));
@@ -122,10 +125,10 @@ const phoneOf = (t: NoticeTarget): string | null => {
   }
 };
 
-const maskPhone = (p: string) =>
+export const maskPhone = (p: string) =>
   p.length > 6 ? `${p.slice(0, 3)} ${"*".repeat(Math.min(7, p.length - 6))} ${p.slice(-3)}` : "***";
 
-const maskEmail = (e: string) => {
+export const maskEmail = (e: string) => {
   const at = e.indexOf("@");
   return at > 0 ? `${e[0]}***${e.slice(at)}` : "***";
 };

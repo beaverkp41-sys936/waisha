@@ -10,6 +10,9 @@ async function main() {
 
   const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
   await client.connect();
+  // A migration's census block has one job: to say out loud what it found. Without this the
+  // line is raised into a socket nobody reads, and the file's own proof of its numbers is lost.
+  client.on("notice", (n) => console.log("notice", n.message));
 
   await client.query(
     "create table if not exists schema_migrations (name text primary key, applied_at timestamptz default now())"

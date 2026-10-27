@@ -5,6 +5,7 @@ import { ApiError } from "../util/errors.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
 import { runBookingTimers } from "../util/booking-timer.js";
 import { runTenantPolicy } from "../util/tenant-policy.js";
+import { runExpiryReminders } from "../util/expiry-reminders.js";
 
 /**
  * Internal scheduler surface — never called by a browser.
@@ -45,5 +46,13 @@ export async function internalRoutes(app: FastifyInstance, _opts: unknown) {
   app.post("/internal/tenant-policy/tick", async (req) => {
     await assertInternalTick(req);
     return runTenantPolicy();
+  });
+
+  // The paper clock: a vehicle's insurance, a driver's licence or a company's own transport licence
+  // inside 30, 14 or 7 days of running out. Same function the in-process interval calls, so a cron
+  // on a sleeping host cannot warn on a different ladder than the app does.
+  app.post("/internal/expiry-reminders/tick", async (req) => {
+    await assertInternalTick(req);
+    return runExpiryReminders();
   });
 }

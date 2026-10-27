@@ -5,6 +5,9 @@ import { ApiError } from "../util/errors.js";
 import { enforceRateLimit } from "../security/ratelimit.js";
 import { requireControl } from "./control.routes.js";
 import { requireControlPermission } from "./control-analytics.routes.js";
+import {
+  EXPIRY_CANDIDATES_SQL, EXPIRY_LEDGER_SQL, runExpiryReminders, raiseExpiryReminder, SWEEP_LIMIT
+} from "../util/expiry-reminders.js";
 
 /**
  * The marketplace desk (131; task #343) — the marks a company earns, the hold that takes a card off
@@ -44,6 +47,7 @@ import { requireControlPermission } from "./control-analytics.routes.js";
 const VIEW = "control.directory.view";
 const MODERATE = "control.directory.moderate";
 const EXCLUSION = "control.directory.exclusion";
+const REMIND = "control.directory.remind";
 
 const SENTENCE = z.string().trim().min(8).max(600);
 const LIMIT = z.coerce.number().int().min(1).max(100).default(30);
@@ -57,6 +61,15 @@ const UUID = z.string().uuid();
 const MARK_STATES = ["all", "live", "answered", "replied", "hidden", "withdrawn"] as const;
 const HOLD_STATES = ["all", "live", "running", "waiting", "raised", "lifted", "refused"] as const;
 const SUBJECTS = ["company", "vehicle", "driver"] as const;
+/** 144's own words, spelled as the board tests them. A state outside this list would reach the
+ *  ledger as an empty page and read like an empty register, which is 131's argument restated. */
+const EXPIRY_STATES = ["all", "told", "waiting", "past"] as const;
+const EXPIRY_SUBJECTS = ["vehicle", "driver", "licence", "company"] as const;
+/** The nine papers the register keeps a date for — the same list the table's CHECK holds, so a
+ *  word the ledger cannot file is refused at the door rather than by a constraint. */
+const EXPIRY_DOCUMENTS = ["insurance", "inspection", "road_licence", "licence", "regulatory_tra",
+  "regulatory_brela", "regulatory_tpa", "regulatory_other", "transport_licence"] as const;
+const EXPIRY_RUNGS = [30, 14, 7] as const;
 /** 121's vocabulary, unchanged, so the word a desk picks for a hold is the word the ban register
  *  already uses for the same conduct. */
 const REASONS = ["terms_violation", "long_idle", "payment_default", "abuse", "complaint",
@@ -93,9 +106,21 @@ function definerRefusal(j: any, fallback: string): ApiError | null {
       [{ field: j.field ?? "reason", message: String(j.message ?? fallback) }]);
   }
   if (j.status === "conflict") {
-    return new ApiError("CONFLICT", String(j.message ?? fallback), 409,
-      j.open_id ? [{ reason: "signature_open", approvalId: j.open_id }]
-        : j.exclusion_status ? [{ reason: "paper_finished", state: j.exclusion_status }] : []);
+    // 144's five refusals are the same HTTP act with five different reasons, and the desk needs the
+    // reason as a word rather than as a sentence it has to re-read: "warned at every rung", "the
+    // renewal is already recorded", "not due yet" each close a panel differently.
+    const expiry = j.already_warned ? "already_warned"
+      : j.paper_moved ? "paper_moved"
+      : j.expired ? "expired"
+      : j.not_due ? "not_due"
+      : j.due_rung !== undefined && j.due_rung !== null ? "due_rung"
+      : j.tenant_status ? "tenant_status" : null;
+    return new ApiError("CONFLICT", String(j.message ?? fallback), 409, [
+      ...(j.open_id ? [{ reason: "signature_open", approvalId: j.open_id }] : []),
+      ...(j.exclusion_status ? [{ reason: "paper_finished", state: j.exclusion_status }] : []),
+      ...(expiry ? [{ reason: expiry, dueRung: j.due_rung ?? null, daysLeft: j.days_left ?? null,
+        tenantStatus: j.tenant_status ?? null, expiryDate: j.expiry_date ?? null }] : [])
+    ]);
   }
   return new ApiError("UPSTREAM_ERROR",
     String(j.message ?? "The register gave an answer this desk cannot read."), 502);
@@ -372,6 +397,90 @@ export async function controlDirectoryRoutes(app: FastifyInstance, _opts: unknow
       if (refusal) throw refusal;
       return j;
     });
+
+  // ============================
+  // THE PAPER WARNINGS — 144's ledger of what a company was told about a date
+  // ============================
+
+  /**
+   * What is owed a warning today. The list comes from the same definer the clock reads, and the
+   * rung on each row is the rung `expiry_rung_due` picked, so the desk is looking at the register's
+   * own next step rather than at a second copy of the ladder that could disagree with it.
+   */
+  app.get("/control/directory/expiry/due", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, VIEW);
+    const q = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) })
+      .strict().parse(req.query);
+    const { rows } = await pool.query(EXPIRY_CANDIDATES_SQL, [q.limit]);
+    return rows[0]?.c ?? { due: 0, rows: [] };
+  });
+
+  /**
+   * The ledger. Three states and what each one means to a clerk: `told` is evidence the company was
+   * reached, `waiting` is a warning raised whose send has not yet landed, and `past` is the honest
+   * record of a notice that never arrived and whose date has gone by.
+   *
+   * `paper_still_says_so` is the column that keeps the board from lying after a renewal: a warning
+   * filed against 19 Nov stays on the ledger when the paper now reads 19 Nov next year, and the row
+   * says which date the register holds today.
+   */
+  app.get("/control/directory/expiry/ledger", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, VIEW);
+    const q = z.object({
+      state: z.enum(EXPIRY_STATES).default("all"),
+      kind: z.enum(EXPIRY_SUBJECTS).optional(),
+      limit: LIMIT,
+      offset: OFFSET
+    }).strict().parse(req.query);
+    return board(EXPIRY_LEDGER_SQL, [q.state, q.kind ?? null, q.limit, q.offset]);
+  });
+
+  /**
+   * Warn now, rather than waiting for the clock.
+   *
+   * The desk names the paper and the rung; the register resolves the live date, the days left, the
+   * words and the recipients. Nothing here can put a sentence into the notice — that is 144's point,
+   * and it is why the route takes no `message` field. The recipient list the definer returns is
+   * dropped before the answer reaches the browser; what comes back is the masked receipt.
+   */
+  app.post("/control/directory/expiry/remind", { preHandler: [requireControl] },
+    async (req: any) => {
+      await requireControlPermission(req, REMIND);
+      await enforceRateLimit(`dir-remind:${req.control.user_id}`, 20, 3600);
+      const body = z.object({
+        subject_kind: z.enum(EXPIRY_SUBJECTS),
+        subject_id: UUID,
+        document_kind: z.enum(EXPIRY_DOCUMENTS),
+        threshold_days: z.number().int().refine(
+          (v) => (EXPIRY_RUNGS as readonly number[]).includes(v),
+          "A warning is raised at 30, 14 or 7 days."),
+        expiry_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional()
+      }).strict().parse(req.body);
+
+      const { result, receipt } = await raiseExpiryReminder({
+        subjectKind: body.subject_kind, subjectId: body.subject_id,
+        documentKind: body.document_kind, thresholdDays: body.threshold_days,
+        expiryDate: body.expiry_date ?? null,
+        actorKind: "control", actorUserId: req.control.user_id,
+        actorRole: role(req), actorIp: req.ip
+      });
+      const refusal = definerRefusal(result, "The warning could not be raised.");
+      if (refusal) throw refusal;
+      return { ...result, receipt };
+    });
+
+  /**
+   * Run the paper clock now over the whole due list. The same function the six-hour interval calls,
+   * so a press cannot apply a rule the timer would not. Capped at three an hour because each pass
+   * sends real messages on two channels to real directors.
+   */
+  app.post("/control/directory/expiry/sweep", { preHandler: [requireControl] }, async (req: any) => {
+    await requireControlPermission(req, REMIND);
+    await enforceRateLimit(`dir-expiry-sweep:${req.control.user_id}`, 3, 3600);
+    const body = z.object({ limit: z.coerce.number().int().min(1).max(200).optional() })
+      .strict().parse(req.body ?? {});
+    return runExpiryReminders(body.limit ?? SWEEP_LIMIT);
+  });
 
   // ============================
   // THE PASSES AND THE LISTINGS — 061's two queues, on duties
