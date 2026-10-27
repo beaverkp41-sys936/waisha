@@ -4,12 +4,16 @@ import { ControlNav } from "@/components/ControlNav";
 import { PricingAsk, type Corridor, type Desk, type Dim } from "./ask";
 import { PricingCardPanel } from "./card";
 import { ChargePanel, ChargesBoard, type AddKind } from "./charges";
+import { CutsBoard, CutPanel, type Rung, type Transaction } from "./cuts";
+import { ReadingPanel, ReadingsBoard } from "./readings";
 
 const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:4000";
 
 const VIEW = "control.pricing.view";
 const MANAGE = "control.pricing.manage";
 const PUBLISH = "control.pricing.publish";
+/** 133's duty, borrowed by 142's pointer door: saying a cut has been carried is a claim about the book. */
+const MONEY_POST = "control.money.post";
 
 const cell = "w-full rounded-input border px-8 py-8 text-sm";
 const cellStyle = { borderColor: "var(--adm-line)", background: "var(--milk)" };
@@ -21,10 +25,10 @@ const td = "border-b px-8 py-8 align-top text-sm";
 const PAGE = 30;
 const ROAD_PAGE = 60;
 
-type Tab = "lists" | "charges" | "roads" | "ask";
+type Tab = "lists" | "charges" | "cuts" | "readings" | "roads" | "ask";
 const TABS: [Tab, string][] = [
-  ["lists", "Price lists"], ["charges", "Levies and codes"],
-  ["roads", "Roads it prices"], ["ask", "Ask the register"]
+  ["lists", "Price lists"], ["charges", "Levies and codes"], ["cuts", "The cuts"],
+  ["readings", "Cuts taken"], ["roads", "Roads it prices"], ["ask", "Ask the register"]
 ];
 
 /** The five states a card can be in, and the pile the desk filters it into. `counts` from the board
@@ -37,6 +41,8 @@ const PILES: [string, string][] = [
 const HEAD: Record<Tab, string> = {
   lists: "The office’s price lists",
   charges: "The levies and the codes that sit on top of a price",
+  cuts: "The cut the office takes, and the cut it owes",
+  readings: "The cuts the register has taken",
   roads: "The corridors this book can price",
   ask: "What a job costs"
 };
@@ -47,6 +53,16 @@ const SUB: Record<Tab, string> = {
     + "quote after the freight is priced: a levy stacked on it, a code taken off it, each with its own "
     + "ceiling, its own window and its own version ladder. A code also hands out places, and the ceiling "
     + "is counted from the claims, never stored on the row.",
+  cuts: "An agreement is a cut on one kind of transaction — money in, or money out — agreed with one "
+    + "rung: this company, the plan it is actually on, or the office’s own standing cut. A percent is "
+    + "worked out in the transaction’s own money and a flat figure in a named money refuses a transaction "
+    + "in another; a least and a most hold what one transaction contributes. A cut is agreed only in the "
+    + "office’s book, and no button here puts one live — that is the second seat’s signature.",
+  readings: "A reading is the register saying this transaction was cut under that agreement on that day, "
+    + "at the figure it computed — never a percentage multiplied on this screen. A cut closes only when a "
+    + "134 payout or a 133 posting carries it: the pointer names the movement, the door reads the money "
+    + "out of the book and refuses one that does not equal the cut, and claiming the book already moved "
+    + "needs the pen that may move it.",
   roads: "A price that names a road prices that road. The register refuses a per-kilometre figure on a "
     + "corridor nobody measured, so this board says which of its roads have a distance and how many lists "
     + "already carry a line along them.",
@@ -109,7 +125,7 @@ const today = () => {
 };
 
 /**
- * The freight price desk (140).
+ * The office's price desk (140, 141, 142).
  *
  * Three duties, and the desk shows the difference between them rather than hiding it. Reading is
  * `control.pricing.view`: the board, one list, its memory, its corridors and the two doors that answer
@@ -119,12 +135,21 @@ const today = () => {
  * signs, through 121's `price_publish` effect, because a desk that could edit a figure and publish it
  * alone is a desk that never needed a second person.
  *
+ * A fourth key is borrowed rather than added. 142's pointer door — the one that says a cut has been
+ * carried — asks 133's `control.money.post` on top of the pricing pen, because claiming the book already
+ * moved is a claim about the book, and the hand that may make it is the hand that may move it. The desk
+ * passes that answer down as `desk.can.moneyPost` so the readings panel can say so beside the press
+ * instead of letting the door refuse it.
+ *
  * Every assertion the panels make about what is allowed comes from migration 140's own refusals
- * (`paper_is_out`, `already_lived`, `figures_are_typed`, `no_prices`, `no_start`, `nothing_to_clone`), so
- * a button that is disabled states the rule that disables it instead of inventing a friendlier one.
+ * (`paper_is_out`, `already_lived`, `figures_are_typed`, `no_prices`, `no_start`, `nothing_to_clone`) and
+ * 142's (`already_assessed`, `carrier_is_other_money`, `no_money_duty`, `not_the_office`), so a button
+ * that is disabled states the rule that disables it instead of inventing a friendlier one.
  *
  * The whole book is one office's: the doors read the tenant out of the control session and nothing else,
- * so a seat sees its own company's prices and no other's.
+ * so a seat sees its own company's prices and no other's. A cut is the one exception the register itself
+ * makes — commission is the office's own act, so 142's doors refuse a book that is not the platform's
+ * (`not_the_office`) and say which book to open.
  */
 export default function ControlPricingPage() {
   const [me, setMe] = useState<any>(null);
@@ -150,6 +175,17 @@ export default function ControlPricingPage() {
   // so the page asks for a re-read by counting rather than by holding the board's query here too.
   const [chargesNonce, setChargesNonce] = useState(0);
   const refreshCharges = useCallback(async () => { setChargesNonce(n => n + 1); }, []);
+  // 142's two registers of vocabulary — the rungs a cut is agreed on and the transactions it is cut from —
+  // ride on the cuts board's answer and are held here because the readings desk builds its chips from the
+  // same list. A second read of `pricing_commission_sources` would be a second answer to one question.
+  const [rungs, setRungs] = useState<Rung[]>([]);
+  const [sources, setSources] = useState<Transaction[]>([]);
+  const [pickedCutId, setPickedCutId] = useState<string | null>(null);
+  const [cutsNonce, setCutsNonce] = useState(0);
+  const refreshCuts = useCallback(async () => { setCutsNonce(n => n + 1); }, []);
+  const [pickedReadingId, setPickedReadingId] = useState<string | null>(null);
+  const [readingsNonce, setReadingsNonce] = useState(0);
+  const refreshReadings = useCallback(async () => { setReadingsNonce(n => n + 1); }, []);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -162,14 +198,16 @@ export default function ControlPricingPage() {
   const canView = perms.includes(VIEW);
   const canManage = perms.includes(MANAGE);
   const canPublish = perms.includes(PUBLISH);
+  const canMoneyPost = perms.includes(MONEY_POST);
 
   const notify = useCallback((s: string) => { setNotice(s); setError(null); }, []);
   const fault = useCallback((s: string) => { setError(s); setNotice(null); }, []);
   // Stable across renders so a panel's read effect re-runs when the card it is showing changes, and not
   // every time the page repaints behind it.
   const desk: Desk = useMemo(() => ({
-    call, fig, today, notify, fault, can: { manage: canManage, publish: canPublish }
-  }), [notify, fault, canManage, canPublish]);
+    call, fig, today, notify, fault,
+    can: { manage: canManage, publish: canPublish, moneyPost: canMoneyPost }
+  }), [notify, fault, canManage, canPublish, canMoneyPost]);
 
   const readBoard = useCallback(async (q: typeof f) => {
     const parts = [`limit=${PAGE}`, `offset=${q.offset}`];
@@ -234,6 +272,23 @@ export default function ControlPricingPage() {
   }, [roadQ.search, roadQ.offset, canView, readRoads]);
   useEffect(() => { setRoadQ(x => ({ ...x, offset: 0 })); }, [roadQ.search]);
 
+  // `pricing_commission_sources` has no door of its own — it rides on the cuts board's answer — so a seat
+  // that comes to the readings desk first asks for one row of it there, rather than being shown a chip list
+  // with no transactions in it. One row, because the registers are the same on every page.
+  useEffect(() => {
+    if (!canView || sources.length > 0 || tab !== "readings") return;
+    const t = setTimeout(() => {
+      void (async () => {
+        try {
+          const j = await call("/control/pricing/cuts?limit=1");
+          if (Array.isArray(j.subjects) && j.subjects.length) setRungs(j.subjects as Rung[]);
+          if (Array.isArray(j.sources) && j.sources.length) setSources(j.sources as Transaction[]);
+        } catch { /* the board below carries its own fault */ }
+      })();
+    }, 260);
+    return () => clearTimeout(t);
+  }, [canView, sources.length, tab]);
+
   function pickTab(t: Tab) { setTab(t); setError(null); setNotice(null); }
 
   /** A press the desk is proud of: the board is re-read, so the pile counts beside the new list are the
@@ -281,11 +336,17 @@ export default function ControlPricingPage() {
               <code>{VIEW}</code>.
             </p>
             <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
-              Opening a draft, writing a figure, filing a corridor, cloning a version and stopping a price
-              need <code>{MANAGE}</code>. Putting a list up for a second seat, and refusing a paper that is
-              out, need <code>{PUBLISH}</code> — which 140 keeps away from <code>{MANAGE}</code> on purpose,
-              the way 135 kept the count away from the pen: a seat that writes the figures and signs them
-              alone has not needed anybody since the day the register opened.
+              Opening a draft, writing a figure, filing a corridor, cloning a version, stopping a price and
+              taking a cut need <code>{MANAGE}</code>. Putting a list up for a second seat, and refusing a
+              paper that is out, need <code>{PUBLISH}</code> — which 140 keeps away from <code>{MANAGE}</code>{" "}
+              on purpose, the way 135 kept the count away from the pen: a seat that writes the figures and
+              signs them alone has not needed anybody since the day the register opened.
+            </p>
+            <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
+              Saying a cut has been carried needs one key that is not a pricing one: <code>{MONEY_POST}</code>{" "}
+              is 133&rsquo;s pen, and 142 borrows it because the sentence &ldquo;this cut was paid&rdquo; is a
+              claim about the book. A seat that prices but cannot post reads the readings and points at
+              nothing.
             </p>
             <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
               Nothing on this desk makes a price live, in any seat. That is decided on Approvals by the seat
@@ -550,6 +611,37 @@ export default function ControlPricingPage() {
               <ChargePanel key={pickedChargeId} desk={desk} dims={dims} corridors={corridors.rows}
                 kinds={kinds} chargeId={pickedChargeId} onClose={() => setPickedChargeId(null)}
                 onGoto={setPickedChargeId} refresh={refreshCharges} />
+            )}
+          </>
+        )}
+
+        {tab === "cuts" && (
+          <>
+            {/* Keyed on the agreement, not on the panel: a second cut opened beside this one must not
+                inherit the sentence typed into the first one's paper, and a clone's answer is a different
+                row — so the desk moves to it instead of showing the new draft under the old number. */}
+            <CutsBoard desk={desk} rungs={rungs} sources={sources} onRungs={setRungs}
+              onSources={setSources} nonce={cutsNonce} pickedId={pickedCutId}
+              onPick={(id) => setPickedCutId(id || null)} />
+            {pickedCutId && (
+              <CutPanel key={pickedCutId} desk={desk} rungs={rungs} sources={sources}
+                cutId={pickedCutId} onClose={() => setPickedCutId(null)} onGoto={setPickedCutId}
+                onGotoReading={(id) => { setTab("readings"); setPickedReadingId(id); setError(null); }}
+                refresh={refreshCuts} />
+            )}
+          </>
+        )}
+
+        {tab === "readings" && (
+          <>
+            <ReadingsBoard desk={desk} sources={sources} nonce={readingsNonce} pickedId={pickedReadingId}
+              onPick={(id) => setPickedReadingId(id || null)}
+              onGotoCut={(id) => { setTab("cuts"); setPickedCutId(id); setError(null); }} />
+            {pickedReadingId && (
+              <ReadingPanel key={pickedReadingId} desk={desk} readingId={pickedReadingId}
+                onClose={() => setPickedReadingId(null)}
+                onGotoCut={(id) => { setTab("cuts"); setPickedCutId(id); setError(null); }}
+                refresh={refreshReadings} />
             )}
           </>
         )}

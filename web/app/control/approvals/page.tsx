@@ -25,6 +25,13 @@ interface ApprovalRow {
     payee_ref_tail?: string; total_out?: string; source_kind?: string; source_ref?: string;
     purpose?: string; raised_by_name?: string; label?: string; lines?: number;
     fee_total?: string; total_amount?: string;
+    // 140–142's price papers. The figure is the text the register printed and the window is the two
+    // dates on the paper, so a signature can disagree with its price only by the paper's own digits.
+    // A cut nests its rung, its transaction and its wallet as objects — read through `cut()` below,
+    // because a payout's `payee` is a plain name and the two must not share one declared type.
+    code?: string; line_count?: number; kind_label?: string; basis?: string; value?: string;
+    value_said?: string; cap?: string; min_amount?: string; max_uses?: number | null;
+    version?: number; route?: string; effective_from?: string; effective_to?: string;
     pays?: { ref?: string; payee?: string; amount?: string; fee?: string; rail?: string }[] };
   payload_sha256: string;
   proposed_name: string | null; proposed_role: string | null; proposed_at: string;
@@ -37,7 +44,12 @@ interface ApprovalRow {
     reached?: Record<string, number>; kept?: { key: string; label: string; rows: number }[];
     target_kind?: string; payout_id?: string; batch_id?: string; hold_id?: string;
     payee?: string; fee_amount?: string; lines?: number; accrued?: number; posting?: string;
-    discharge_kind?: string; to_payee?: string; back_to_payer?: string; subject_ref?: string } | null;
+    discharge_kind?: string; to_payee?: string; back_to_payer?: string; subject_ref?: string;
+    // The receipt a price signature left behind. A publish, a charge and a cut each write their own
+    // ref and version, and all three say how many earlier versions of the same code they closed.
+    code?: string; version?: number; basis?: string; value?: string; effective_from?: string;
+    superseded_versions?: number; subject_name?: string; source_kind?: string;
+    payee_name?: string; max_uses?: number | null; uses_taken?: number } | null;
   expires_at: string;
 }
 interface Counts {
@@ -98,10 +110,26 @@ interface SpentMoney {
   raised_by?: string; released_by?: string; discharged_by?: string;
 }
 
+/**
+ * The answer to a spent price signature — a card, a charge or a cut. All three go live in the call
+ * that spends the signature and all three close the versions they supersede in the same statement,
+ * which is why the receipt counts them: a seat that publishes a second price for one code needs to
+ * be told it replaced one, not that it added one. Nothing is emailed about a tariff.
+ */
+interface SpentPrice {
+  approval_id: string; ref?: string; code?: string; version?: number; currency?: string;
+  basis?: string; value?: string; effective_from?: string; superseded_versions?: number;
+  published_by?: string; card_id?: string; addendum_id?: string; kind?: string;
+  max_uses?: number | null; uses_taken?: number; rate_id?: string; subject_kind?: string;
+  subject_name?: string; source_kind?: string; payee_kind?: string; payee_name?: string;
+}
+
 const ACTIONS: [string, string][] = [
   ["", "Any act"], ["tenant.block", "A proposed block"], ["tenant.close", "A proposed close"],
   ["service.refund", "A proposed refund"], ["customer.erase", "A proposed erasure"],
-  ["money.payout", "A proposed payout"], ["money.escrow", "A proposed escrow plan"]
+  ["money.payout", "A proposed payout"], ["money.escrow", "A proposed escrow plan"],
+  ["pricing.publish", "A proposed price list"], ["pricing.addendum", "A proposed charge or code"],
+  ["pricing.commission", "A proposed commission"]
 ];
 const TABS: [string, string][] = [
   ["pending", "Waiting"], ["applied", "Done"], ["rejected", "Refused"],
@@ -135,23 +163,89 @@ const isHold = (r: ApprovalRow) => r.action === "money.escrow";
 /** A batch is one signature over many papers, so it says how many before it says anything else. */
 const isBatch = (r: ApprovalRow) => r.action === "money.payout" && r.target_kind === "payout_batch";
 const isPayout = (r: ApprovalRow) => r.action === "money.payout" && !isBatch(r);
+/**
+ * 140, 141 and 142 each put a signature on this same register, and all three are a price rather than
+ * a ban: a freight price list, a levy or a discount code, a commission agreement. None of them names
+ * a company's state or sends a letter, and each one's payload is the paper its own door hashed — so
+ * every figure below is read out of those bytes, never typed into this page.
+ */
+const isPublish = (r: ApprovalRow) => r.action === "pricing.publish";
+const isAddendum = (r: ApprovalRow) => r.action === "pricing.addendum";
+const isCommission = (r: ApprovalRow) => r.action === "pricing.commission";
+const isPrice = (r: ApprovalRow) => isPublish(r) || isAddendum(r) || isCommission(r);
+/** A cut's paper nests the rung, the transaction and the wallet as objects, while a payout's `payee`
+ *  is a plain name — so the cut is read through its own view rather than a row type that would let
+ *  either of the two answer for the other. */
+interface CutPaper {
+  subject?: { kind?: string; name?: string; says?: string };
+  source?: { kind?: string; label?: string | null; side?: string };
+  payee?: { kind?: string; name?: string; says?: string };
+  currency?: string | null;
+  window?: { effective_from?: string; effective_to?: string | null };
+  // The version is nested on a cut's paper and a plain number on a card's, so the two are read apart
+  // rather than through one field that would print `[object Object]` on a signature.
+  version?: { number?: number; supersedes?: string | null };
+  value_said?: string; floor_amount?: string | null; cap?: string | null;
+}
+const cut = (r: ApprovalRow) => (r.payload ?? {}) as unknown as CutPaper;
+/** A register label dropped into the middle of a sentence. `pricing_commission_sources.label` is
+ *  written for the top of a picker — “A freight invoice” — and this desk quotes it inside a sentence,
+ *  so the capital comes off rather than the desk inventing its own word for the transaction. */
+const midSentence = (s?: string | null) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
+/** Which side of the book a transaction sits on, in the pricing desk's words: `cuts.tsx` names the
+ *  same column “money coming in” / “money going out”, and a bare `(in)` after a transaction on a
+ *  signature a seat is about to spend is not a word anyone can act on. */
+const cutSide = (side?: string | null) =>
+  side === "in" ? "money coming in" : side === "out" ? "money going out" : undefined;
+/** The transaction a cut is taken out of. A receipt carries `source_kind`, which is a key; the paper
+ *  carries the label the picker was built from, so the seat that signed reads the name it chose. */
+const cutSource = (c: CutPaper, key?: string) =>
+  midSentence(c.source?.label ?? c.source?.kind) ?? key ?? "a transaction";
+/** A least or a most, with its money beside it. The paper carries the currency the pair is kept in,
+ *  and a figure printed with no money on a page that quotes two currencies is 138's defect. */
+const cutBound = (v?: string | null, currency?: string | null) =>
+  `${fig(v)}${currency ? ` ${currency}` : ""}`;
+/** The cut's figure in the paper's own words — a percent with its fourth decimal, a flat with its
+ *  money. The receipt only ever has to name the same fields back, so the fallback is what the desk
+ *  says when a paper is not beside it; neither branch multiplies a percentage. */
+const cutFigure = (e: { value?: string; currency?: string; basis?: string }, said?: string) => said
+  ?? `${fig(e.value)}${e.currency ? ` ${e.currency}` : ""}`
+    + (e.basis === "flat" ? " a flat sum" : e.basis ? " percent of the transaction" : "");
+/** What the price is, in the form the paper printed it. A cut carries its own sentence; a charge
+ *  carries a figure and the basis word the register knows it by; a card is its lines and its money. */
+const priceFigure = (r: ApprovalRow): string => {
+  const p = r.payload ?? {};
+  if (isCommission(r)) return cut(r).value_said ?? `${fig(p.value)} ${p.currency ?? ""}`.trim();
+  if (isAddendum(r)) {
+    return `${fig(p.value)}${p.currency ? ` ${p.currency}` : ""}`
+      + ` on a ${p.basis ?? "an unstated"} basis`;
+  }
+  return `${p.line_count ?? 0} line(s) priced in ${p.currency ?? "one money"}`;
+};
 /** What the row is about, said the way a seat can act on it. A refund paper's target_name is
  *  the uuid behind the request, and no one signs a uuid — the armed tap and the export both
  *  have to carry the ref the caller was quoted. */
 const subject = (r: ApprovalRow) =>
-  isRefund(r) || isErase(r) || isMoney(r) ? r.payload?.ref ?? r.target_name : r.target_name;
+  isRefund(r) || isErase(r) || isMoney(r) || isPrice(r)
+    ? r.payload?.ref ?? r.target_name : r.target_name;
 /** The rows on the board whose subject is a paper rather than a company. */
-const isPaper = (r: ApprovalRow) => isRefund(r) || isErase(r) || isMoney(r);
+const isPaper = (r: ApprovalRow) => isRefund(r) || isErase(r) || isMoney(r) || isPrice(r);
 /** The words that follow a paper's ref on the row's first line. A refund or an erasure is about the
  *  caller's company; a payout is about who it pays and how the money travels; a batch is about how
- *  many papers one signature covers; a hold is about whose wallet the money is waiting on. */
+ *  many papers one signature covers; a hold is about whose wallet the money is waiting on; a price
+ *  is about which code goes live and what it is taken on. */
 const about = (r: ApprovalRow) =>
   isHold(r) ? `${r.payload?.payee_holder ?? "a waiting payee"} · held against `
     + `${r.payload?.subject_kind ?? "a job"}`
     : isBatch(r) ? `${r.payload?.lines ?? "?"} line(s) · ${r.payload?.label ?? "a batch"}`
       : isPayout(r) ? `${r.payload?.payee ?? "a payee"} · `
         + `${r.payload?.rail ?? r.payload?.rail_code ?? "a rail"}`
-        : r.payload?.company_name ?? "a caller";
+        : isCommission(r) ? `${cut(r).subject?.name ?? "a rung"} · `
+          + `${cut(r).source?.label ?? cut(r).source?.kind ?? "a transaction"}`
+          : isPrice(r) ? `${r.payload?.code ?? "a code"} · `
+            + `${isPublish(r) ? `${r.payload?.line_count ?? 0} line(s)`
+              : r.payload?.kind_label ?? r.payload?.kind ?? "a charge"}`
+            : r.payload?.company_name ?? "a caller";
 
 /**
  * What the money signature actually buys, read off the hashed payload rather than typed into this
@@ -222,6 +316,126 @@ function appliedMoneyWords(r: ApprovalRow): string {
     + (isBatch(r) ? ` · ${e.accrued ?? 0} of ${e.lines ?? "?"} line(s) booked` : "")
     + " — the obligation is in the book, and the cash is answered on the ledger desk the day it goes"
     + `${e.posting ? `, movement ${e.posting}` : ""}`;
+}
+
+/**
+ * What the price signature actually puts in force, read off the hashed paper rather than typed into
+ * this page. All three of 140–142's papers close the versions they supersede in the same statement
+ * that publishes them, so each sentence names the code it goes live under and the day it starts — and
+ * a commission adds that it changes the next transaction, never a reading already taken.
+ */
+function priceWords(r: ApprovalRow): string {
+  const p = r.payload ?? {};
+  const c = cut(r);
+  const from = c.window?.effective_from ?? p.effective_from;
+  const to = c.window?.effective_to ?? p.effective_to;
+  const days = `in force from ${from ?? "the day it is signed"}`
+    + `${to ? ` until ${to}` : " and no end written on it"}`;
+  if (isPublish(r)) {
+    return `Puts the price list ${p.code ?? "as drafted"} “${p.label ?? ""}” version `
+      + `${p.version ?? "?"} in force — ${priceFigure(r)} — ${days}. Signing it closes every earlier `
+      + "version of the same code in this same statement, because two prices in force for one code is "
+      + "the answer no resolver should have to choose between.";
+  }
+  if (isAddendum(r)) {
+    return `Puts the ${p.kind_label ?? p.kind ?? "charge"} ${p.code ?? "as drafted"}`
+      + ` “${p.label ?? ""}” version ${p.version ?? "?"} in force: ${priceFigure(r)}`
+      + `${p.cap ? `, never more than ${fig(p.cap)} ${p.currency ?? ""}` : ""}`
+      + `${p.min_amount ? `, never less than ${fig(p.min_amount)} ${p.currency ?? ""}` : ""}`
+      + `${p.route && p.route !== "any route" ? `, on ${p.route}` : ""}`
+      + `${p.max_uses ? `, for at most ${p.max_uses} use(s)` : ""} — ${days}. A charge that is live `
+      + "moves onto the next quote a clerk builds; nothing already priced is re-summed by a signature.";
+  }
+  const side = cutSide(c.source?.side);
+  return `${c.subject?.says ?? `The cut agreed with ${c.subject?.name ?? "a rung"}`} — `
+    + `${c.value_said ?? priceFigure(r)}`
+    + `${c.floor_amount && Number(c.floor_amount) > 0
+      ? `, never under ${cutBound(c.floor_amount, c.currency)}` : ""}`
+    + `${c.cap ? `, never over ${cutBound(c.cap, c.currency)}` : ""} — taken out of `
+    + `${cutSource(c)}${side ? `, ${side}` : ""}, kept by ${c.payee?.name ?? "the office"}`
+    + `: ${c.payee?.says ?? "the office keeps it"}. Version ${c.version?.number ?? p.version ?? "?"}`
+    + `${c.version?.supersedes ? ` ends ${c.version.supersedes}` : ""}, ${days}. A signature `
+    + "here changes what the next transaction is worth to the office — it re-assesses no reading that "
+    + "has already been taken, and the paper's own figures are what the arithmetic replays.";
+}
+
+/** What a spent price signature left on the register, read off the result written in the same
+ *  transaction that spent it. The receipt has to keep saying which of the three papers went live and
+ *  how many versions of its code it closed, because a seat that reads "published" as "added" will
+ *  publish the same code twice. */
+function appliedPriceWords(r: ApprovalRow): string {
+  const e = r.result ?? {};
+  const ref = e.ref ?? r.payload?.ref ?? "the paper";
+  const closed = e.superseded_versions ? ` · ${e.superseded_versions} earlier version(s) closed` : "";
+  if (isCommission(r)) {
+    const c = cut(r);
+    return `${ref} v${e.version ?? c.version?.number ?? "?"} is in force on `
+      + `${e.subject_name ?? c.subject?.name ?? "its rung"} against ${cutSource(c, e.source_kind)}`
+      + `: ${cutFigure(e, c.value_said)}`
+      + `, kept by ${e.payee_name ?? c.payee?.name ?? "the office"}, `
+      + `from ${e.effective_from ?? "—"}${closed}. `
+      + "No reading already taken was re-assessed by it.";
+  }
+  if (isAddendum(r)) {
+    return `${ref} v${e.version ?? r.payload?.version ?? "?"} in force: ${fig(e.value)}`
+      + `${e.currency ? ` ${e.currency}` : ""} on a ${e.basis ?? "—"} basis`
+      + `${e.max_uses ? `, ${e.uses_taken ?? 0} of ${e.max_uses} use(s) taken` : ""}`
+      + `, from ${e.effective_from ?? "—"}${closed}`;
+  }
+  return `${ref} v${e.version ?? r.payload?.version ?? "?"} — ${e.code ?? "its code"} priced in `
+    + `${e.currency ?? "one money"}, in force from ${e.effective_from ?? "—"}${closed}`;
+}
+
+/**
+ * What the desk is told the moment its price signature is spent. The paper went live in this call and
+ * the register row is the only notice it gets: no director is emailed about a tariff, a levy or a
+ * cut, and the pricing desk's own read-back is where the desk that signed checks it.
+ */
+function PriceSpent({ e, kind, paper }: { e: SpentPrice;
+  kind: "publish" | "addendum" | "commission"; paper?: CutPaper }) {
+  const c = paper ?? {};
+  const side = cutSide(c.source?.side);
+  // A card or a charge closes earlier versions of a code; a cut's chain is one rung and one
+  // transaction, so its receipt names the agreement it ends by its own ref. Printing "that code" on a
+  // cut would borrow a levy's vocabulary for a register row that has none.
+  const older = e.code ?? (kind === "commission" ? e.ref : undefined);
+  const closed = e.superseded_versions
+    ? `${e.superseded_versions} earlier version${e.superseded_versions === 1 ? "" : "s"} of `
+      + `${older ?? (kind === "commission" ? "that agreement" : "that code")} closed by the same signature`
+    : "no earlier version of it was in force";
+  const figure = `${fig(e.value)}${e.currency ? ` ${e.currency}` : ""}`;
+  const head = kind === "commission" ? (e.subject_name ?? c.subject?.name ?? "its rung")
+    : kind === "addendum" ? (e.code ?? "the charge") : (e.code ?? "the price list");
+  const said = kind === "commission"
+    ? `The cut of ${cutFigure(e, c.value_said)} is in force on ${head} against `
+      + `${cutSource(c, e.source_kind)}${side ? `, ${side}` : ""}, kept by `
+      + `${e.payee_name ?? c.payee?.name ?? "the office"}, from `
+      + `${e.effective_from ?? "the day it was signed"} — ${closed}.`
+    : kind === "addendum"
+      ? `${e.code ?? "The charge"} is in force at ${figure} on a ${e.basis ?? "—"} basis`
+        + `${e.max_uses ? `, ${e.uses_taken ?? 0} of ${e.max_uses} use(s) taken` : ""}, from `
+        + `${e.effective_from ?? "the day it was signed"} — ${closed}.`
+      : `${e.code ?? "The price list"} is in force priced in ${e.currency ?? "one money"}, from `
+        + `${e.effective_from ?? "the day it was signed"} — ${closed}.`;
+  return (
+    <div role="status" className="mb-16 rounded-input px-12 py-8 text-sm"
+      style={{ background: "color-mix(in srgb, var(--success) 10%, transparent)",
+        borderLeft: "4px solid var(--success)", color: "var(--ink)" }}>
+      <p className="text-xs font-semibold uppercase tracking-[0.12em]">
+        Signed and published · {e.ref ?? "the paper"} · v{e.version ?? "?"} · {head}
+      </p>
+      <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>{said}</p>
+      <p className="mt-4 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+        {kind === "commission"
+          ? "Nothing was assessed by this signature: the cut is asked of the next transaction that "
+            + "matches it, and a reading already taken keeps the figures it was taken at."
+          : <>Nobody is emailed that a price went live — the register row and the memory lines written
+            on the paper are the answer. Read it back on the{" "}
+            <Link href="/control/pricing" className="underline"
+              style={{ color: "var(--adm-accent)" }}>pricing desk</Link>.</>}
+      </p>
+    </div>
+  );
 }
 
 /**
@@ -296,6 +510,12 @@ export default function ApprovalsPage() {
   const [spentRefund, setSpentRefund] = useState<SpentRefund | null>(null);
   const [spentErasure, setSpentErasure] = useState<SpentErasure | null>(null);
   const [spentMoney, setSpentMoney] = useState<SpentMoney | null>(null);
+  // The receipt carries which of the three price papers went live, because the one body shape answers
+  // for a card, a charge and a cut and a panel that guesses would quote a levy as a price list. A cut
+  // travels with the paper it was signed on: the receipt has `source_kind` and `value`, while the
+  // label and the fourth-decimal figure the seat read only exist in the hashed payload.
+  const [spentPrice, setSpentPrice] = useState<{ e: SpentPrice; paper?: CutPaper;
+    kind: "publish" | "addendum" | "commission" } | null>(null);
 
   const LIMIT = 30;
 
@@ -339,7 +559,7 @@ export default function ApprovalsPage() {
 
   function openRow(id: string) {
     setSign(sign === id ? null : id); setNote(""); setArmed(null);
-    setSpent(null); setSpentRefund(null); setSpentErasure(null); setSpentMoney(null);
+    setSpent(null); setSpentRefund(null); setSpentErasure(null); setSpentMoney(null); setSpentPrice(null);
   }
 
   /**
@@ -354,7 +574,7 @@ export default function ApprovalsPage() {
    */
   async function decide(row: ApprovalRow, decision: "approve" | "reject") {
     setBusy(true); setError(null);
-    setSpent(null); setSpentRefund(null); setSpentErasure(null); setSpentMoney(null);
+    setSpent(null); setSpentRefund(null); setSpentErasure(null); setSpentMoney(null); setSpentPrice(null);
     try {
       const res = await fetch(`${API}/api/v1/control/approvals/${row.id}/${decision}`, {
         method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
@@ -369,9 +589,10 @@ export default function ApprovalsPage() {
         setError(j?.error?.message ?? (decision === "approve"
           ? "The signature did not land. Nothing was changed."
           : "The refusal did not land."));
-        if (res.status === 403 || res.status === 409 || res.status === 410) {
-          setSign(null); setNote("");
-        }
+        // …and the seat stays where it was. A 409 here means the register answered “no”, not that the
+        // paper moved out of reach, so the sentence the seat typed — which is the reason it means to
+        // say no — is the one thing this desk must not throw away on the way back. 134's money desk
+        // learned it the same way: a refusal belongs in the alert, and the form keeps what was typed.
         return;
       }
       if (decision === "approve") {
@@ -382,6 +603,13 @@ export default function ApprovalsPage() {
         // neither is the ban's shape. Reading one as the other would sign money and show a blank.
         else if (row.action === "money.payout" || row.action === "money.escrow")
           setSpentMoney(j as SpentMoney);
+        // 140–142 each answer with the paper that went live: its ref, its version and the count of the
+        // earlier versions the same statement closed. None of them is the ban's shape, and a panel that
+        // read one as the other would publish a price and show `· →`.
+        else if (isPublish(row)) setSpentPrice({ e: j as SpentPrice, kind: "publish" });
+        else if (isAddendum(row)) setSpentPrice({ e: j as SpentPrice, kind: "addendum" });
+        else if (isCommission(row)) setSpentPrice({ e: j as SpentPrice, kind: "commission",
+          paper: cut(row) });
         else setSpent(j as Applied);
         setNote("");
       } else {
@@ -457,7 +685,13 @@ export default function ApprovalsPage() {
           sends nothing — the cash is confirmed by its own door on the day it goes, and the book takes its
           second movement then — while signing a plan moves the money out of escrow in this same call. The
           figures, the rail and the payee are read out of the paper the proposing door wrote and hashed,
-          and this page shows the last digits of a payee&apos;s account number, never the whole of it. The
+          and this page shows the last digits of a payee&apos;s account number, never the whole of it.
+          Three more papers arrive from the{" "}
+          <Link href="/control/pricing" className="underline"
+            style={{ color: "var(--adm-accent)" }}>pricing desk</Link>: a freight price list, a levy or
+          discount code, and a commission agreement. Signing one puts it in force and closes the version
+          of the same code it replaces, in this same call — the figures, the window and the rung a cut
+          sits on are read out of the hashed paper, and nobody is emailed that a price went live. The
           seat that raised a proposal cannot sign it, and a proposal nobody signs lapses after a week.
         </p>
 
@@ -534,6 +768,9 @@ export default function ApprovalsPage() {
 
         {spentMoney && <MoneySpent e={spentMoney} />}
 
+        {spentPrice && <PriceSpent e={spentPrice.e} kind={spentPrice.kind}
+          paper={spentPrice.paper} />}
+
         <div className="mb-16 flex flex-wrap items-center gap-8">
           {TABS.map(([v, l]) => (
             <button key={v} type="button" onClick={() => { setOffset(0); setStatus(v); setSign(null); }}
@@ -587,10 +824,13 @@ export default function ApprovalsPage() {
                   <Link href="/control/service" className="underline"
                     style={{ color: "var(--adm-accent)" }}>Service</Link> desk, an erasure raised on the{" "}
                   <Link href="/control/customers" className="underline"
-                    style={{ color: "var(--adm-accent)" }}>Customers</Link> desk and a payout or an escrow
-                  plan raised on the{" "}
+                    style={{ color: "var(--adm-accent)" }}>Customers</Link> desk, a payout or an escrow plan
+                  raised on the{" "}
                   <Link href="/control/money" className="underline"
-                    style={{ color: "var(--adm-accent)" }}>ledger desk</Link> all appear here the moment
+                    style={{ color: "var(--adm-accent)" }}>ledger desk</Link>, or a price list, a charge
+                  or a commission agreement raised on the{" "}
+                  <Link href="/control/pricing" className="underline"
+                    style={{ color: "var(--adm-accent)" }}>pricing desk</Link> — all appear here the moment
                   they are proposed, and stay until a second seat signs them or a week passes.</>
                 : "Try Everything, or widen the search."}
             </p>
@@ -607,6 +847,10 @@ export default function ApprovalsPage() {
           const refund = isRefund(r);
           const erase = isErase(r);
           const money = isMoney(r);
+          // A price paper is a fourth kind of act: it names no company state, sends no letter and
+          // changes what the next quote or transaction is worth. Its row has to say which of the
+          // three it is, or a seat signs a tariff reading ban words.
+          const price = isPrice(r);
           const figure = r.payload?.amount ? `${fig(r.payload.amount)} ${r.payload.currency ?? ""}` : null;
           const lapsedAt = new Date(r.expires_at).getTime() - Date.now();
           return (
@@ -665,7 +909,13 @@ export default function ApprovalsPage() {
                   company's own register carries the receipt. A refund paper is never sent
                   anywhere: the paper is the record, and the money is paid from it. */}
               <p className="mt-8 text-xs" style={{ color: "var(--ink-soft)" }}>
-                {money
+                {price
+                  ? <>{priceWords(r)} Read the paper back on the{" "}
+                    <Link href="/control/pricing" className="underline"
+                      style={{ color: "var(--adm-accent)" }}>pricing desk</Link> — nobody is messaged or
+                    emailed that a price went live, so the register row and the paper&apos;s own memory
+                    lines are the answer here too.</>
+                  : money
                   ? <>{moneyWords(r)} Read the paper back on the{" "}
                     <Link href="/control/money" className="underline"
                       style={{ color: "var(--adm-accent)" }}>ledger desk</Link> — nothing is messaged or
@@ -721,6 +971,7 @@ export default function ApprovalsPage() {
                   {r.result?.new_status ? ` · company is now ${r.result.new_status}` : ""}
                   {r.result?.sessions_revoked ? ` · ${r.result.sessions_revoked} sessions revoked` : ""}
                   {money ? ` · ${appliedMoneyWords(r)}`
+                    : price ? ` · ${appliedPriceWords(r)}`
                     : r.result?.request_status && erase
                       ? ` · ${r.result.ref ?? "the paper"} is now ${r.result.request_status} — `
                         + erasureWords({ reached: r.result.reached, kept: r.result.kept })
@@ -734,12 +985,14 @@ export default function ApprovalsPage() {
               {waiting && canDecide === false && (
                 <p className="mt-12 text-xs" style={{ color: "var(--ink-soft)" }}>
                   Your seat can read this register but not sign it. Ask a platform seat that can sign a
-                  ban — the same duty signs a refund, an erasure or a money paper. A payout needs{" "}
+                  ban — the same duty signs a refund, an erasure, a money paper or a price. A payout needs{" "}
                   <span className="font-semibold" style={{ color: "var(--ink)" }}>
-                    control.money.pay</span> and a plan for a hold needs{" "}
+                    control.money.pay</span>, a plan for a hold needs{" "}
                   <span className="font-semibold" style={{ color: "var(--ink)" }}>
-                    control.money.escrow</span>, and the seat that raised one of those papers cannot
-                  sign it.
+                    control.money.escrow</span>, and a price list, a charge or a commission agreement
+                  needs{" "}
+                  <span className="font-semibold" style={{ color: "var(--ink)" }}>
+                    control.pricing.publish</span> — and the seat that raised a paper cannot sign it.
                 </p>
               )}
 
@@ -762,8 +1015,10 @@ export default function ApprovalsPage() {
                     : erase ? "Sign or refuse this erasure"
                       : isHold(r) ? "Sign or refuse this plan"
                         : money ? "Sign or refuse this payout"
-                          : r.action === "tenant.close" ? "Sign or refuse this close"
-                            : "Sign or refuse this block"}
+                          : price ? `Sign or refuse this ${isCommission(r) ? "cut"
+                            : isAddendum(r) ? "charge" : "price list"}`
+                            : r.action === "tenant.close" ? "Sign or refuse this close"
+                              : "Sign or refuse this block"}
                 </button>
               )}
 
@@ -793,12 +1048,15 @@ export default function ApprovalsPage() {
                       {armed === `sign-${r.id}`
                         ? `Tap again to ${refund ? "release" : erase ? "mask"
                           : isHold(r) ? "discharge" : money ? "accrue"
-                            : r.action === "tenant.close" ? "close" : "block"} ${subject(r)}`
+                            : price ? "publish"
+                              : r.action === "tenant.close" ? "close" : "block"} ${subject(r)}`
                         : `Sign and ${refund ? "release the paper"
                           : erase ? "run the mask, which cannot be undone"
                             : isHold(r) ? "move the money out of escrow"
                               : money ? "accrue the obligation, not pay it"
-                                : r.action === "tenant.close" ? "close the account" : "block access"}`}
+                                : price ? "put this price in force, closing the version it replaces"
+                                  : r.action === "tenant.close" ? "close the account"
+                                    : "block access"}`}
                     </button>
                     <button type="button" disabled={busy || note.trim().length < 4}
                       onClick={() => decide(r, "reject")}

@@ -24,14 +24,17 @@ const th = "border-b px-8 py-8 text-left font-semibold uppercase tracking-[0.1em
 const td = "border-b px-8 py-8 align-top";
 
 /** Everything the desk needs from the page that owns the session. Same arrangement the ledger desk
- *  uses for the registers above its book: one set of cookies, one duty list, one green strip. */
+ *  uses for the registers above its book: one set of cookies, one duty list, one green strip.
+ *  `moneyPost` is 133's duty rather than a fourth pricing one, and only the cut desk asks for it: saying a
+ *  cut has been carried is a claim about the book, and 142's door refuses the pointer from a seat that has
+ *  no right to move the money itself. */
 export interface Desk {
   call: (path: string, method?: string, body?: unknown) => Promise<any>;
   fig: (v: unknown) => string;
   today: () => string;
   notify: (s: string) => void;
   fault: (s: string) => void;
-  can: { manage: boolean; publish: boolean };
+  can: { manage: boolean; publish: boolean; moneyPost: boolean };
 }
 
 /** One row of `pricing_dimensions` — the vocabulary the register prices on, read from

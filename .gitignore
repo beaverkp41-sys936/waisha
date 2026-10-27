@@ -15,6 +15,9 @@ Thumbs.db
 .mobile-probe/
 .probe-*/
 .probe/
-# One stage's scratch: throwaway scripts, the token file they read, dev-server logs.
-api/scripts/tmp-*.ts
+# One stage's scratch: throwaway scripts, the token file they read, dev-server logs. A scratch probe is
+# written as .ts, .mts, .mjs or .cjs depending on which loader the directory is under, so the pattern
+# covers the family rather than one extension.
+api/scripts/tmp-*
+api/tmp-*
 tmp-*.log
