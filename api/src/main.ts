@@ -17,6 +17,7 @@ import { controlTenantsRoutes } from "./routes/control-tenants.routes.js";
 import { controlSupportRoutes } from "./routes/control-support.routes.js";
 import { controlAnalyticsRoutes } from "./routes/control-analytics.routes.js";
 import { controlRevenueRoutes } from "./routes/control-revenue.routes.js";
+import { controlRevenueCountRoutes } from "./routes/control-revenue-count.routes.js";
 import { controlStaffRoutes } from "./routes/control-staff.routes.js";
 import { controlSystemRoutes } from "./routes/control-system.routes.js";
 import { controlReliabilityRoutes } from "./routes/control-reliability.routes.js";
@@ -151,6 +152,7 @@ async function main() {
   await app.register(controlSupportRoutes, { prefix: "/api/v1" });
   await app.register(controlAnalyticsRoutes, { prefix: "/api/v1" });
   await app.register(controlRevenueRoutes, { prefix: "/api/v1" });
+  await app.register(controlRevenueCountRoutes, { prefix: "/api/v1" });
   await app.register(controlStaffRoutes, { prefix: "/api/v1" });
   await app.register(controlSystemRoutes, { prefix: "/api/v1" });
   await app.register(controlReliabilityRoutes, { prefix: "/api/v1" });

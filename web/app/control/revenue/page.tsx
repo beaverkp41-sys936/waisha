@@ -245,6 +245,784 @@ function CostBook({ costs, canRecord, onRecorded }: {
   );
 }
 
+/** 143's doors answer a refusal as an object too, so every read shape below keeps `ok`/`message` optional
+ *  rather than trusting that the answer was the register. */
+type CutKind = "account" | "source" | "desk" | "route";
+type PeriodKind = "day" | "week" | "month";
+type CountState = {
+  ok?: boolean; message?: string; since: string; days: number; today: string;
+  currencies: {
+    currency: string; snapshots: number; first_day: string | null; last_day: string | null;
+    revisions: number; income_in_window: string | number;
+    yesterday_counted: boolean; today_counted: boolean;
+    uncounted_count: number; uncounted_days: string[]; next_day: string | null;
+  }[];
+};
+type Reading = {
+  id: string; ref: string; day: string; currency: string;
+  income: string | number; postings: number; entries: number; reversed_postings: number;
+  revisions: number; retaken: boolean; taken_at: string; taken_by_name: string | null;
+  note: string | null; accounts: number; sources: number; desks: number; roads: number;
+};
+type BookPage = {
+  ok?: boolean; message?: string; currency: string;
+  counted_days: number; window_income: string | number; rows: Reading[];
+};
+type Bucket = {
+  key: string; label: string | null; total: string | number;
+  credit: string | number; debit: string | number; postings: number; readings: number;
+  share: string | number | null;
+};
+type CutPage = {
+  ok?: boolean; message?: string; cut: CutKind; currency: string;
+  income: string | number; buckets: number; omitted: number; note: string | null; rows: Bucket[];
+};
+type Fold = {
+  period_start: string; period_end: string; label: string; currency: string;
+  actual: string | number; snapshots: number; days_counted: number; reversed_postings: number;
+  uncounted_count: number; uncounted_days: string[]; complete: boolean;
+  target: { ref: string; amount: string | number; note: string | null; raised_by_name: string | null } | null;
+  gap: string | number | null; attainment: string | number | null;
+};
+type WindowPage = {
+  ok?: boolean; message?: string; kind: PeriodKind; currency: string;
+  periods: number; actual: string | number; target: string | number;
+  gap: string | number; attainment: string | number | null; rows: Fold[];
+};
+type Target = {
+  ok?: boolean; id: string; ref: string; currency: string; kind: PeriodKind;
+  period_start: string; period_end: string; label: string;
+  amount: string | number; note: string | null; status: string;
+  raised_by_name: string | null; withdrawn_by_name: string | null;
+  withdrawn_at: string | null; withdrawn_reason: string | null;
+  counted_days: number; actual: string | number; days_left: number; in_the_past: boolean;
+};
+type TargetsPage = { ok?: boolean; message?: string; currency: string; count: number; rows: Target[] };
+
+/** A figure always travels with the money it is counted in. `money()` above prints "TZS" into its own
+ *  text, and 138's defect was a USD sum wearing a TZS label — so every number this register prints goes
+ *  through here with the currency its own row carries. */
+const figure = (v: unknown, c: string | null | undefined) =>
+  `${n(v).toLocaleString("en-US", { maximumFractionDigits: 2 })} ${c ?? "TZS"}`;
+const FIELD = "rounded-input border px-10 py-8 text-sm";
+const FIELD_STYLE = { borderColor: "var(--line)", background: "var(--milk)", color: "var(--ink)" };
+
+/** One read of one of 143's doors. A 401 is the session ending, not an answer about the book. */
+async function read<T>(path: string): Promise<T | null> {
+  try {
+    const res = await fetch(`${API}/api/v1${path}`, { credentials: "include" });
+    if (res.status === 401) { window.location.href = "/control/login"; return null; }
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      return { ok: false, message: j?.error?.message ?? "The register did not answer." } as unknown as T;
+    }
+    return await res.json() as T;
+  } catch {
+    return null;
+  }
+}
+
+/** One press on one of 143's doors: the door's own sentence is the useful half of the answer, so a
+ *  refusal is shown as it arrived and never paraphrased into "something went wrong". */
+async function press(path: string, body: unknown): Promise<{ ok: boolean; words: string }> {
+  try {
+    const res = await fetch(`${API}/api/v1${path}`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, words: j?.error?.message ?? "The register refused the press." };
+    }
+    return { ok: true, words: j?.message ?? "Done." };
+  } catch {
+    return { ok: false, words: "The register did not answer." };
+  }
+}
+
+/**
+ * The count the office keeps of the money in (143). Readings of 133's book, one per day per money, and the
+ * four cuts each reading carries.
+ *
+ * Nothing here is worked out by the page. `income_in_window`, every bucket's total and share, the count of
+ * days and the gap list all arrive from the doors — a screen that added a column by hand would be a second
+ * arithmetic path, and two paths is how a desk shows one figure while the book carries another.
+ */
+function CountBook({ perm }: { perm: string[] }) {
+  const canCount = perm.includes("control.revenue.count");
+  const yesterday = () => new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+  const [currency, setCurrency] = useState("TZS");
+  const [state, setState] = useState<CountState | null>(null);
+  const [rows, setRows] = useState<Reading[]>([]);
+  const [countedDays, setCountedDays] = useState(0);
+  const [windowIncome, setWindowIncome] = useState<string | number>(0);
+  const [cutKind, setCutKind] = useState<CutKind>("account");
+  const [cutDays, setCutDays] = useState(30);
+  const [buckets, setBuckets] = useState<Bucket[]>([]);
+  const [cutIncome, setCutIncome] = useState<string | number>(0);
+  const [cutOmitted, setCutOmitted] = useState(0);
+  const [cutNote, setCutNote] = useState<string | null>(null);
+  const [day, setDay] = useState(yesterday);
+  const [note, setNote] = useState("");
+  const [sweepFrom, setSweepFrom] = useState(() => new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10));
+  const [sweepTo, setSweepTo] = useState(yesterday);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [dropFor, setDropFor] = useState<string | null>(null);
+  const [dropReason, setDropReason] = useState("");
+
+  const load = useCallback(async () => {
+    const [s, b, c] = await Promise.all([
+      read<CountState>("/control/revenue/book/state?days=120"),
+      read<BookPage>(`/control/revenue/book?currency=${currency}&limit=40`),
+      read<CutPage>(
+        `/control/revenue/cut/${cutKind}?currency=${currency}`
+        + `&from=${new Date(Date.now() - (cutDays - 1) * 86400000).toISOString().slice(0, 10)}`
+        + `&to=${new Date().toISOString().slice(0, 10)}&limit=12`)
+    ]);
+    if (s && s.ok !== false) setState(s);
+    if (b && b.ok !== false) {
+      setRows(b.rows ?? []); setCountedDays(n(b.counted_days)); setWindowIncome(b.window_income ?? 0);
+    }
+    if (c && c.ok !== false) {
+      setBuckets(c.rows ?? []); setCutIncome(c.income ?? 0);
+      setCutOmitted(n(c.omitted)); setCutNote(c.note ?? null);
+    }
+  }, [currency, cutKind, cutDays]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function take() {
+    setBusy("take"); setNotice(null);
+    const r = await press("/control/revenue/book/take",
+      { day, ...(note.trim() ? { note: note.trim() } : {}) });
+    setNotice(r.words); setBusy(null);
+    if (r.ok) { setNote(""); void load(); }
+  }
+
+  async function sweep() {
+    setBusy("sweep"); setNotice(null);
+    const r = await press("/control/revenue/book/sweep", { from: sweepFrom, to: sweepTo });
+    setNotice(r.words); setBusy(null);
+    if (r.ok) void load();
+  }
+
+  async function discard(id: string) {
+    setBusy(id); setNotice(null);
+    const r = await press(`/control/revenue/book/${id}/discard`, { reason: dropReason.trim() });
+    setBusy(null);
+    setNotice(r.words);
+    if (r.ok) { setDropFor(null); setDropReason(""); void load(); }
+  }
+
+  const gapDays = (state?.currencies ?? []).flatMap((c) =>
+    c.uncounted_count > 0 ? [`${c.currency}: ${c.uncounted_count} (${c.uncounted_days.slice(0, 6).join(", ")})`] : []);
+
+  return (
+    <section className="mt-32">
+      <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink)" }}>
+        The count the office keeps of the money in
+      </h2>
+      <p className="mt-8 max-w-[78ch] text-sm" style={{ color: "var(--ink-soft)" }}>
+        Everything below is read from the book 133 keeps, and kept: one count per day per money, with the
+        seat and the minute that took it. The figures above this panel are worked out again on every press
+        and answer &ldquo;what do the rows say today&rdquo;; these answer &ldquo;what did the book say on
+        the 26th&rdquo;, and can be produced again after the rows underneath move. A day the book moved
+        income and nobody counted is listed as a gap rather than quietly read as nothing.
+      </p>
+
+      {state && (
+        <div className="mt-16 grid gap-12 sm:grid-cols-2">
+          {state.currencies.map((c) => (
+            <div key={c.currency} className="rounded-card border p-16"
+              style={{ borderColor: "var(--line)", background: "var(--surface)" }}>
+              <p className="text-[11px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--adm-accent)" }}>
+                {c.currency} register
+              </p>
+              <p className="mt-8 text-lg font-semibold tabular-nums" style={{ color: "var(--ink)" }}>
+                {figure(c.income_in_window, c.currency)}
+              </p>
+              <p className="mt-4 text-xs" style={{ color: "var(--ink-soft)" }}>
+                counted in the {state.days} days from {state.since}, across {c.snapshots} reading(s)
+                {c.first_day ? <> — first {c.first_day}, last {c.last_day}</> : " — none yet"}
+              </p>
+              <p className="mt-8 text-xs tabular-nums" style={{ color: "var(--ink)" }}>
+                {c.snapshots > 0
+                  ? <>Yesterday {c.yesterday_counted ? "counted" : "not counted"} · today {c.today_counted ? "counted" : "not counted"}</>
+                  : "The register holds no reading in this money yet."}
+                {c.revisions > 0 && <> · {c.revisions - c.snapshots} re-take(s)</>}
+              </p>
+              {c.uncounted_count > 0 && (
+                <p className="mt-8 text-xs" style={{ color: "var(--warning)" }}>
+                  {c.uncounted_count} day(s) the book moved income and the register never read
+                  {c.next_day ? <> — oldest {c.next_day}</> : null}.
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {canCount && (
+        <div className="mt-16 flex flex-wrap items-end gap-12 rounded-card border p-16"
+          style={{ borderColor: "var(--line)", background: "var(--surface)" }}>
+          <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+            Count the day
+            <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
+              className={FIELD + " mt-4 block"} style={FIELD_STYLE} />
+          </label>
+          <label className="min-w-[220px] flex-1 text-[11px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: "var(--ink-soft)" }}>
+            Why a note, if any
+            <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={600}
+              placeholder="e.g. the 26th was re-read after the August reversal landed"
+              className={FIELD + " mt-4 block w-full"} style={FIELD_STYLE} />
+          </label>
+          <button type="button" onClick={take} disabled={busy !== null || !day}
+            className="waisha-btn rounded-input px-20 py-10 text-xs font-semibold">
+            {busy === "take" ? "Reading the book" : "Count it"}
+          </button>
+          <span className="w-full border-t pt-12 text-[11px] uppercase tracking-[0.12em]"
+            style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+            or sweep a window
+          </span>
+          <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+            From
+            <input type="date" value={sweepFrom} onChange={(e) => setSweepFrom(e.target.value)}
+              className={FIELD + " mt-4 block"} style={FIELD_STYLE} />
+          </label>
+          <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+            To
+            <input type="date" value={sweepTo} onChange={(e) => setSweepTo(e.target.value)}
+              className={FIELD + " mt-4 block"} style={FIELD_STYLE} />
+          </label>
+          <button type="button" onClick={sweep} disabled={busy !== null || !sweepFrom || !sweepTo}
+            className="rounded-input border px-20 py-10 text-xs font-semibold"
+            style={{ borderColor: "var(--adm-accent)", color: "var(--adm-accent)", background: "transparent" }}>
+            {busy === "sweep" ? "Counting" : "Count every day in it"}
+          </button>
+          <p className="w-full max-w-[78ch] text-xs" style={{ color: "var(--ink-soft)" }}>
+            A sweep counts every day the book moved income in and re-reads every day already counted, so a
+            month that was reported can be proved not to have drifted. Days that already say the same thing
+            are left alone; days with nothing to read are reported as passed over, never written as zeros.
+          </p>
+        </div>
+      )}
+
+      {notice && (
+        <div className="mt-12 rounded-input px-12 py-8 text-sm" role="status"
+          style={{ background: "var(--surface)", border: "1px solid var(--adm-line)", color: "var(--ink)" }}>
+          {notice}
+        </div>
+      )}
+
+      <div className="mt-16 flex flex-wrap items-end gap-12">
+        <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+          Money
+          <select value={currency} onChange={(e) => setCurrency(e.target.value)}
+            className={FIELD + " mt-4 block"} style={FIELD_STYLE}>
+            <option value="TZS">TZS</option>
+            <option value="USD">USD</option>
+          </select>
+        </label>
+        <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+          Cut the window by
+          <select value={cutKind} onChange={(e) => setCutKind(e.target.value as CutKind)}
+            className={FIELD + " mt-4 block"} style={FIELD_STYLE}>
+            <option value="account">Account</option>
+            <option value="source">Kind of movement</option>
+            <option value="desk">Desk</option>
+            <option value="route">Route</option>
+          </select>
+        </label>
+        <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+          Days
+          <select value={cutDays} onChange={(e) => setCutDays(Number(e.target.value))}
+            className={FIELD + " mt-4 block"} style={FIELD_STYLE}>
+            {[7, 30, 60].map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </label>
+        <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+          {countedDays} day(s) counted in this register · {figure(windowIncome, currency)} in the window
+        </p>
+      </div>
+
+      <div className="mt-12 overflow-x-auto rounded-card border bg-surface" style={{ borderColor: "var(--line)" }}>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+              <th className="p-12">Day</th>
+              <th className="p-12">Money</th>
+              <th className="p-12 text-right">Income</th>
+              <th className="p-12 text-right">Movements</th>
+              <th className="p-12 text-right">Legs</th>
+              <th className="p-12 text-right">Since undone</th>
+              <th className="p-12">Cuts kept</th>
+              <th className="p-12">Taken</th>
+              <th className="p-12" />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.id} style={{ background: i % 2 ? "var(--milk-deep)" : "transparent" }}>
+                <td className="p-12 tabular-nums" style={{ color: "var(--ink)" }}>
+                  {r.day}
+                  <span className="ml-8 text-[10px] uppercase tracking-[0.1em]" style={{ color: "var(--ink-soft)" }}>
+                    {r.ref}{r.retaken ? ` · rev ${r.revisions}` : ""}
+                  </span>
+                </td>
+                <td className="p-12">{r.currency}</td>
+                <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink)" }}>
+                  {figure(r.income, r.currency)}
+                </td>
+                <td className="p-12 text-right tabular-nums">{r.postings}</td>
+                <td className="p-12 text-right tabular-nums">{r.entries}</td>
+                <td className="p-12 text-right tabular-nums"
+                  style={{ color: r.reversed_postings > 0 ? "var(--warning)" : "var(--ink-soft)" }}>
+                  {r.reversed_postings}
+                </td>
+                <td className="p-12 text-[11px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                  {r.accounts}·{r.sources}·{r.desks}·{r.roads}
+                </td>
+                <td className="p-12 text-[11px]" style={{ color: "var(--ink-soft)" }}>
+                  {r.taken_at}
+                  <span className="mt-2 block" style={{ color: "var(--ink)" }}>{r.taken_by_name ?? "—"}</span>
+                  {r.note && <span className="mt-2 block normal-case tracking-normal">{r.note}</span>}
+                </td>
+                <td className="p-12 text-right">
+                  {canCount && (
+                    <button type="button"
+                      onClick={() => { setDropFor(dropFor === r.id ? null : r.id); setDropReason(""); }}
+                      disabled={r.postings > 0}
+                      title={r.postings > 0
+                        ? "The book moved money on this day, so its count is kept forever."
+                        : "This day held nothing; the reading can be thrown away."}
+                      className="rounded-input border px-10 py-6 text-[11px] font-semibold disabled:opacity-40"
+                      style={{ borderColor: "var(--line)", color: "var(--ink-soft)", background: "transparent" }}>
+                      {r.postings > 0 ? "kept" : "discard"}
+                    </button>
+                  )}
+                  {dropFor === r.id && (
+                    <div className="mt-8 flex flex-col items-end gap-8">
+                      <input value={dropReason} onChange={(e) => setDropReason(e.target.value)}
+                        placeholder="why it goes (8-600 characters)" maxLength={600}
+                        className={FIELD + " w-full text-xs"} style={FIELD_STYLE} />
+                      <button type="button" onClick={() => discard(r.id)}
+                        disabled={busy !== null || dropReason.trim().length < 8}
+                        className="rounded-input px-12 py-6 text-[11px] font-semibold"
+                        style={{ background: "var(--danger)", color: "var(--milk)" }}>
+                        {busy === r.id ? "Throwing away" : "Confirm"}
+                      </button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {!rows.length && (
+              <tr><td colSpan={9} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+                Nothing has been counted in {currency} yet. Name a day above, or sweep a window, and the
+                register reads the book once and keeps what it read.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mt-20 overflow-x-auto rounded-card border bg-surface" style={{ borderColor: "var(--line)" }}>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+              <th className="p-12">Bucket</th>
+              <th className="p-12 text-right">Total</th>
+              <th className="p-12 text-right">Credit</th>
+              <th className="p-12 text-right">Debit</th>
+              <th className="p-12 text-right">Movements</th>
+              <th className="p-12">Share of the window</th>
+            </tr>
+          </thead>
+          <tbody>
+            {buckets.map((b, i) => (
+              <tr key={b.key} style={{ background: i % 2 ? "var(--milk-deep)" : "transparent" }}>
+                <td className="p-12 font-semibold" style={{ color: "var(--ink)" }}>{b.label}</td>
+                <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink)" }}>
+                  {figure(b.total, currency)}
+                </td>
+                <td className="p-12 text-right tabular-nums text-xs" style={{ color: "var(--ink-soft)" }}>
+                  {n(b.credit).toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                </td>
+                <td className="p-12 text-right tabular-nums text-xs" style={{ color: "var(--ink-soft)" }}>
+                  {n(b.debit).toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                </td>
+                <td className="p-12 text-right tabular-nums">{b.postings}</td>
+                <td className="p-12">
+                  <div className="flex items-center gap-8">
+                    <div style={{ height: 8, flex: 1, background: "var(--adm-line)", borderRadius: 4, overflow: "hidden" }}>
+                      <div style={{
+                        height: "100%", width: `${Math.max(1, Math.round(n(b.share)))}%`,
+                        background: INCOME, opacity: 0.8
+                      }} />
+                    </div>
+                    <span className="w-12 text-right text-[11px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                      {b.share === null ? "—" : `${Math.round(n(b.share))}%`}
+                    </span>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!buckets.length && (
+              <tr><td colSpan={6} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+                The register holds no reading in {currency} for these {cutDays} days, so there is nothing to
+                cut. Count a day above first.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-12 max-w-[78ch] text-xs" style={{ color: "var(--ink-soft)" }}>
+        The cut adds to {figure(cutIncome, currency)} — the whole window&rsquo;s figure, printed even when
+        only the top buckets are listed{cutOmitted > 0 ? ` (${cutOmitted} smaller bucket(s) left off the list, not off the total)` : ""}.
+        Whatever the doors could not resolve is filed under a named bucket rather than dropped, and a
+        bucket&rsquo;s share is a share of what this desk also claims to have earned.{" "}
+        {cutNote}
+      </p>
+      {gapDays.length > 0 && (
+        <p className="mt-12 max-w-[78ch] text-xs" style={{ color: "var(--warning)" }}>
+          Days the book moved income and this register never read: {gapDays.join(" · ")}. A month reported
+          from a register with a hole in it is part of a month reported as all of it.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The figure the office means to earn (143). Actual against ambition, folded by day, week or month, read
+ * from the register above rather than re-derived from the rows underneath it.
+ */
+function TargetBook({ perm }: { perm: string[] }) {
+  const canTarget = perm.includes("control.revenue.target");
+
+  const [currency, setCurrency] = useState("TZS");
+  const [kind, setKind] = useState<PeriodKind>("month");
+  const [rows, setRows] = useState<Fold[]>([]);
+  const [sums, setSums] = useState<{ actual: string | number; target: string | number;
+    gap: string | number; attainment: string | number | null }>({ actual: 0, target: 0, gap: 0, attainment: null });
+  const [targets, setTargets] = useState<Target[]>([]);
+  const [from, setFrom] = useState(() => new Date(Date.now() - 89 * 86400000).toISOString().slice(0, 10));
+  const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [day, setDay] = useState(() => new Date().toISOString().slice(0, 10));
+  const [amount, setAmount] = useState("");
+  const [promiseNote, setPromiseNote] = useState("");
+  const [showWithdrawn, setShowWithdrawn] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [stopping, setStopping] = useState<string | null>(null);
+  const [stopReason, setStopReason] = useState("");
+
+  const load = useCallback(async () => {
+    const [w, t] = await Promise.all([
+      read<WindowPage>(`/control/revenue/window?kind=${kind}&from=${from}&to=${to}&currency=${currency}`),
+      read<TargetsPage>(`/control/revenue/targets?currency=${currency}`
+        + `&withdrawn=${showWithdrawn ? "true" : "false"}`)
+    ]);
+    if (w && w.ok !== false) {
+      setRows(w.rows ?? []);
+      setSums({ actual: w.actual ?? 0, target: w.target ?? 0, gap: w.gap ?? 0,
+        attainment: w.attainment ?? null });
+    } else if (w?.message) setNotice(w.message);
+    if (t && t.ok !== false) setTargets(t.rows ?? []);
+    else if (t?.message) setNotice(t.message);
+  }, [currency, kind, from, to, showWithdrawn]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function promise() {
+    setBusy("set"); setNotice(null);
+    const r = await press("/control/revenue/targets", {
+      kind, day, amount, currency, ...(promiseNote.trim() ? { note: promiseNote.trim() } : {})
+    });
+    setNotice(r.words); setBusy(null);
+    if (r.ok) { setAmount(""); setPromiseNote(""); void load(); }
+  }
+
+  async function stop(id: string, act: "withdraw" | "discard") {
+    setBusy(id); setNotice(null);
+    const r = await press(`/control/revenue/targets/${id}/${act}`, { reason: stopReason.trim() });
+    setNotice(r.words); setBusy(null);
+    if (r.ok) { setStopping(null); setStopReason(""); void load(); }
+  }
+
+  return (
+    <section className="mt-32">
+      <h2 className="text-sm font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink)" }}>
+        What the office meant to earn
+      </h2>
+      <p className="mt-8 max-w-[78ch] text-sm" style={{ color: "var(--ink-soft)" }}>
+        An ambition is a separate register from a count, and a separate duty: the hand that sets the figure
+      the office hopes for is not the hand that proves it was reached. A stopped promise keeps its row and
+      its reason, because &ldquo;we promised 8M and stopped promising it in March&rdquo; is a fact the
+      office has to be able to say — only a target the register never counted against can be thrown away.
+      </p>
+
+      <div className="mt-16 flex flex-wrap items-end gap-12">
+        <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+          Fold by
+          <select value={kind} onChange={(e) => setKind(e.target.value as PeriodKind)}
+            className={FIELD + " mt-4 block"} style={FIELD_STYLE}>
+            <option value="day">Day</option>
+            <option value="week">Week</option>
+            <option value="month">Month</option>
+          </select>
+        </label>
+        <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+          Money
+          <select value={currency} onChange={(e) => setCurrency(e.target.value)}
+            className={FIELD + " mt-4 block"} style={FIELD_STYLE}>
+            <option value="TZS">TZS</option>
+            <option value="USD">USD</option>
+          </select>
+        </label>
+        <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+          From
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+            className={FIELD + " mt-4 block"} style={FIELD_STYLE} />
+        </label>
+        <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+          To
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+            className={FIELD + " mt-4 block"} style={FIELD_STYLE} />
+        </label>
+        <p className="text-xs" style={{ color: "var(--ink-soft)" }}>
+          {figure(sums.actual, currency)} counted against {figure(sums.target, currency)} promised
+          {sums.attainment !== null ? ` · ${Math.round(n(sums.attainment))}% reached` : " · nothing promised in this window"}
+        </p>
+      </div>
+
+      <div className="mt-12 overflow-x-auto rounded-card border bg-surface" style={{ borderColor: "var(--line)" }}>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+              <th className="p-12">Period</th>
+              <th className="p-12 text-right">Days counted</th>
+              <th className="p-12 text-right">Counted</th>
+              <th className="p-12 text-right">Promised</th>
+              <th className="p-12 text-right">Gap</th>
+              <th className="p-12">Reached</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.period_start} style={{ background: i % 2 ? "var(--milk-deep)" : "transparent" }}>
+                <td className="p-12" style={{ color: "var(--ink)" }}>
+                  {r.label}
+                  <span className="mt-2 block text-[10px] uppercase tracking-[0.1em]" style={{ color: "var(--ink-soft)" }}>
+                    {r.period_start} → {r.period_end}
+                  </span>
+                </td>
+                <td className="p-12 text-right tabular-nums">{r.days_counted}</td>
+                <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink)" }}>
+                  {figure(r.actual, r.currency)}
+                </td>
+                <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink)" }}>
+                  {r.target ? figure(r.target.amount, r.currency) : "—"}
+                  {r.target && (
+                    <span className="mt-2 block text-[10px] uppercase tracking-[0.1em]" style={{ color: "var(--ink-soft)" }}>
+                      {r.target.ref}{r.target.raised_by_name ? ` · ${r.target.raised_by_name}` : ""}
+                    </span>
+                  )}
+                </td>
+                <td className="p-12 text-right tabular-nums"
+                  style={{ color: r.gap === null ? "var(--ink-soft)" : n(r.gap) > 0 ? "var(--warning)" : "var(--success)" }}>
+                  {r.gap === null ? "—" : figure(r.gap, r.currency)}
+                </td>
+                <td className="p-12">
+                  {r.attainment === null ? <span style={{ color: "var(--ink-soft)" }}>not promised</span> : (
+                    <div className="flex items-center gap-8">
+                      <div style={{ height: 8, flex: 1, background: "var(--adm-line)", borderRadius: 4, overflow: "hidden" }}>
+                        <div style={{
+                          height: "100%", width: `${Math.min(100, Math.max(1, Math.round(n(r.attainment))))}%`,
+                          background: n(r.attainment) >= 100 ? PROFIT_UP : INCOME, opacity: 0.85
+                        }} />
+                      </div>
+                      <span className="w-12 text-right text-[11px] tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                        {Math.round(n(r.attainment))}%
+                      </span>
+                    </div>
+                  )}
+                  {!r.complete && (
+                    <p className="mt-6 text-[11px]" style={{ color: "var(--warning)" }}>
+                      {r.uncounted_count} day(s) the book moved income here were never counted
+                      {r.uncounted_days.slice(0, 4).length ? ` (${r.uncounted_days.slice(0, 4).join(", ")})` : ""}
+                      — this figure is part of the period, not all of it.
+                    </p>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {!rows.length && (
+              <tr><td colSpan={6} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+                The window answers nothing. A fold takes at most 60 periods — narrow it, or fold by month
+                rather than by day.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {canTarget && (
+        <div className="mt-16 flex flex-wrap items-end gap-12 rounded-card border p-16"
+          style={{ borderColor: "var(--line)", background: "var(--surface)" }}>
+          <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+            Promise a
+            <select value={kind} onChange={(e) => setKind(e.target.value as PeriodKind)}
+              className={FIELD + " mt-4 block"} style={FIELD_STYLE}>
+              <option value="day">Day</option>
+              <option value="week">Week</option>
+              <option value="month">Month</option>
+            </select>
+          </label>
+          <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+            A period containing
+            <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
+              className={FIELD + " mt-4 block"} style={FIELD_STYLE} />
+          </label>
+          <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+            {currency} figure
+            <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal"
+              placeholder="0.00" className={FIELD + " mt-4 block w-44 tabular-nums"} style={FIELD_STYLE} />
+          </label>
+          <label className="min-w-[220px] flex-1 text-[11px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: "var(--ink-soft)" }}>
+            Why, if a note
+            <input value={promiseNote} onChange={(e) => setPromiseNote(e.target.value)} maxLength={600}
+              placeholder="e.g. the CFA bundle renewal expected in November"
+              className={FIELD + " mt-4 block w-full"} style={FIELD_STYLE} />
+          </label>
+          <button type="button" onClick={promise}
+            disabled={busy !== null || !day || !amount || Number(amount) <= 0}
+            className="waisha-btn rounded-input px-20 py-10 text-xs font-semibold">
+            {busy === "set" ? "Writing it down" : "Promise it"}
+          </button>
+          <p className="w-full max-w-[78ch] text-xs" style={{ color: "var(--ink-soft)" }}>
+            Naming a day inside a period is enough — the register works out where that week or month starts
+            and says so back, because a week promised on a Wednesday and a week starting on Monday are
+            otherwise two different promises wearing one label. Changing a promise means withdrawing it and
+            setting the new figure as its own target.
+          </p>
+        </div>
+      )}
+
+      {notice && (
+        <div className="mt-12 rounded-input px-12 py-8 text-sm" role="status"
+          style={{ background: "var(--surface)", border: "1px solid var(--adm-line)", color: "var(--ink)" }}>
+          {notice}
+        </div>
+      )}
+
+      <div className="mt-16 flex flex-wrap items-center gap-12">
+        <h3 className="text-[11px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink)" }}>
+          The promises on the board ({currency})
+        </h3>
+        {canTarget && (
+          <label className="flex items-center gap-8 text-[11px] font-semibold uppercase tracking-[0.12em]"
+            style={{ color: "var(--ink-soft)" }}>
+            <input type="checkbox" checked={showWithdrawn} onChange={(e) => setShowWithdrawn(e.target.checked)} />
+            also show stopped ones
+          </label>
+        )}
+      </div>
+      <div className="mt-12 overflow-x-auto rounded-card border bg-surface" style={{ borderColor: "var(--line)" }}>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left" style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
+              <th className="p-12">Ref</th>
+              <th className="p-12">Period</th>
+              <th className="p-12 text-right">Promised</th>
+              <th className="p-12 text-right">Counted</th>
+              <th className="p-12 text-right">Days left</th>
+              <th className="p-12">Status</th>
+              <th className="p-12" />
+            </tr>
+          </thead>
+          <tbody>
+            {targets.map((t, i) => (
+              <tr key={t.id} style={{ background: i % 2 ? "var(--milk-deep)" : "transparent" }}>
+                <td className="p-12 tabular-nums" style={{ color: "var(--ink)" }}>{t.ref}</td>
+                <td className="p-12 text-xs" style={{ color: "var(--ink)" }}>
+                  {t.label}
+                  <span className="mt-2 block" style={{ color: "var(--ink-soft)" }}>
+                    {t.kind} from {t.period_start}{t.note ? ` · ${t.note}` : ""}
+                  </span>
+                </td>
+                <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink)" }}>
+                  {figure(t.amount, t.currency)}
+                </td>
+                <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                  {figure(t.actual, t.currency)}
+                  <span className="mt-2 block text-[10px]">{t.counted_days} day(s) counted</span>
+                </td>
+                <td className="p-12 text-right tabular-nums" style={{ color: "var(--ink-soft)" }}>
+                  {t.in_the_past ? "closed" : t.days_left}
+                </td>
+                <td className="p-12 text-[11px] uppercase tracking-[0.1em]"
+                  style={{ color: t.status === "live" ? "var(--success)" : "var(--ink-soft)" }}>
+                  {t.status}
+                  {t.withdrawn_at && (
+                    <span className="mt-2 block normal-case tracking-normal" style={{ color: "var(--ink-soft)" }}>
+                      {t.withdrawn_at} — {t.withdrawn_reason}
+                      {t.withdrawn_by_name ? ` (${t.withdrawn_by_name})` : ""}
+                    </span>
+                  )}
+                </td>
+                <td className="p-12 text-right">
+                  {canTarget && t.status === "live" && (
+                    <button type="button"
+                      onClick={() => { setStopping(stopping === t.id ? null : t.id); setStopReason(""); }}
+                      className="rounded-input border px-10 py-6 text-[11px] font-semibold"
+                      style={{ borderColor: "var(--line)", color: "var(--ink-soft)", background: "transparent" }}>
+                      stop it
+                    </button>
+                  )}
+                  {stopping === t.id && (
+                    <div className="mt-8 flex flex-col items-end gap-8">
+                      <input value={stopReason} onChange={(e) => setStopReason(e.target.value)}
+                        placeholder="why it stops (8-600 characters)" maxLength={600}
+                        className={FIELD + " w-full text-xs"} style={FIELD_STYLE} />
+                      <div className="flex gap-8">
+                        <button type="button" onClick={() => stop(t.id, "withdraw")}
+                          disabled={busy !== null || stopReason.trim().length < 8}
+                          className="rounded-input px-12 py-6 text-[11px] font-semibold"
+                          style={{ background: "var(--adm-accent)", color: "var(--milk)" }}>
+                          {busy === t.id ? "Stopping" : "Stop it"}
+                        </button>
+                        <button type="button" onClick={() => stop(t.id, "discard")}
+                          disabled={busy !== null || stopReason.trim().length < 8 || t.counted_days > 0}
+                          title={t.counted_days > 0
+                            ? "The register has measured this promise; it is kept, stopped rather than erased."
+                            : "Never counted against: this was a slip, not a decision."}
+                          className="rounded-input px-12 py-6 text-[11px] font-semibold disabled:opacity-40"
+                          style={{ background: "var(--danger)", color: "var(--milk)" }}>
+                          Throw away
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {!targets.length && (
+              <tr><td colSpan={7} className="p-16 text-sm" style={{ color: "var(--ink-soft)" }}>
+                No ambition is filed in {currency}{showWithdrawn ? "" : " that is still standing"}.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export default function ControlRevenuePage() {
   const [me, setMe] = useState<any>(null);
   const [perm, setPerm] = useState<string[]>([]);
@@ -820,6 +1598,16 @@ export default function ControlRevenuePage() {
                 up to that company's income to the cent.
               </p>
             </section>
+
+            {/* The register 143 keeps is a separate duty from these reports: a seat that may read the P&L
+                but not the count gets no panel at all, rather than an empty table claiming nobody has
+                counted a day. */}
+            {perm.includes("control.revenue.view") && (
+              <>
+                <CountBook perm={perm} />
+                <TargetBook perm={perm} />
+              </>
+            )}
 
             <CostBook costs={costs} canRecord={perm.includes("control.costs.manage")} onRecorded={reloadCosts} />
           </>

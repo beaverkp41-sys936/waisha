@@ -134,7 +134,13 @@ export async function controlAnalyticsRoutes(app: FastifyInstance, _opts: unknow
       // duties, and `.publish` is kept away from `.manage` the way 135 kept `.recon` away from `.post`:
       // a seat that can set the figures and sign them alone has never needed a second person. Withdrawing
       // sits under `.manage` — it is the act that stops a wrong price being quoted an hour longer.
-      "control.pricing.view", "control.pricing.manage", "control.pricing.publish"];
+      "control.pricing.view", "control.pricing.manage", "control.pricing.publish",
+      // The count of the money in (143). `view` reads the register, the four cuts, the folded window and
+      // the promises; `count` takes a day, sweeps a window and throws away a reading of a day that held
+      // nothing; `target` writes the figure the office means to earn and stops one. `count` and `target`
+      // are two keys for 135's reason — a seat that can set the ambition and be the only hand that proves
+      // it met it has a report that cannot catch it. A tab held on a key missing here stays invisible.
+      "control.revenue.view", "control.revenue.count", "control.revenue.target"];
     return { roles: req.control.roles ?? [], permissions: await controlHolds(req, keys) };
   });
 
