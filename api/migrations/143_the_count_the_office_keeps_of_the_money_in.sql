@@ -96,12 +96,13 @@ begin
   for v_row in select jsonb_array_elements(p_cuts) loop
     -- A bucket whose figure is not a number adds nothing rather than aborting the statement: the
     -- table's own shape checks say a cut is an array of objects, and a malformed figure is refused by
-    -- the sum check it does not produce, not by an exception escaping a constraint.
-    begin
+    -- the sum check it does not produce, not by an exception escaping a constraint. The test is on
+    -- jsonb_typeof, not on a cast inside a caught block, because `v + null` is null: a bucket with no
+    -- `total` at all would have turned the whole sum to NULL, and a CHECK that compares a figure to a
+    -- NULL sum is never false — the add-up rule would have stopped guarding the row without saying so.
+    if jsonb_typeof(v_row -> 'total') = 'number' then
       v := v + (v_row ->> 'total')::numeric;
-    exception when others then
-      null;
-    end;
+    end if;
   end loop;
   return v::numeric(14,2);
 end $$;
@@ -1129,6 +1130,12 @@ end $$;
 -- Naming no money counts every money the book moved income in that day, which is what the nightly sweep
 -- needs and what a clerk who just wants "the 26th" means. It is refused only when the day holds nothing in
 -- either money: a zero has to be a zero in a named money, or the row means nothing.
+--
+-- The list of monies is the union of the day's legs and the day's existing readings, not the legs alone. A
+-- zero reading has no legs by definition, so a legs-only list would make the sweep refuse `name_the_money`
+-- on exactly the days it exists to re-check — and a month reported from a register whose zero days were
+-- never re-read is a month that silently stopped being checked. A fresh day with nothing in it is still
+-- refused, because there the caller really does have to name a money.
 create or replace function platform_auth.take_revenue_day(
   p_tenant uuid, p_day date, p_currency text, p_note text,
   p_actor uuid, p_role text, p_ip text, p_ua text
@@ -1181,13 +1188,18 @@ begin
   end if;
 
   if p_currency is null or trim(p_currency) = '' then
-    select array_agg(distinct l.currency order by l.currency) into v_money_list
-      from platform_auth.revenue_income_legs(p_tenant) l where l.posted_on = p_day;
+    select array_agg(distinct m.currency order by m.currency) into v_money_list
+      from (
+        select l.currency from platform_auth.revenue_income_legs(p_tenant) l where l.posted_on = p_day
+        union
+        select s.currency from revenue_snapshots s
+         where s.tenant_id = p_tenant and s.snapshot_day = p_day
+      ) m;
     if v_money_list is null or array_length(v_money_list, 1) is null then
       return jsonb_build_object('ok', false, 'error', 'name_the_money', 'day', p_day::text,
-        'message', 'The book moved no income on ' || p_day || ', in either money. Name TZS or USD if the '
-          || 'office wants a zero recorded for that day — a zero has to be a zero in a money, or the row '
-          || 'means nothing.');
+        'message', 'The book moved no income on ' || p_day || ', in either money, and the register holds no '
+          || 'reading of it. Name TZS or USD if the office wants a zero recorded for that day — a zero has '
+          || 'to be a zero in a money, or the row means nothing.');
     end if;
   else
     v_money := upper(trim(p_currency));
@@ -1385,8 +1397,9 @@ begin
     v_answer := platform_auth.take_revenue_day(p_tenant, v_day, null, null,
                                                p_actor, p_role, p_ip, p_ua);
     if (v_answer -> 'ok')::boolean is not true then
-      -- A day that came from a leg or from a reading cannot hit the empty-day refusal; anything else the
-      -- door answers is reported rather than swallowed, so a sweep never looks clean by omission.
+      -- A day reached this loop either through a leg or through a reading, and `take_revenue_day` now builds
+      -- its money list from both, so the empty-day refusal is unreachable from here. It stays reported rather
+      -- than swallowed: if a future change makes it reachable again, the sweep says so instead of looking clean.
       v_passes := v_passes || jsonb_build_array(jsonb_build_object(
         'day', v_day::text, 'refused', v_answer ->> 'error'));
       continue;

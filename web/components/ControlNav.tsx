@@ -27,7 +27,13 @@ type Screen = { href: string; label: string; icon: LucideIcon; roles?: string[];
  */
 const SCREENS: Screen[] = [
   { href: "/control", label: "Pricing", icon: Tag, roles: LICENCE },
-  { href: "/control/revenue", label: "Revenue", icon: TrendingUp, keys: ["control.analytics.view"] },
+  // The revenue desk carries two registers now: the analytics roll-up (066/068/088) and the count the
+  // office keeps of its own book (143). The analytics key stays or a seat that could reach the page
+  // yesterday loses the link, and the three 143 duties join it or a clerk who is allowed to count the
+  // book has to be told the URL.
+  { href: "/control/revenue", label: "Revenue", icon: TrendingUp,
+    keys: ["control.analytics.view", "control.revenue.view", "control.revenue.count",
+      "control.revenue.target"] },
   { href: "/control/subscriptions", label: "Customers", icon: Users,
     keys: ["control.subscriptions.view", "control.analytics.view"] },
   { href: "/control/payments", label: "Money", icon: Banknote, keys: ["control.subscriptions.view"] },

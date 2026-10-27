@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnnouncementTicker } from "@/components/AnnouncementTicker";
 import { ControlNav } from "@/components/ControlNav";
 
@@ -307,6 +307,18 @@ const figure = (v: unknown, c: string | null | undefined) =>
 const FIELD = "rounded-input border px-10 py-8 text-sm";
 const FIELD_STYLE = { borderColor: "var(--line)", background: "var(--milk)", color: "var(--ink)" };
 
+/** The words a refusal was written with. `error.message` is what the framework says — "Request validation
+ *  failed" tells an office nothing about which box it got wrong — while the sentence the door meant for a
+ *  person to read is carried one level down in `error.details`. Every other control desk reads the details
+ *  for this reason; a press that is refused here without them is a press the clerk cannot correct. */
+function refused(j: any, fallback: string) {
+  const m = String(j?.error?.message ?? "").trim() || fallback;
+  const hints = ((j?.error?.details ?? []) as any[])
+    .map((d) => [String(d?.field ?? "").trim(), String(d?.message ?? "").trim()].filter(Boolean).join(": "))
+    .filter((s) => s.length > 0);
+  return hints.length ? `${m} — ${hints.slice(0, 3).join("; ")}` : m;
+}
+
 /** One read of one of 143's doors. A 401 is the session ending, not an answer about the book. */
 async function read<T>(path: string): Promise<T | null> {
   try {
@@ -314,7 +326,7 @@ async function read<T>(path: string): Promise<T | null> {
     if (res.status === 401) { window.location.href = "/control/login"; return null; }
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
-      return { ok: false, message: j?.error?.message ?? "The register did not answer." } as unknown as T;
+      return { ok: false, message: refused(j, "The register did not answer.") } as unknown as T;
     }
     return await res.json() as T;
   } catch {
@@ -323,8 +335,11 @@ async function read<T>(path: string): Promise<T | null> {
 }
 
 /** One press on one of 143's doors: the door's own sentence is the useful half of the answer, so a
- *  refusal is shown as it arrived and never paraphrased into "something went wrong". */
-async function press(path: string, body: unknown): Promise<{ ok: boolean; words: string }> {
+ *  refusal is shown as it arrived and never paraphrased into "something went wrong". The whole answer
+ *  travels with it because a sentence is not the whole of what a door says — `count_revenue_days` names
+ *  the days it passed over and the days it could not read in fields no sentence carries. */
+async function press(path: string, body: unknown):
+  Promise<{ ok: boolean; words: string; answer: unknown }> {
   try {
     const res = await fetch(`${API}/api/v1${path}`, {
       method: "POST", credentials: "include",
@@ -332,13 +347,27 @@ async function press(path: string, body: unknown): Promise<{ ok: boolean; words:
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) {
-      return { ok: false, words: j?.error?.message ?? "The register refused the press." };
+      return { ok: false, words: refused(j, "The register refused the press."), answer: null };
     }
-    return { ok: true, words: j?.message ?? "Done." };
+    return { ok: true, words: j?.message ?? "Done.", answer: j };
   } catch {
-    return { ok: false, words: "The register did not answer." };
+    return { ok: false, words: "The register did not answer.", answer: null };
   }
 }
+
+/** What the sweep answers besides its sentence. `days_read + passed_over` is the width of the window and
+ *  the desk prints both halves, because a clerk told only how many days were read cannot tell whether the
+ *  window was empty or the register was. `refused` is the half the sentence leaves out entirely.
+ *  `readings` is one entry per day per money — the register's own list, not a figure it rounded first —
+ *  so the desk counts it rather than putting it on the page, and an array here is not something a screen
+ *  can print. */
+type SweepAnswer = {
+  from_day: string; to_day: string; days_read: number; new: number; retaken: number;
+  unchanged: number; passed_over: number;
+  readings: { day: string; currency: string; state: string; income: string | number }[];
+  passed_over_days: string[]; passed_over_days_capped: boolean;
+  refused: { day: string; refused: string }[] | null;
+};
 
 /**
  * The count the office keeps of the money in (143). Readings of 133's book, one per day per money, and the
@@ -365,14 +394,21 @@ function CountBook({ perm }: { perm: string[] }) {
   const [cutNote, setCutNote] = useState<string | null>(null);
   const [day, setDay] = useState(yesterday);
   const [note, setNote] = useState("");
+  // "" is not a money, it is the other answer the door takes: count every money the book moved income in.
+  const [takeMoney, setTakeMoney] = useState("");
   const [sweepFrom, setSweepFrom] = useState(() => new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10));
   const [sweepTo, setSweepTo] = useState(yesterday);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [swept, setSwept] = useState<SweepAnswer | null>(null);
   const [dropFor, setDropFor] = useState<string | null>(null);
   const [dropReason, setDropReason] = useState("");
+  // The money, the cut and the days are three pickers a clerk moves in quick succession, and the reply to
+  // the earlier question can land after the later one. Only the newest read is allowed to write the screen.
+  const pass = useRef(0);
 
   const load = useCallback(async () => {
+    const mine = ++pass.current;
     const [s, b, c] = await Promise.all([
       read<CountState>("/control/revenue/book/state?days=120"),
       read<BookPage>(`/control/revenue/book?currency=${currency}&limit=40`),
@@ -381,6 +417,7 @@ function CountBook({ perm }: { perm: string[] }) {
         + `&from=${new Date(Date.now() - (cutDays - 1) * 86400000).toISOString().slice(0, 10)}`
         + `&to=${new Date().toISOString().slice(0, 10)}&limit=12`)
     ]);
+    if (mine !== pass.current) return;
     if (s && s.ok !== false) setState(s);
     if (b && b.ok !== false) {
       setRows(b.rows ?? []); setCountedDays(n(b.counted_days)); setWindowIncome(b.window_income ?? 0);
@@ -389,27 +426,37 @@ function CountBook({ perm }: { perm: string[] }) {
       setBuckets(c.rows ?? []); setCutIncome(c.income ?? 0);
       setCutOmitted(n(c.omitted)); setCutNote(c.note ?? null);
     }
+    // A read the register refused leaves the panel holding whatever it last had, or nothing at all, and a
+    // desk that shows an empty register without saying why looks exactly like a book with no readings in it.
+    const failed = [s, b, c].find((x) => x && x.ok === false);
+    if (failed) setNotice(String((failed as { message?: string }).message ?? "The register did not answer."));
   }, [currency, cutKind, cutDays]);
 
   useEffect(() => { void load(); }, [load]);
 
   async function take() {
-    setBusy("take"); setNotice(null);
+    setBusy("take"); setNotice(null); setSwept(null);
     const r = await press("/control/revenue/book/take",
-      { day, ...(note.trim() ? { note: note.trim() } : {}) });
+      { day, ...(takeMoney ? { currency: takeMoney } : {}), ...(note.trim() ? { note: note.trim() } : {}) });
     setNotice(r.words); setBusy(null);
     if (r.ok) { setNote(""); void load(); }
   }
 
   async function sweep() {
-    setBusy("sweep"); setNotice(null);
+    setBusy("sweep"); setNotice(null); setSwept(null);
     const r = await press("/control/revenue/book/sweep", { from: sweepFrom, to: sweepTo });
-    setNotice(r.words); setBusy(null);
+    // The sweep's own numbers belong to the press that made them. They are kept from this answer and from
+    // no reload, and any later write closes the panel — a window counted before a new reading would
+    // otherwise go on saying what the register looked like a minute ago. A press that was refused has no
+    // numbers to keep, and without the sentence below the desk would answer the press with silence.
+    setSwept(r.ok ? (r.answer as SweepAnswer) : null);
+    if (!r.ok) setNotice(r.words);
+    setBusy(null);
     if (r.ok) void load();
   }
 
   async function discard(id: string) {
-    setBusy(id); setNotice(null);
+    setBusy(id); setNotice(null); setSwept(null);
     const r = await press(`/control/revenue/book/${id}/discard`, { reason: dropReason.trim() });
     setBusy(null);
     setNotice(r.words);
@@ -472,6 +519,15 @@ function CountBook({ perm }: { perm: string[] }) {
             <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
               className={FIELD + " mt-4 block"} style={FIELD_STYLE} />
           </label>
+          <label className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: "var(--ink-soft)" }}>
+            Money to count
+            <select value={takeMoney} onChange={(e) => setTakeMoney(e.target.value)}
+              className={FIELD + " mt-4 block"} style={FIELD_STYLE}>
+              <option value="">Every money the book moved</option>
+              <option value="TZS">TZS only</option>
+              <option value="USD">USD only</option>
+            </select>
+          </label>
           <label className="min-w-[220px] flex-1 text-[11px] font-semibold uppercase tracking-[0.12em]"
             style={{ color: "var(--ink-soft)" }}>
             Why a note, if any
@@ -483,6 +539,12 @@ function CountBook({ perm }: { perm: string[] }) {
             className="waisha-btn rounded-input px-20 py-10 text-xs font-semibold">
             {busy === "take" ? "Reading the book" : "Count it"}
           </button>
+          <p className="w-full max-w-[78ch] text-xs" style={{ color: "var(--ink-soft)" }}>
+            Leaving the money on &ldquo;every money the book moved&rdquo; counts whatever came in and refuses a
+            day that had nothing at all. Naming one money is the only way an honest zero is written — a day the
+            office read and found empty is a day the register can say it read, and a zero has to be a zero in a
+            money or the row means nothing.
+          </p>
           <span className="w-full border-t pt-12 text-[11px] uppercase tracking-[0.12em]"
             style={{ borderColor: "var(--line)", color: "var(--ink-soft)" }}>
             or sweep a window
@@ -514,6 +576,38 @@ function CountBook({ perm }: { perm: string[] }) {
         <div className="mt-12 rounded-input px-12 py-8 text-sm" role="status"
           style={{ background: "var(--surface)", border: "1px solid var(--adm-line)", color: "var(--ink)" }}>
           {notice}
+        </div>
+      )}
+
+      {swept && (
+        <div className="mt-12 rounded-card border p-16"
+          style={{ borderColor: "var(--line)", background: "var(--surface)" }}>
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--adm-accent)" }}>
+            The window the desk just read
+          </p>
+          <p className="mt-8 text-sm tabular-nums" style={{ color: "var(--ink)" }}>
+            {swept.days_read} day(s) read between {swept.from_day} and {swept.to_day}: {swept.new} new,
+            {" "}{swept.retaken} re-taken, {swept.unchanged} already said the same thing — {swept.readings.length}
+            {" "}reading(s) in all, because one day can be counted in more than one money.
+          </p>
+          <p className="mt-8 text-sm tabular-nums" style={{ color: "var(--ink)" }}>
+            {swept.passed_over} day(s) in that window had nothing for the register to read. They are passed
+            over, not written as zeros, so the figure above is not a count of empty days.
+          </p>
+          {swept.passed_over_days.length > 0 && (
+            <p className="mt-8 text-xs tabular-nums" style={{ color: "var(--ink-soft)" }}>
+              Passed over: {swept.passed_over_days.join(", ")}
+              {swept.passed_over_days_capped
+                ? " — the register lists the first thirty; the figure above is the whole window."
+                : null}
+            </p>
+          )}
+          {(swept.refused ?? []).length > 0 && (
+            <p className="mt-8 text-xs tabular-nums" style={{ color: "var(--warning)" }}>
+              {(swept.refused ?? []).map((r) => `${r.day} (${r.refused})`).join(", ")} — the door refused
+              these, and the register kept what it already held for them. They are not counted as read.
+            </p>
+          )}
         </div>
       )}
 
@@ -719,13 +813,27 @@ function TargetBook({ perm }: { perm: string[] }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [stopping, setStopping] = useState<string | null>(null);
   const [stopReason, setStopReason] = useState("");
+  // A press re-reads the register by asking for another pass, not by calling the read itself: the read is a
+  // closure over the filters, and a press that also changes one of them (a stop opens the stopped rows)
+  // would otherwise reload through the old filter — or, once that filter already stood where the press put
+  // it, not reload at all, and leave a stopped promise looking live on the board under a notice that said
+  // it had stopped.
+  const [again, setAgain] = useState(0);
+  // Two filter changes in a row start two reads, and the older reply can arrive last — a board that had
+  // just opened the stopped promises would be blanked by the answer to the question before it. Each read
+  // carries the pass number it started under and only the newest one is allowed to write to the screen.
+  // A counter, not a cleanup flag: a cleanup flag is false during the second mount a dev StrictMode tree
+  // makes, and the desk then answers the operator with nothing at all.
+  const pass = useRef(0);
 
   const load = useCallback(async () => {
+    const mine = ++pass.current;
     const [w, t] = await Promise.all([
       read<WindowPage>(`/control/revenue/window?kind=${kind}&from=${from}&to=${to}&currency=${currency}`),
       read<TargetsPage>(`/control/revenue/targets?currency=${currency}`
         + `&withdrawn=${showWithdrawn ? "true" : "false"}`)
     ]);
+    if (mine !== pass.current) return;
     if (w && w.ok !== false) {
       setRows(w.rows ?? []);
       setSums({ actual: w.actual ?? 0, target: w.target ?? 0, gap: w.gap ?? 0,
@@ -735,7 +843,7 @@ function TargetBook({ perm }: { perm: string[] }) {
     else if (t?.message) setNotice(t.message);
   }, [currency, kind, from, to, showWithdrawn]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, again]);
 
   async function promise() {
     setBusy("set"); setNotice(null);
@@ -743,14 +851,21 @@ function TargetBook({ perm }: { perm: string[] }) {
       kind, day, amount, currency, ...(promiseNote.trim() ? { note: promiseNote.trim() } : {})
     });
     setNotice(r.words); setBusy(null);
-    if (r.ok) { setAmount(""); setPromiseNote(""); void load(); }
+    if (r.ok) { setAmount(""); setPromiseNote(""); setAgain((a) => a + 1); }
   }
 
   async function stop(id: string, act: "withdraw" | "discard") {
     setBusy(id); setNotice(null);
     const r = await press(`/control/revenue/targets/${id}/${act}`, { reason: stopReason.trim() });
     setNotice(r.words); setBusy(null);
-    if (r.ok) { setStopping(null); setStopReason(""); void load(); }
+    if (!r.ok) return;
+    setStopping(null); setStopReason("");
+    // The door answers a stop with „the month keeps its promise in the register as a stopped one", and the
+    // board hides stopped ones until the box is ticked — so without opening it here the sentence and the
+    // table underneath it contradicted each other, and the desk that proved the promise looked like it had
+    // lost it. Both changes land in one commit, so the register is read once, through the opened filter.
+    if (act === "withdraw") setShowWithdrawn(true);
+    setAgain((a) => a + 1);
   }
 
   return (
@@ -763,6 +878,9 @@ function TargetBook({ perm }: { perm: string[] }) {
       the office hopes for is not the hand that proves it was reached. A stopped promise keeps its row and
       its reason, because &ldquo;we promised 8M and stopped promising it in March&rdquo; is a fact the
       office has to be able to say — only a target the register never counted against can be thrown away.
+      The fold above measures a period only against the promises still standing, so a month whose ambition
+      was stopped reads &ldquo;not promised&rdquo; there and keeps its figure on the board underneath; the
+      board is the register, the fold is the arithmetic of what the office means now.
       </p>
 
       <div className="mt-16 flex flex-wrap items-end gap-12">
@@ -924,13 +1042,15 @@ function TargetBook({ perm }: { perm: string[] }) {
         <h3 className="text-[11px] font-bold uppercase tracking-[0.14em]" style={{ color: "var(--ink)" }}>
           The promises on the board ({currency})
         </h3>
-        {canTarget && (
-          <label className="flex items-center gap-8 text-[11px] font-semibold uppercase tracking-[0.12em]"
-            style={{ color: "var(--ink-soft)" }}>
-            <input type="checkbox" checked={showWithdrawn} onChange={(e) => setShowWithdrawn(e.target.checked)} />
-            also show stopped ones
-          </label>
-        )}
+        {/* The stopped ones are the read this desk's own copy promises: a seat that may not set an ambition
+            still has to be able to ask the register what was once promised and then stopped, because that is
+            what an audit is. The door takes `withdrawn` on the view duty, so the box stands on the view duty
+            too — the write behind it is the "Promise it" panel above, not this filter. */}
+        <label className="flex items-center gap-8 text-[11px] font-semibold uppercase tracking-[0.12em]"
+          style={{ color: "var(--ink-soft)" }}>
+          <input type="checkbox" checked={showWithdrawn} onChange={(e) => setShowWithdrawn(e.target.checked)} />
+          also show stopped ones
+        </label>
       </div>
       <div className="mt-12 overflow-x-auto rounded-card border bg-surface" style={{ borderColor: "var(--line)" }}>
         <table className="w-full text-sm">
@@ -1125,6 +1245,10 @@ export default function ControlRevenuePage() {
 
   const forecastMetrics = Object.keys(forecast);
   const shown = forecast[metric];
+  // These reports and that register are two separate duties, and a seat may hold either one alone: 143 gives
+  // `control.revenue.view` to the auditor and the analyst, neither of which need hold the analytics duty. So a
+  // 403 on the P&L may hide the reports, but must not hide a count whose own door answers the seat.
+  const mayCount = perm.includes("control.revenue.view");
 
   return (
     <div className="control-shell page-shell flex-1">
@@ -1141,7 +1265,7 @@ export default function ControlRevenuePage() {
       </header>
 
       <main className="mx-auto max-w-[1180px] px-16 py-32">
-        {forbidden ? (
+        {forbidden && !mayCount ? (
           <div className="rounded-card border p-24" style={{ borderColor: "var(--line)" }}>
             <h1 className="text-lg font-bold" style={{ color: "var(--ink)" }}>These reports are not yours to read</h1>
             <p className="mt-8 text-sm" style={{ color: "var(--ink-soft)" }}>
@@ -1154,6 +1278,8 @@ export default function ControlRevenuePage() {
           </div>
         ) : (
           <>
+            {!forbidden && (
+              <>
             <div className="flex flex-wrap items-end justify-between gap-16">
               <div>
                 <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Revenue and the platform's own numbers</h1>
@@ -1598,18 +1724,38 @@ export default function ControlRevenuePage() {
                 up to that company's income to the cent.
               </p>
             </section>
+              </>
+            )}
+
+            {forbidden && (
+              <div className="mt-8 rounded-card border p-20" style={{ borderColor: "var(--line)" }}>
+                <h1 className="text-lg font-bold" style={{ color: "var(--ink)" }}>
+                  The count the office keeps, without the platform's own reports
+                </h1>
+                <p className="mt-8 max-w-[78ch] text-sm" style={{ color: "var(--ink-soft)" }}>
+                  Signed in as {me?.email ?? "a platform seat"} with {(me?.roles ?? []).join(", ") || "no platform duty"}.
+                  The tiles, the profit and loss, the growth, the forecast, the mix and the cost book are read through the
+                  duty <code>control.analytics.view</code>, which this seat does not hold, so they are not shown — an empty
+                  table would say the office earned nothing, and that is not what a refused read means. What this seat does
+                  hold is <code>control.revenue.view</code>: the days the office has counted, the money each held, and the
+                  ambition the month was promised. Both registers stand underneath.
+                </p>
+              </div>
+            )}
 
             {/* The register 143 keeps is a separate duty from these reports: a seat that may read the P&L
                 but not the count gets no panel at all, rather than an empty table claiming nobody has
                 counted a day. */}
-            {perm.includes("control.revenue.view") && (
+            {mayCount && (
               <>
                 <CountBook perm={perm} />
                 <TargetBook perm={perm} />
               </>
             )}
 
-            <CostBook costs={costs} canRecord={perm.includes("control.costs.manage")} onRecorded={reloadCosts} />
+            {!forbidden && (
+              <CostBook costs={costs} canRecord={perm.includes("control.costs.manage")} onRecorded={reloadCosts} />
+            )}
           </>
         )}
       </main>
